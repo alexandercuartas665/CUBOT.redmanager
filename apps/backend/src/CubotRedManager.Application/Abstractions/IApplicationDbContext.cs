@@ -25,6 +25,7 @@ public interface IApplicationDbContext
     DbSet<WompiWebhookEvent> WompiWebhookEvents { get; }
     DbSet<TenantSubscription> TenantSubscriptions { get; }
     DbSet<TenantPayment> TenantPayments { get; }
+    DbSet<SuperAdminAuditLog> SuperAdminAuditLogs { get; }
 
     // IA
     DbSet<AiProviderConfig> AiProviderConfigs { get; }

@@ -36,6 +36,7 @@ public class CubotRedManagerDbContext : DbContext, IApplicationDbContext
     public DbSet<WompiWebhookEvent> WompiWebhookEvents => Set<WompiWebhookEvent>();
     public DbSet<TenantSubscription> TenantSubscriptions => Set<TenantSubscription>();
     public DbSet<TenantPayment> TenantPayments => Set<TenantPayment>();
+    public DbSet<SuperAdminAuditLog> SuperAdminAuditLogs => Set<SuperAdminAuditLog>();
 
     // Tenant-scoped
     public DbSet<TenantUser> TenantUsers => Set<TenantUser>();
@@ -85,6 +86,12 @@ public class CubotRedManagerDbContext : DbContext, IApplicationDbContext
         modelBuilder.Entity<TenantSubscription>().Property(x => x.BillingFrequency).HasConversion<string>();
         modelBuilder.Entity<TenantPayment>().Property(x => x.Status).HasConversion<string>();
         modelBuilder.Entity<TenantPayment>().Property(x => x.Amount).HasColumnType("numeric(14,2)");
+
+        // Auditoria global.
+        modelBuilder.Entity<SuperAdminAuditLog>().Property(x => x.ActorType).HasConversion<string>();
+        modelBuilder.Entity<SuperAdminAuditLog>().Property(x => x.PreviousValue).HasColumnType("jsonb");
+        modelBuilder.Entity<SuperAdminAuditLog>().Property(x => x.NewValue).HasColumnType("jsonb");
+        modelBuilder.Entity<SuperAdminAuditLog>().HasIndex(x => x.CreatedAt);
 
         // IA: indices y unicidad.
         modelBuilder.Entity<AiProviderConfig>().HasIndex(x => x.Provider).IsUnique();

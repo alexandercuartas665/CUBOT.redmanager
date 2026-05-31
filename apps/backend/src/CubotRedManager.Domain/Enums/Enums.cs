@@ -115,3 +115,6 @@ public enum SubscriptionStatus { Trialing, Active, PendingPayment, PastDue, Grac
 
 /// <summary>Estado de un pago de suscripcion (alineado con Wompi + revision interna).</summary>
 public enum PaymentStatus { Pending, Approved, Declined, Voided, Error, NeedsReview }
+
+/// <summary>Distingue acciones humanas de acciones automaticas del sistema (auditoria).</summary>
+public enum AuditActorType { Human, System }

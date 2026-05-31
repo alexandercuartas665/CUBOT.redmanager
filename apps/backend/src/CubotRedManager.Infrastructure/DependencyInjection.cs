@@ -30,7 +30,7 @@ public static class DependencyInjection
 
         services.AddSingleton(TimeProvider.System);
         services.AddSingleton<ISecretProtector, DataProtectionSecretProtector>();
-        services.AddScoped<IAuditWriter, NoOpAuditWriter>();
+        services.AddScoped<IAuditWriter, AuditWriter>();
 
         // Servicios de Application portados.
         services.AddScoped<IWhatsAppLineService, WhatsAppLineService>();
@@ -44,6 +44,7 @@ public static class DependencyInjection
         services.AddScoped<CubotRedManager.Application.Admin.ITenantAdminService, CubotRedManager.Application.Admin.TenantAdminService>();
         services.AddScoped<CubotRedManager.Application.Admin.IWompiConfigService, CubotRedManager.Application.Admin.WompiConfigService>();
         services.AddScoped<CubotRedManager.Application.Admin.IPaymentAdminService, CubotRedManager.Application.Admin.PaymentAdminService>();
+        services.AddScoped<CubotRedManager.Application.Admin.IAuditAdminService, CubotRedManager.Application.Admin.AuditAdminService>();
 
         return services;
     }
