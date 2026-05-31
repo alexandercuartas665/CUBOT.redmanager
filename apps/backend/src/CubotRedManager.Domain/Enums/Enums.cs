@@ -121,3 +121,6 @@ public enum AuditActorType { Human, System }
 
 /// <summary>Estado de una cuenta social conectada (Modulo 2.3).</summary>
 public enum SocialAccountStatus { Connected, Expired, Revoked, Disconnected }
+
+/// <summary>Prioridad de una tarjeta del tablero Kanban (Modulo 2.7).</summary>
+public enum TaskPriority { Low, Normal, High, Urgent }

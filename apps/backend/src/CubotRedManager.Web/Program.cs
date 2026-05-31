@@ -49,6 +49,20 @@ using (var scope = app.Services.CreateScope())
 {
     var db = scope.ServiceProvider.GetRequiredService<CubotRedManagerDbContext>();
     await db.Database.MigrateAsync();
+
+    // Siembra la agencia demo (mismo GUID que emite el dev-login) para que las entidades
+    // tenant-scoped con FK a Tenant (Client, etc.) puedan persistir en desarrollo.
+    if (!await db.Tenants.AnyAsync(t => t.Id == DemoTenant.Id))
+    {
+        db.Tenants.Add(new CubotRedManager.Domain.Entities.Tenant
+        {
+            Id = DemoTenant.Id,
+            Name = "Studio Marketing (demo)",
+            Status = CubotRedManager.Domain.Enums.TenantStatus.Active,
+            Kind = CubotRedManager.Domain.Enums.TenantKind.Demo
+        });
+        await db.SaveChangesAsync();
+    }
 }
 
 if (!app.Environment.IsDevelopment())
@@ -70,8 +84,6 @@ app.MapRazorComponents<App>()
 // ===== Login de desarrollo (temporal) =====
 // Emite los claims de la familia (tenant_id, tenant_role, agency_name) sin backend de identidad.
 // Se reemplaza por el login real (cuentas + contrasena + Google) con el modulo de Usuarios/Onboarding.
-var demoTenantId = Guid.Parse("0192a000-0000-7000-8000-000000000001");
-
 app.MapPost("/auth/dev-login", async (HttpContext http, [FromForm] string role) =>
 {
     var isAdmin = string.Equals(role, "admin", StringComparison.OrdinalIgnoreCase);
@@ -82,7 +94,7 @@ app.MapPost("/auth/dev-login", async (HttpContext http, [FromForm] string role) 
     {
         new(ClaimTypes.NameIdentifier, Guid.CreateVersion7().ToString()),
         new(ClaimTypes.Name, displayName),
-        new("tenant_id", demoTenantId.ToString()),
+        new("tenant_id", DemoTenant.Id.ToString()),
         new("tenant_role", tenantRole),
         new("agency_name", "Studio Marketing (demo)")
     };
@@ -99,3 +111,9 @@ app.MapPost("/auth/logout", async (HttpContext http) =>
 }).DisableAntiforgery();
 
 app.Run();
+
+/// <summary>Agencia demo del dev-login (se elimina con el modulo de identidad real).</summary>
+static class DemoTenant
+{
+    public static readonly Guid Id = Guid.Parse("0192a000-0000-7000-8000-000000000001");
+}
