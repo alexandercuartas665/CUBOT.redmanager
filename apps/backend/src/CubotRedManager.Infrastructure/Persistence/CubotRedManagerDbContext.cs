@@ -32,6 +32,10 @@ public class CubotRedManagerDbContext : DbContext, IApplicationDbContext
     public DbSet<EvolutionMasterConfig> EvolutionMasterConfigs => Set<EvolutionMasterConfig>();
     public DbSet<SaasPlan> SaasPlans => Set<SaasPlan>();
     public DbSet<SaasPlanLimit> SaasPlanLimits => Set<SaasPlanLimit>();
+    public DbSet<WompiMasterConfig> WompiMasterConfigs => Set<WompiMasterConfig>();
+    public DbSet<WompiWebhookEvent> WompiWebhookEvents => Set<WompiWebhookEvent>();
+    public DbSet<TenantSubscription> TenantSubscriptions => Set<TenantSubscription>();
+    public DbSet<TenantPayment> TenantPayments => Set<TenantPayment>();
 
     // Tenant-scoped
     public DbSet<TenantUser> TenantUsers => Set<TenantUser>();
@@ -71,6 +75,16 @@ public class CubotRedManagerDbContext : DbContext, IApplicationDbContext
         modelBuilder.Entity<EvolutionMasterConfig>().Property(x => x.Status).HasConversion<string>();
         modelBuilder.Entity<SaasPlanLimit>().Property(x => x.EnforcementMode).HasConversion<string>();
         modelBuilder.Entity<SaasPlan>().HasMany(p => p.Limits).WithOne(l => l.Plan!).HasForeignKey(l => l.PlanId).OnDelete(DeleteBehavior.Cascade);
+
+        // Wompi / suscripciones / pagos.
+        modelBuilder.Entity<WompiMasterConfig>().Property(x => x.Environment).HasConversion<string>();
+        modelBuilder.Entity<WompiMasterConfig>().Property(x => x.Status).HasConversion<string>();
+        modelBuilder.Entity<WompiWebhookEvent>().Property(x => x.ProcessingStatus).HasConversion<string>();
+        modelBuilder.Entity<WompiWebhookEvent>().HasIndex(x => x.ProviderEventId).IsUnique();
+        modelBuilder.Entity<TenantSubscription>().Property(x => x.Status).HasConversion<string>();
+        modelBuilder.Entity<TenantSubscription>().Property(x => x.BillingFrequency).HasConversion<string>();
+        modelBuilder.Entity<TenantPayment>().Property(x => x.Status).HasConversion<string>();
+        modelBuilder.Entity<TenantPayment>().Property(x => x.Amount).HasColumnType("numeric(14,2)");
 
         // IA: indices y unicidad.
         modelBuilder.Entity<AiProviderConfig>().HasIndex(x => x.Provider).IsUnique();

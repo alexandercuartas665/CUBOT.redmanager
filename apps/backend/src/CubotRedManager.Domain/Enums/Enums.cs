@@ -97,3 +97,21 @@ public enum TenantKind
     Internal,
     Test
 }
+
+/// <summary>Ambiente de operacion de la pasarela Wompi maestra.</summary>
+public enum WompiEnvironment { Sandbox, Production }
+
+/// <summary>Estado de la integracion con la pasarela Wompi maestra.</summary>
+public enum WompiIntegrationStatus { NotConfigured, Configured, Validated, Error }
+
+/// <summary>Resultado del procesamiento de un evento de webhook de Wompi.</summary>
+public enum WebhookProcessingStatus { Received, Processed, NoMatchingPayment, InvalidSignature, Duplicate, Error }
+
+/// <summary>Frecuencia de cobro de una suscripcion.</summary>
+public enum BillingFrequency { Monthly, Yearly }
+
+/// <summary>Estado de la suscripcion de un tenant.</summary>
+public enum SubscriptionStatus { Trialing, Active, PendingPayment, PastDue, GracePeriod, Suspended, Cancelled, AdminException }
+
+/// <summary>Estado de un pago de suscripcion (alineado con Wompi + revision interna).</summary>
+public enum PaymentStatus { Pending, Approved, Declined, Voided, Error, NeedsReview }

@@ -20,6 +20,12 @@ public interface IApplicationDbContext
     DbSet<SaasPlan> SaasPlans { get; }
     DbSet<SaasPlanLimit> SaasPlanLimits { get; }
 
+    // Wompi / suscripciones / pagos
+    DbSet<WompiMasterConfig> WompiMasterConfigs { get; }
+    DbSet<WompiWebhookEvent> WompiWebhookEvents { get; }
+    DbSet<TenantSubscription> TenantSubscriptions { get; }
+    DbSet<TenantPayment> TenantPayments { get; }
+
     // IA
     DbSet<AiProviderConfig> AiProviderConfigs { get; }
     DbSet<AiAgent> AiAgents { get; }

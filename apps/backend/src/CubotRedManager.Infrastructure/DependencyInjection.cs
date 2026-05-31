@@ -42,6 +42,8 @@ public static class DependencyInjection
         services.AddScoped<CubotRedManager.Application.Admin.IEvolutionMasterConfigService, CubotRedManager.Application.Admin.EvolutionMasterConfigService>();
         services.AddScoped<CubotRedManager.Application.Admin.IPlanAdminService, CubotRedManager.Application.Admin.PlanAdminService>();
         services.AddScoped<CubotRedManager.Application.Admin.ITenantAdminService, CubotRedManager.Application.Admin.TenantAdminService>();
+        services.AddScoped<CubotRedManager.Application.Admin.IWompiConfigService, CubotRedManager.Application.Admin.WompiConfigService>();
+        services.AddScoped<CubotRedManager.Application.Admin.IPaymentAdminService, CubotRedManager.Application.Admin.PaymentAdminService>();
 
         return services;
     }

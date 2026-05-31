@@ -1,4 +1,332 @@
 @page "/facturacion"
-@attribute [Authorize(Policy = AppPolicies.PlatformOperator)]
+@attribute [Authorize(Policy = "PlatformOperator")]
+@rendermode @(new InteractiveServerRenderMode(prerender: false))
+@using System.Security.Claims
+@using CubotRedManager.Application.Admin
+@using CubotRedManager.Domain.Enums
+@inject IPaymentAdminService PaymentsSvc
+@inject ITenantAdminService TenantsSvc
+@inject IWompiConfigService WompiSvc
 
-<ModulePlaceholder Eyebrow="Super Admin SaaS" Title="Facturacion (Wompi)" Description="Cobro recurrente a las agencias via Wompi maestro: pagos, conciliacion, mora." />
+<PageTitle>Facturacion - CUBOT.redmanager</PageTitle>
+
+<div class="module-head">
+    <div>
+        <div class="module-eyebrow">
+            <div class="module-icon">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 2v20l2-1 2 1 2-1 2 1 2-1 2 1 2-1 2 1V2l-2 1-2-1-2 1-2-1-2 1-2-1-2 1Z"/><path d="M16 8h-6a2 2 0 1 0 0 4h4a2 2 0 1 1 0 4H8"/><path d="M12 17.5v-11"/></svg>
+            </div>
+            <span>Super Admin SaaS</span>
+        </div>
+        <h1 class="page-title" style="margin-top:12px;">Facturacion y recaudo</h1>
+        <p class="page-sub" style="margin-bottom:0;">Cobros a las agencias, estado de cada pago y alertas de morosidad.</p>
+    </div>
+</div>
+
+<div class="card" style="max-width:1040px;margin-bottom:22px;padding:20px 22px;">
+    <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:16px;flex-wrap:wrap;">
+        <div style="display:flex;align-items:center;gap:12px;">
+            <div class="module-icon" style="width:38px;height:38px;">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="20" height="14" x="2" y="5" rx="2"/><line x1="2" x2="22" y1="10" y2="10"/></svg>
+            </div>
+            <div>
+                <div style="font-weight:700;">Pasarela de pago &mdash; Wompi</div>
+                <div class="text-muted" style="font-size:12px;">Configuracion maestra para cobrar las suscripciones de las agencias.</div>
+            </div>
+        </div>
+        <span class="badge bg-@WompiStatusColor()">@WompiStatusText()</span>
+    </div>
+
+    @if (_wompi is null)
+    {
+        <p class="text-muted" style="margin:16px 0 0;">Aun no has configurado la pasarela. Agrega las llaves de Wompi para habilitar el recaudo.</p>
+    }
+    else
+    {
+        <div class="field-row" style="margin-top:18px;max-width:760px;">
+            <div><div class="wlbl">Ambiente</div><div class="wval">@_wompi.Environment</div></div>
+            <div><div class="wlbl">Moneda</div><div class="wval">@_wompi.Currency</div></div>
+        </div>
+        <div class="field-row" style="max-width:760px;">
+            <div><div class="wlbl">Llave publica</div><div class="wval" style="font-family:var(--bs-font-monospace);font-size:12px;">@(_wompi.PublicKey ?? "—")</div></div>
+            <div><div class="wlbl">Llave privada</div><div class="wval" style="font-family:var(--bs-font-monospace);font-size:12px;">@(_wompi.PrivateKeyMasked ?? "—")</div></div>
+        </div>
+        <div class="field-row" style="max-width:760px;">
+            <div><div class="wlbl">Secret de eventos</div><div class="wval" style="font-family:var(--bs-font-monospace);font-size:12px;">@(_wompi.EventsSecretMasked ?? "—")</div></div>
+            <div><div class="wlbl">Secret de integridad</div><div class="wval" style="font-family:var(--bs-font-monospace);font-size:12px;">@(_wompi.IntegritySecretMasked ?? "—")</div></div>
+        </div>
+        <div class="field-row" style="max-width:760px;">
+            <div><div class="wlbl">Webhook</div><div class="wval" style="font-family:var(--bs-font-monospace);font-size:12px;">@(_wompi.WebhookEndpoint ?? "—")</div></div>
+            <div><div class="wlbl">Ultima validacion</div><div class="wval">@(_wompi.LastValidatedAt is { } v ? v.LocalDateTime.ToString("dd MMM yyyy HH:mm") : "Nunca")</div></div>
+        </div>
+    }
+
+    @if (_wompiMsg is not null)
+    {
+        <div class="@(_wompiOk ? "text-success" : "text-danger")" style="margin-top:14px;font-size:0.85rem;">@_wompiMsg</div>
+    }
+
+    <div style="display:flex;gap:8px;margin-top:18px;">
+        <button class="btn btn-primary" @onclick="OpenWompi">@(_wompi is null ? "Configurar pasarela" : "Editar configuracion")</button>
+        <button class="btn btn-outline-secondary" @onclick="ValidateWompi" disabled="@(_wompi is null || _wompiBusy)">Validar conexion</button>
+    </div>
+</div>
+
+@if (_payments is null)
+{
+    <p><em>Cargando...</em></p>
+}
+else
+{
+    <div class="kpi-grid" style="margin-bottom:22px;grid-template-columns:repeat(auto-fit,minmax(165px,1fr));max-width:1040px;">
+        <div class="kpi-card">
+            <div class="kpi-top"><div class="kpi-icon tone-success"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" x2="12" y1="2" y2="22"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg></div></div>
+            <div class="kpi-label">Recaudado</div>
+            <div class="kpi-value">@Money(_approved)</div>
+            <div class="kpi-hint">@CountOf(PaymentStatus.Approved) pagos aprobados</div>
+        </div>
+        <div class="kpi-card">
+            <div class="kpi-top"><div class="kpi-icon tone-gold"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg></div></div>
+            <div class="kpi-label">Pendiente</div>
+            <div class="kpi-value">@Money(_pending)</div>
+            <div class="kpi-hint">En revision o por confirmar</div>
+        </div>
+        <div class="kpi-card">
+            <div class="kpi-top"><div class="kpi-icon tone-danger"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="15" x2="9" y1="9" y2="15"/><line x1="9" x2="15" y1="9" y2="15"/></svg></div></div>
+            <div class="kpi-label">Rechazado</div>
+            <div class="kpi-value">@Money(_failed)</div>
+            <div class="kpi-hint">Declinados, anulados o con error</div>
+        </div>
+        <div class="kpi-card">
+            <div class="kpi-top"><div class="kpi-icon tone-primary"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v16a2 2 0 0 0 2 2h16"/><path d="m19 9-5 5-4-4-3 3"/></svg></div></div>
+            <div class="kpi-label">Tasa de cobro</div>
+            <div class="kpi-value">@_collectionRate%</div>
+            <div class="kpi-hint">Aprobados sobre el total</div>
+        </div>
+    </div>
+
+    @if (_payments.Count == 0)
+    {
+        <p class="text-muted">No hay pagos registrados todavia.</p>
+    }
+    else
+    {
+        <div class="card" style="max-width:1040px;padding:6px 16px;">
+            <table class="table table-hover align-middle" style="margin-bottom:0;">
+                <thead>
+                    <tr><th>Factura</th><th>Agencia</th><th class="text-end">Monto</th><th>Fecha</th><th>Estado</th></tr>
+                </thead>
+                <tbody>
+                    @foreach (var p in _payments)
+                    {
+                        <tr>
+                            <td style="font-family:var(--bs-font-monospace);font-size:12px;">@Reference(p)</td>
+                            <td style="font-weight:600;">@(TenantName(p.TenantId) ?? "-")</td>
+                            <td class="text-end" style="font-weight:600;font-variant-numeric:tabular-nums;">@($"$ {p.Amount:N0}")</td>
+                            <td style="font-size:12px;color:var(--muted-foreground);">@p.CreatedAt.LocalDateTime.ToString("dd MMM yyyy")</td>
+                            <td><span class="badge bg-@StatusColor(p.Status)">@p.Status</span></td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+    }
+}
+
+@if (_wompiModalOpen)
+{
+    <div class="modal-overlay">
+        <div class="modal-dialog">
+            <div class="modal-head">
+                <h3>Configurar pasarela Wompi</h3>
+                <button class="modal-close" @onclick="CloseWompi">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div class="field-row">
+                    <div class="field">
+                        <label class="form-label">Ambiente</label>
+                        <select class="form-control" @bind="_wf.Environment">
+                            <option value="@WompiEnvironment.Sandbox">Sandbox</option>
+                            <option value="@WompiEnvironment.Production">Production</option>
+                        </select>
+                    </div>
+                    <div class="field">
+                        <label class="form-label">Moneda</label>
+                        <input class="form-control" @bind="_wf.Currency" />
+                    </div>
+                </div>
+                <div class="field">
+                    <label class="form-label">Llave publica (pub_...)</label>
+                    <input class="form-control" @bind="_wf.PublicKey" autocomplete="off" />
+                </div>
+                <div class="field">
+                    <label class="form-label">Llave privada (prv_...)</label>
+                    <input class="form-control" type="password" @bind="_wf.PrivateKey" autocomplete="new-password" placeholder="@(_wompi?.HasPrivateKey == true ? "Dejar vacio para conservar la actual" : "")" />
+                </div>
+                <div class="field">
+                    <label class="form-label">Secret de eventos (webhooks)</label>
+                    <input class="form-control" type="password" @bind="_wf.EventsSecret" autocomplete="new-password" placeholder="@(_wompi?.HasEventsSecret == true ? "Dejar vacio para conservar el actual" : "")" />
+                </div>
+                <div class="field">
+                    <label class="form-label">Secret de integridad (cobros)</label>
+                    <input class="form-control" type="password" @bind="_wf.IntegritySecret" autocomplete="new-password" placeholder="@(_wompi?.HasIntegritySecret == true ? "Dejar vacio para conservar el actual" : "")" />
+                </div>
+                <div class="field">
+                    <label class="form-label">Endpoint de webhook</label>
+                    <input class="form-control" @bind="_wf.WebhookEndpoint" placeholder="https://..." />
+                </div>
+                <div class="field">
+                    <label class="form-label">Reintentos maximos</label>
+                    <input class="form-control" type="number" @bind="_wf.MaxRetries" />
+                </div>
+                @if (_wompiError is not null)
+                {
+                    <div class="text-danger small">@_wompiError</div>
+                }
+            </div>
+            <div class="modal-foot">
+                <button class="btn btn-outline-secondary" @onclick="CloseWompi">Cancelar</button>
+                <button class="btn btn-primary" @onclick="SaveWompi" disabled="@_wompiBusy">Guardar</button>
+            </div>
+        </div>
+    </div>
+}
+
+@code {
+    [CascadingParameter] private Task<AuthenticationState>? AuthState { get; set; }
+
+    private List<PaymentDetail>? _payments;
+    private Dictionary<Guid, string> _tenantNames = new();
+    private decimal _approved, _pending, _failed;
+    private int _collectionRate;
+
+    private WompiConfigDto? _wompi;
+    private bool _wompiModalOpen;
+    private bool _wompiBusy;
+    private string? _wompiMsg;
+    private bool _wompiOk;
+    private string? _wompiError;
+    private readonly WompiForm _wf = new();
+
+    protected override async Task OnInitializedAsync()
+    {
+        _wompi = await WompiSvc.GetAsync();
+
+        _payments = (await PaymentsSvc.ListAsync()).ToList();
+        _tenantNames = (await TenantsSvc.ListAsync()).ToDictionary(t => t.Id, t => t.Name);
+
+        _approved = Sum(PaymentStatus.Approved);
+        _pending = Sum(PaymentStatus.Pending) + Sum(PaymentStatus.NeedsReview);
+        _failed = Sum(PaymentStatus.Declined) + Sum(PaymentStatus.Voided) + Sum(PaymentStatus.Error);
+        _collectionRate = _payments.Count == 0 ? 0 : (int)Math.Round(100.0 * CountOf(PaymentStatus.Approved) / _payments.Count);
+    }
+
+    private void OpenWompi()
+    {
+        _wompiError = null;
+        _wf.Environment = _wompi?.Environment ?? WompiEnvironment.Sandbox;
+        _wf.PublicKey = _wompi?.PublicKey;
+        _wf.PrivateKey = null;
+        _wf.EventsSecret = null;
+        _wf.IntegritySecret = null;
+        _wf.WebhookEndpoint = _wompi?.WebhookEndpoint;
+        _wf.Currency = _wompi?.Currency ?? "COP";
+        _wf.MaxRetries = _wompi?.MaxRetries ?? 3;
+        _wompiModalOpen = true;
+    }
+
+    private void CloseWompi() => _wompiModalOpen = false;
+
+    private async Task SaveWompi()
+    {
+        _wompiError = null;
+        _wompiBusy = true;
+        try
+        {
+            var actor = await ActorAsync();
+            var request = new SaveWompiConfigRequest(_wf.Environment, _wf.PublicKey, _wf.PrivateKey, _wf.EventsSecret,
+                _wf.IntegritySecret, _wf.WebhookEndpoint, _wf.Currency, _wf.MaxRetries);
+            _wompi = await WompiSvc.SaveAsync(request, actor);
+            _wompiMsg = null;
+            _wompiModalOpen = false;
+        }
+        catch (Exception ex)
+        {
+            _wompiError = ex.Message;
+        }
+        finally
+        {
+            _wompiBusy = false;
+        }
+    }
+
+    private async Task ValidateWompi()
+    {
+        _wompiBusy = true;
+        try
+        {
+            var actor = await ActorAsync();
+            var result = await WompiSvc.ValidateAsync(actor);
+            if (result is not null)
+            {
+                _wompiOk = result.Ok;
+                _wompiMsg = result.Message;
+                _wompi = await WompiSvc.GetAsync();
+            }
+        }
+        finally
+        {
+            _wompiBusy = false;
+        }
+    }
+
+    private async Task<Guid> ActorAsync()
+    {
+        if (AuthState is null) return Guid.Empty;
+        var state = await AuthState;
+        return Guid.TryParse(state.User.FindFirst(ClaimTypes.NameIdentifier)?.Value, out var id) ? id : Guid.Empty;
+    }
+
+    private string WompiStatusText() => _wompi?.Status switch
+    {
+        WompiIntegrationStatus.Validated => "Validada",
+        WompiIntegrationStatus.Configured => "Configurada",
+        WompiIntegrationStatus.Error => "Con error",
+        _ => "Sin configurar"
+    };
+
+    private string WompiStatusColor() => _wompi?.Status switch
+    {
+        WompiIntegrationStatus.Validated => "success",
+        WompiIntegrationStatus.Configured => "info",
+        WompiIntegrationStatus.Error => "danger",
+        _ => "secondary"
+    };
+
+    private sealed class WompiForm
+    {
+        public WompiEnvironment Environment { get; set; } = WompiEnvironment.Sandbox;
+        public string? PublicKey { get; set; }
+        public string? PrivateKey { get; set; }
+        public string? EventsSecret { get; set; }
+        public string? IntegritySecret { get; set; }
+        public string? WebhookEndpoint { get; set; }
+        public string Currency { get; set; } = "COP";
+        public int MaxRetries { get; set; } = 3;
+    }
+
+    private decimal Sum(PaymentStatus status) => _payments!.Where(p => p.Status == status).Sum(p => p.Amount);
+    private int CountOf(PaymentStatus status) => _payments!.Count(p => p.Status == status);
+    private static string Money(decimal v) => $"$ {v:N0}";
+    private string? TenantName(Guid id) => _tenantNames.TryGetValue(id, out var n) ? n : null;
+    private static string Reference(PaymentDetail p) =>
+        string.IsNullOrWhiteSpace(p.ProviderReference) ? $"PG-{p.Id.ToString()[..8]}" : p.ProviderReference!;
+
+    private static string StatusColor(PaymentStatus status) => status switch
+    {
+        PaymentStatus.Approved => "success",
+        PaymentStatus.Pending or PaymentStatus.NeedsReview => "warning",
+        PaymentStatus.Declined or PaymentStatus.Voided or PaymentStatus.Error => "danger",
+        _ => "secondary"
+    };
+}
