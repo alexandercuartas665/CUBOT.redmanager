@@ -27,11 +27,25 @@ public class CubotRedManagerDbContext : DbContext
     // Globales
     public DbSet<Tenant> Tenants => Set<Tenant>();
     public DbSet<PlatformUser> PlatformUsers => Set<PlatformUser>();
+    public DbSet<AiProviderConfig> AiProviderConfigs => Set<AiProviderConfig>();
+    public DbSet<EvolutionMasterConfig> EvolutionMasterConfigs => Set<EvolutionMasterConfig>();
 
     // Tenant-scoped
     public DbSet<TenantUser> TenantUsers => Set<TenantUser>();
     public DbSet<Client> Clients => Set<Client>();
     public DbSet<UserClientLink> UserClientLinks => Set<UserClientLink>();
+
+    // IA (capa 3)
+    public DbSet<AiAgent> AiAgents => Set<AiAgent>();
+    public DbSet<AiAgentResource> AiAgentResources => Set<AiAgentResource>();
+    public DbSet<AiAgentPrompt> AiAgentPrompts => Set<AiAgentPrompt>();
+    public DbSet<AiAgentCacheField> AiAgentCacheFields => Set<AiAgentCacheField>();
+    public DbSet<AiAgentCacheValue> AiAgentCacheValues => Set<AiAgentCacheValue>();
+    public DbSet<AiUsageLog> AiUsageLogs => Set<AiUsageLog>();
+
+    // WhatsApp / Evolution
+    public DbSet<WhatsAppLine> WhatsAppLines => Set<WhatsAppLine>();
+    public DbSet<TenantEvolutionConfig> TenantEvolutionConfigs => Set<TenantEvolutionConfig>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -43,6 +57,24 @@ public class CubotRedManagerDbContext : DbContext
         modelBuilder.Entity<PlatformUser>().Property(x => x.AuthProvider).HasConversion<string>();
         modelBuilder.Entity<TenantUser>().Property(x => x.TenantRole).HasConversion<string>();
         modelBuilder.Entity<TenantUser>().Property(x => x.Status).HasConversion<string>();
+
+        // Enums como texto (IA / WhatsApp / Evolution).
+        modelBuilder.Entity<AiProviderConfig>().Property(x => x.Provider).HasConversion<string>();
+        modelBuilder.Entity<AiAgent>().Property(x => x.Provider).HasConversion<string>();
+        modelBuilder.Entity<AiAgentResource>().Property(x => x.ResourceType).HasConversion<string>();
+        modelBuilder.Entity<AiUsageLog>().Property(x => x.Provider).HasConversion<string>();
+        modelBuilder.Entity<WhatsAppLine>().Property(x => x.Status).HasConversion<string>();
+        modelBuilder.Entity<EvolutionMasterConfig>().Property(x => x.Status).HasConversion<string>();
+
+        // IA: indices y unicidad.
+        modelBuilder.Entity<AiProviderConfig>().HasIndex(x => x.Provider).IsUnique();
+        modelBuilder.Entity<AiAgent>().HasIndex(x => new { x.TenantId, x.SortOrder });
+        modelBuilder.Entity<AiAgentCacheField>().HasIndex(x => new { x.AgentId, x.FieldKey }).IsUnique();
+        modelBuilder.Entity<AiAgentCacheValue>().HasIndex(x => new { x.AgentId, x.SessionId, x.FieldKey }).IsUnique();
+
+        // WhatsApp: una instancia por agencia.
+        modelBuilder.Entity<WhatsAppLine>().HasIndex(x => new { x.TenantId, x.InstanceName }).IsUnique();
+        modelBuilder.Entity<TenantEvolutionConfig>().HasIndex(x => x.TenantId).IsUnique();
 
         // Unicidad / constraints clave.
         modelBuilder.Entity<PlatformUser>().HasIndex(x => x.Email).IsUnique();
