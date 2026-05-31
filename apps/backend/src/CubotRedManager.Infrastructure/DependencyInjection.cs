@@ -35,6 +35,10 @@ public static class DependencyInjection
         // Servicios de Application portados.
         services.AddScoped<IWhatsAppLineService, WhatsAppLineService>();
         services.AddScoped<IAiAgentService, AiAgentService>();
+        services.AddScoped<IAiAgentCacheService, AiAgentCacheService>();
+        services.AddScoped<IAiUsageService, AiUsageService>();
+        services.AddScoped<IAiInferenceService, AiInferenceService>();
+        services.AddHttpClient<IAiProviderClient, CubotRedManager.Infrastructure.Ai.AiProviderClient>();
         services.AddScoped<CubotRedManager.Application.Admin.IAiServerConfigService, CubotRedManager.Application.Admin.AiServerConfigService>();
 
         // Evolution (WhatsApp): cliente HTTP + config maestra.
