@@ -1,0 +1,6 @@
+@CubotRedManager.Api_HostAddress = http://localhost:5020
+
+GET {{CubotRedManager.Api_HostAddress}}/weatherforecast/
+Accept: application/json
+
+###

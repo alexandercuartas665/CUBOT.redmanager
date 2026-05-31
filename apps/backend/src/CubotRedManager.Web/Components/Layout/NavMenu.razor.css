@@ -1,0 +1,80 @@
+/* Paleta CUBOT: morado #A03DC9, magenta #C7398B, degradado violeta. */
+
+.rm-sidebar-brand {
+    padding: 1.1rem 1.25rem;
+    font-size: 1.25rem;
+    font-weight: 700;
+    letter-spacing: .3px;
+    border-bottom: 1px solid rgba(255, 255, 255, .12);
+}
+
+.rm-brand-mark { color: #ffffff; }
+.rm-brand-sub { color: #f3c6ec; font-weight: 600; }
+
+.rm-toggler {
+    appearance: none;
+    cursor: pointer;
+    width: 3.5rem;
+    height: 2.5rem;
+    position: absolute;
+    top: .6rem;
+    right: .6rem;
+    border: 1px solid rgba(255, 255, 255, .25);
+    border-radius: .375rem;
+    background-image: url("data:image/svg+xml,%3csvg viewBox='0 0 30 30' xmlns='http://www.w3.org/2000/svg'%3e%3cpath stroke='rgba%28255,255,255,0.85%29' stroke-width='2' stroke-linecap='round' stroke-miterlimit='10' d='M4 7h22M4 15h22M4 23h22'/%3e%3c/svg%3e");
+    background-repeat: no-repeat;
+    background-position: center;
+}
+
+.rm-nav { display: flex; flex-direction: column; padding: .5rem 0 2rem; }
+
+.rm-section { margin-top: .75rem; }
+
+.rm-section-title {
+    text-transform: uppercase;
+    font-size: .68rem;
+    letter-spacing: .08em;
+    font-weight: 700;
+    color: rgba(255, 255, 255, .55);
+    padding: .5rem 1.25rem .25rem;
+}
+
+.rm-nav-item { padding: 0 .6rem; }
+
+.rm-nav-link {
+    display: flex;
+    align-items: center;
+    gap: .65rem;
+    color: rgba(255, 255, 255, .82);
+    border-radius: .5rem;
+    padding: .55rem .7rem;
+    font-size: .92rem;
+    line-height: 1.1;
+    text-decoration: none;
+}
+
+.rm-nav-link .bi { font-size: 1.05rem; width: 1.25rem; text-align: center; }
+
+.rm-nav-link:hover {
+    background: rgba(255, 255, 255, .10);
+    color: #ffffff;
+}
+
+.rm-nav-link.active {
+    background: linear-gradient(90deg, rgba(199, 57, 139, .95), rgba(160, 61, 201, .95));
+    color: #ffffff;
+    box-shadow: 0 2px 8px rgba(160, 61, 201, .35);
+}
+
+.rm-nav-text { flex: 1 1 auto; }
+
+.rm-badge {
+    min-width: 1.4rem;
+    text-align: center;
+    background: #ffffff;
+    color: #A03DC9;
+    font-size: .72rem;
+    font-weight: 700;
+    border-radius: 1rem;
+    padding: .1rem .45rem;
+}

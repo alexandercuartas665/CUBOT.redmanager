@@ -1,0 +1,7 @@
+@page "/"
+@inject NavigationManager Nav
+
+@code {
+    // La raiz redirige al Dashboard (entrada de la consola de agencia).
+    protected override void OnInitialized() => Nav.NavigateTo("/dashboard", replace: true);
+}

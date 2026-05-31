@@ -1,0 +1,77 @@
+@* Menu de la consola de agencia CUBOT.redmanager (Modulo 1.5 - Primera tarea funcional).
+   Estructura por secciones segun la Hoja de Ruta. Items gateados por politica (tarea 4). *@
+
+<div class="rm-sidebar-brand">
+    <span class="rm-brand-mark">CUBOT</span><span class="rm-brand-sub">.redmanager</span>
+</div>
+
+<input type="checkbox" title="Menu de navegacion" class="navbar-toggler rm-toggler" />
+
+<div class="nav-scrollable" onclick="document.querySelector('.rm-toggler').click()">
+    <nav class="rm-nav">
+        @foreach (var section in _sections)
+        {
+            <div class="rm-section">
+                <div class="rm-section-title">@section.Title</div>
+                @foreach (var item in section.Items)
+                {
+                    <div class="rm-nav-item">
+                        <NavLink class="rm-nav-link" href="@item.Href"
+                                 Match="@(item.Href == "/" ? NavLinkMatch.All : NavLinkMatch.Prefix)">
+                            <i class="bi @item.Icon" aria-hidden="true"></i>
+                            <span class="rm-nav-text">@item.Label</span>
+                            @if (item.ShowInboxBadge)
+                            {
+                                <span class="rm-badge" title="Mensajes sin responder">@_inboxUnread</span>
+                            }
+                        </NavLink>
+                    </div>
+                }
+            </div>
+        }
+    </nav>
+</div>
+
+@code {
+    // Badge en vivo de Bandeja unificada. En Fase 2 se alimenta por SignalR; arranca en 0.
+    private int _inboxUnread = 0;
+
+    private record NavItem(string Label, string Href, string Icon, bool ShowInboxBadge = false);
+    private record NavSection(string Title, NavItem[] Items);
+
+    private readonly NavSection[] _sections =
+    [
+        new("Operacion diaria",
+        [
+            new("Dashboard", "/dashboard", "bi-speedometer2"),
+            new("Calendario editorial", "/calendario", "bi-calendar-week"),
+            new("Bandeja unificada", "/bandeja", "bi-inbox", ShowInboxBadge: true),
+            new("Tableros de tareas", "/tableros", "bi-kanban"),
+            new("Conversaciones", "/conversaciones", "bi-chat-dots"),
+        ]),
+        new("Clientes y cuentas",
+        [
+            new("Clientes (Marcas)", "/clientes", "bi-people"),
+            new("Cuentas sociales", "/cuentas-sociales", "bi-link-45deg"),
+            new("OAuth y conexiones", "/conexiones", "bi-shield-check"),
+        ]),
+        new("Reportes",
+        [
+            new("Reportes ejecutivos", "/reportes", "bi-file-earmark-bar-graph"),
+            new("Metricas", "/metricas", "bi-graph-up"),
+        ]),
+        new("Comunicacion e IA",
+        [
+            new("Lineas WhatsApp", "/lineas-whatsapp", "bi-whatsapp"),
+            new("Agentes de IA", "/agentes", "bi-robot"),
+            new("Autorespuesta de comentarios", "/autorespuesta", "bi-reply-all"),
+            new("Automatizaciones", "/automatizaciones", "bi-gear-wide-connected"),
+        ]),
+        new("Configuracion",
+        [
+            new("Asesores y operadores", "/operadores", "bi-person-badge"),
+            new("Plantillas", "/plantillas", "bi-card-text"),
+            new("Mi cuenta", "/cuenta", "bi-person-circle"),
+        ]),
+    ];
+}

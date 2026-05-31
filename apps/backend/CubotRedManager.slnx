@@ -1,0 +1,17 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/CubotRedManager.Api/CubotRedManager.Api.csproj" />
+    <Project Path="src/CubotRedManager.Application/CubotRedManager.Application.csproj" />
+    <Project Path="src/CubotRedManager.Domain/CubotRedManager.Domain.csproj" />
+    <Project Path="src/CubotRedManager.Infrastructure/CubotRedManager.Infrastructure.csproj" />
+    <Project Path="src/CubotRedManager.Shared/CubotRedManager.Shared.csproj" />
+    <Project Path="src/CubotRedManager.SuperAdmin/CubotRedManager.SuperAdmin.csproj" />
+    <Project Path="src/CubotRedManager.Web/CubotRedManager.Web.csproj" />
+    <Project Path="src/CubotRedManager.Workers/CubotRedManager.Workers.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/CubotRedManager.Application.Tests/CubotRedManager.Application.Tests.csproj" />
+    <Project Path="tests/CubotRedManager.Domain.Tests/CubotRedManager.Domain.Tests.csproj" />
+    <Project Path="tests/CubotRedManager.Integration.Tests/CubotRedManager.Integration.Tests.csproj" />
+  </Folder>
+</Solution>

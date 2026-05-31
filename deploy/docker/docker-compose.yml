@@ -1,0 +1,93 @@
+name: cubotrm
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: cubotrm-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      PGDATA: /var/lib/postgresql/data/pgdata
+    ports:
+      - "${POSTGRES_PORT:-5436}:5432"
+    volumes:
+      - cubotrm-postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+    networks:
+      - cubotrm-net
+
+  redis:
+    image: redis:7-alpine
+    container_name: cubotrm-redis
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes", "--requirepass", "${REDIS_PASSWORD}"]
+    ports:
+      - "${REDIS_PORT:-6383}:6379"
+    volumes:
+      - cubotrm-redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD}", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+    networks:
+      - cubotrm-net
+
+  rabbitmq:
+    image: rabbitmq:3.13-management-alpine
+    container_name: cubotrm-rabbitmq
+    restart: unless-stopped
+    environment:
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_DEFAULT_USER}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_DEFAULT_PASS}
+    ports:
+      - "${RABBITMQ_PORT:-5675}:5672"
+      - "${RABBITMQ_MGMT_PORT:-15675}:15672"
+    volumes:
+      - cubotrm-rabbitmq-data:/var/lib/rabbitmq
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "ping"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 30s
+    networks:
+      - cubotrm-net
+
+  pgadmin:
+    image: dpage/pgadmin4:latest
+    container_name: cubotrm-pgadmin
+    restart: unless-stopped
+    environment:
+      PGADMIN_DEFAULT_EMAIL: ${PGADMIN_EMAIL}
+      PGADMIN_DEFAULT_PASSWORD: ${PGADMIN_PASSWORD}
+      PGADMIN_CONFIG_SERVER_MODE: "False"
+      PGADMIN_CONFIG_MASTER_PASSWORD_REQUIRED: "False"
+    ports:
+      - "${PGADMIN_PORT:-5052}:80"
+    volumes:
+      - cubotrm-pgadmin-data:/var/lib/pgadmin
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - cubotrm-net
+
+volumes:
+  cubotrm-postgres-data:
+  cubotrm-redis-data:
+  cubotrm-rabbitmq-data:
+  cubotrm-pgadmin-data:
+
+networks:
+  cubotrm-net:
+    name: cubotrm-net
+    driver: bridge

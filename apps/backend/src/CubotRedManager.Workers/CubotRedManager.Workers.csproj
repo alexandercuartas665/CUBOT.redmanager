@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk.Worker">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <UserSecretsId>dotnet-CubotRedManager.Workers-0ebf167f-800a-43e7-bd20-e214906cd2f6</UserSecretsId>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Extensions.Hosting" Version="10.0.8" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\CubotRedManager.Application\CubotRedManager.Application.csproj" />
+    <ProjectReference Include="..\CubotRedManager.Infrastructure\CubotRedManager.Infrastructure.csproj" />
+  </ItemGroup>
+</Project>

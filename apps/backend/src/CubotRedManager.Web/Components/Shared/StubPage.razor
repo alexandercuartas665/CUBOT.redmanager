@@ -1,0 +1,22 @@
+@* Componente reutilizable para los stubs del menu (Primera tarea funcional). *@
+
+<PageTitle>@Title - CUBOT.redmanager</PageTitle>
+
+<div class="stub-page">
+    <div class="stub-icon">
+        <i class="bi @Icon" aria-hidden="true"></i>
+    </div>
+    <h1 class="stub-title">@Title</h1>
+    <span class="stub-phase">Pendiente @Phase</span>
+    @if (!string.IsNullOrWhiteSpace(Description))
+    {
+        <p class="stub-desc">@Description</p>
+    }
+</div>
+
+@code {
+    [Parameter, EditorRequired] public string Title { get; set; } = string.Empty;
+    [Parameter, EditorRequired] public string Phase { get; set; } = string.Empty;
+    [Parameter] public string Icon { get; set; } = "bi-card-list";
+    [Parameter] public string? Description { get; set; }
+}

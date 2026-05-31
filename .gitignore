@@ -1,0 +1,33 @@
+## .NET / build
+bin/
+obj/
+out/
+*.user
+*.suo
+.vs/
+artifacts/
+TestResults/
+
+## Rider / VS Code
+.idea/
+.vscode/
+
+## Secretos y configuracion local (NUNCA versionar)
+appsettings.*.local.json
+**/appsettings.Development.local.json
+**/appsettings.Production.local.json
+.env
+*.env
+secrets.json
+
+## Docker data (volumenes locales)
+deploy/docker/*-data/
+deploy/docker/.env
+
+## Logs
+*.log
+logs/
+
+## OS
+Thumbs.db
+.DS_Store

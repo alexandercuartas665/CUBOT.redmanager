@@ -1,0 +1,27 @@
+﻿@inherits LayoutComponentBase
+
+<div class="page">
+    <div class="sidebar">
+        <NavMenu />
+    </div>
+
+    <main>
+        <div class="top-row px-4 rm-topbar">
+            <span class="rm-topbar-title">Consola de la agencia</span>
+            <span class="rm-topbar-user">
+                <i class="bi bi-person-circle" aria-hidden="true"></i>
+                <span class="rm-topbar-user-name">Sin sesion</span>
+            </span>
+        </div>
+
+        <article class="content px-4">
+            @Body
+        </article>
+    </main>
+</div>
+
+<div id="blazor-error-ui" data-nosnippet>
+    An unhandled error has occurred.
+    <a href="." class="reload">Reload</a>
+    <span class="dismiss">🗙</span>
+</div>
