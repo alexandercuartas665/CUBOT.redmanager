@@ -36,6 +36,7 @@ public static class DependencyInjection
         services.AddScoped<IWhatsAppLineService, WhatsAppLineService>();
         services.AddScoped<IClientService, ClientService>();
         services.AddScoped<ISocialAccountService, SocialAccountService>();
+        services.AddScoped<ITaskBoardService, TaskBoardService>();
         services.AddScoped<IAiAgentService, AiAgentService>();
         services.AddScoped<IAiAgentCacheService, AiAgentCacheService>();
         services.AddScoped<IAiUsageService, AiUsageService>();

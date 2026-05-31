@@ -44,6 +44,9 @@ public class CubotRedManagerDbContext : DbContext, IApplicationDbContext
     public DbSet<Client> Clients => Set<Client>();
     public DbSet<UserClientLink> UserClientLinks => Set<UserClientLink>();
     public DbSet<SocialAccount> SocialAccounts => Set<SocialAccount>();
+    public DbSet<TaskBoard> TaskBoards => Set<TaskBoard>();
+    public DbSet<TaskColumn> TaskColumns => Set<TaskColumn>();
+    public DbSet<TaskCard> TaskCards => Set<TaskCard>();
 
     // IA (capa 3)
     public DbSet<AiAgent> AiAgents => Set<AiAgent>();
@@ -94,6 +97,12 @@ public class CubotRedManagerDbContext : DbContext, IApplicationDbContext
         modelBuilder.Entity<SocialAccount>().Property(x => x.Status).HasConversion<string>();
         modelBuilder.Entity<SocialAccount>()
             .HasIndex(x => new { x.TenantId, x.ClientId, x.NetworkCode, x.ExternalId }).IsUnique();
+
+        // Tablero Kanban (Modulo 2.7).
+        modelBuilder.Entity<TaskCard>().Property(x => x.Priority).HasConversion<string>();
+        modelBuilder.Entity<TaskBoard>().HasMany(b => b.Columns).WithOne(c => c.Board!).HasForeignKey(c => c.BoardId).OnDelete(DeleteBehavior.Cascade);
+        modelBuilder.Entity<TaskColumn>().HasMany(c => c.Cards).WithOne().HasForeignKey(x => x.ColumnId).OnDelete(DeleteBehavior.Cascade);
+        modelBuilder.Entity<TaskCard>().HasIndex(x => new { x.ColumnId, x.SortOrder });
 
         // Auditoria global.
         modelBuilder.Entity<SuperAdminAuditLog>().Property(x => x.ActorType).HasConversion<string>();
