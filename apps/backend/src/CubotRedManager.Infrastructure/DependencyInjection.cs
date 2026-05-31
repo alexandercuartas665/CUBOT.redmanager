@@ -34,6 +34,8 @@ public static class DependencyInjection
 
         // Servicios de Application portados.
         services.AddScoped<IWhatsAppLineService, WhatsAppLineService>();
+        services.AddScoped<IAiAgentService, AiAgentService>();
+        services.AddScoped<CubotRedManager.Application.Admin.IAiServerConfigService, CubotRedManager.Application.Admin.AiServerConfigService>();
 
         return services;
     }
