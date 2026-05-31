@@ -37,6 +37,10 @@ public static class DependencyInjection
         services.AddScoped<IAiAgentService, AiAgentService>();
         services.AddScoped<CubotRedManager.Application.Admin.IAiServerConfigService, CubotRedManager.Application.Admin.AiServerConfigService>();
 
+        // Evolution (WhatsApp): cliente HTTP + config maestra.
+        services.AddHttpClient<CubotRedManager.Application.Admin.IEvolutionApiClient, CubotRedManager.Infrastructure.Evolution.EvolutionApiClient>();
+        services.AddScoped<CubotRedManager.Application.Admin.IEvolutionMasterConfigService, CubotRedManager.Application.Admin.EvolutionMasterConfigService>();
+
         return services;
     }
 }
