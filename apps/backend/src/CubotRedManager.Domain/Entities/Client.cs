@@ -19,6 +19,7 @@ public class Client : TenantEntity
     /// <summary>Manual de marca (markdown). Input principal del agente Copywriter.</summary>
     public string? BrandToneNotes { get; set; }
     public string? TimeZone { get; set; }
+    public string? Notes { get; set; }
     public bool IsActive { get; set; } = true;
 
     public ICollection<UserClientLink> AssignedOperators { get; set; } = new List<UserClientLink>();
