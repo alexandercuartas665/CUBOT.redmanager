@@ -47,6 +47,10 @@ public class CubotRedManagerDbContext : DbContext, IApplicationDbContext
     public DbSet<TaskBoard> TaskBoards => Set<TaskBoard>();
     public DbSet<TaskColumn> TaskColumns => Set<TaskColumn>();
     public DbSet<TaskCard> TaskCards => Set<TaskCard>();
+    public DbSet<Publication> Publications => Set<Publication>();
+    public DbSet<PublicationTarget> PublicationTargets => Set<PublicationTarget>();
+    public DbSet<InboxMessage> InboxMessages => Set<InboxMessage>();
+    public DbSet<InboxReply> InboxReplies => Set<InboxReply>();
 
     // IA (capa 3)
     public DbSet<AiAgent> AiAgents => Set<AiAgent>();
@@ -103,6 +107,18 @@ public class CubotRedManagerDbContext : DbContext, IApplicationDbContext
         modelBuilder.Entity<TaskBoard>().HasMany(b => b.Columns).WithOne(c => c.Board!).HasForeignKey(c => c.BoardId).OnDelete(DeleteBehavior.Cascade);
         modelBuilder.Entity<TaskColumn>().HasMany(c => c.Cards).WithOne().HasForeignKey(x => x.ColumnId).OnDelete(DeleteBehavior.Cascade);
         modelBuilder.Entity<TaskCard>().HasIndex(x => new { x.ColumnId, x.SortOrder });
+
+        // Calendario / publicaciones (Modulo 2.5).
+        modelBuilder.Entity<Publication>().Property(x => x.Status).HasConversion<string>();
+        modelBuilder.Entity<Publication>().HasMany(p => p.Targets).WithOne(t => t.Publication!).HasForeignKey(t => t.PublicationId).OnDelete(DeleteBehavior.Cascade);
+        modelBuilder.Entity<PublicationTarget>().Property(x => x.Status).HasConversion<string>();
+        modelBuilder.Entity<Publication>().HasIndex(x => new { x.TenantId, x.ScheduledAt });
+
+        // Bandeja unificada (Modulo 2.6).
+        modelBuilder.Entity<InboxMessage>().Property(x => x.Type).HasConversion<string>();
+        modelBuilder.Entity<InboxMessage>().Property(x => x.Status).HasConversion<string>();
+        modelBuilder.Entity<InboxMessage>().HasIndex(x => new { x.NetworkCode, x.ExternalId }).IsUnique();
+        modelBuilder.Entity<InboxMessage>().HasMany(m => m.Replies).WithOne(r => r.Message!).HasForeignKey(r => r.InboxMessageId).OnDelete(DeleteBehavior.Cascade);
 
         // Auditoria global.
         modelBuilder.Entity<SuperAdminAuditLog>().Property(x => x.ActorType).HasConversion<string>();

@@ -37,6 +37,8 @@ public static class DependencyInjection
         services.AddScoped<IClientService, ClientService>();
         services.AddScoped<ISocialAccountService, SocialAccountService>();
         services.AddScoped<ITaskBoardService, TaskBoardService>();
+        services.AddScoped<IPublicationService, PublicationService>();
+        services.AddScoped<IInboxService, InboxService>();
         services.AddScoped<IAiAgentService, AiAgentService>();
         services.AddScoped<IAiAgentCacheService, AiAgentCacheService>();
         services.AddScoped<IAiUsageService, AiUsageService>();

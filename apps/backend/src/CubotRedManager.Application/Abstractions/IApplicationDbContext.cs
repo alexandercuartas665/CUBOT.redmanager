@@ -20,6 +20,10 @@ public interface IApplicationDbContext
     DbSet<TaskBoard> TaskBoards { get; }
     DbSet<TaskColumn> TaskColumns { get; }
     DbSet<TaskCard> TaskCards { get; }
+    DbSet<Publication> Publications { get; }
+    DbSet<PublicationTarget> PublicationTargets { get; }
+    DbSet<InboxMessage> InboxMessages { get; }
+    DbSet<InboxReply> InboxReplies { get; }
 
     // Planes SaaS
     DbSet<SaasPlan> SaasPlans { get; }

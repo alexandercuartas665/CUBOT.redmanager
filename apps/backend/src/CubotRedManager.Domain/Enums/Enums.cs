@@ -124,3 +124,15 @@ public enum SocialAccountStatus { Connected, Expired, Revoked, Disconnected }
 
 /// <summary>Prioridad de una tarjeta del tablero Kanban (Modulo 2.7).</summary>
 public enum TaskPriority { Low, Normal, High, Urgent }
+
+/// <summary>Estado de una publicacion del calendario editorial (Modulo 2.5).</summary>
+public enum PublicationStatus { Draft, Approved, Scheduled, Published, Failed }
+
+/// <summary>Estado de una publicacion en una cuenta destino (aislado por red).</summary>
+public enum PublicationTargetStatus { Pending, Published, Failed }
+
+/// <summary>Tipo de mensaje entrante en la bandeja unificada (Modulo 2.6).</summary>
+public enum InboxMessageType { DirectMessage, Comment, Mention }
+
+/// <summary>Estado de un mensaje de la bandeja unificada.</summary>
+public enum InboxStatus { Unread, Read, Replied, Archived, EscalateToHuman }

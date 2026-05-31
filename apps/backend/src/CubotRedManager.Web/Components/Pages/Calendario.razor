@@ -1,5 +1,195 @@
 @page "/calendario"
-@attribute [Microsoft.AspNetCore.Authorization.Authorize(Policy = AppPolicies.TenantMember)]
+@attribute [Authorize(Policy = AppPolicies.TenantMember)]
+@rendermode InteractiveServer
+@using System.Security.Claims
+@using CubotRedManager.Application.Tenancy
+@using CubotRedManager.Domain.Enums
+@inject IPublicationService PubsSvc
+@inject IClientService ClientsSvc
+@inject ISocialAccountService AccountsSvc
+@inject AuthenticationStateProvider AuthProvider
 
-<ModulePlaceholder Eyebrow="Operacion diaria" Title="Calendario editorial" Phase="Fase 2"
-                   Description="Vista mensual y semanal de publicaciones por cliente." />
+<PageTitle>Calendario editorial - CUBOT.redmanager</PageTitle>
+
+<div class="module-head">
+    <div>
+        <div class="module-eyebrow">
+            <div class="module-icon">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="18" height="18" x="3" y="4" rx="2"/><path d="M3 10h18"/><path d="M8 2v4"/><path d="M16 2v4"/></svg>
+            </div>
+            <span>Operacion diaria</span>
+        </div>
+        <h1 class="page-title" style="margin-top:12px;">Calendario editorial</h1>
+        <p class="page-sub" style="margin-bottom:0;">Publicaciones por cliente y estado. Multi-red, con publicacion programada.</p>
+    </div>
+    <button class="btn btn-primary" @onclick="OpenCreate" disabled="@(_clients is null || _clients.Count == 0)">+ Nueva publicacion</button>
+</div>
+
+@if (_pubs is null)
+{
+    <p class="text-muted">Cargando...</p>
+}
+else
+{
+    <div class="cal-legend">
+        @foreach (var s in _allStatuses)
+        {
+            <span class="cal-chip s-@s.ToString().ToLowerInvariant()">@StatusLabel(s) (@_pubs.Count(p => p.Status == s))</span>
+        }
+    </div>
+    @if (_pubs.Count == 0)
+    {
+        <div class="coming-soon">
+            <div class="coming-soon-icon">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect width="18" height="18" x="3" y="4" rx="2"/><path d="M3 10h18"/></svg>
+            </div>
+            <h3>Sin publicaciones</h3>
+            <p>Crea la primera publicacion para un cliente. Si le pones fecha queda Programada; si no, Borrador.</p>
+        </div>
+    }
+    else
+    {
+        <div class="card" style="max-width:1100px;padding:6px 16px;">
+            <table class="table table-hover" style="margin:0;">
+                <thead><tr><th style="padding-left:14px;">Cliente</th><th>Copy</th><th>Programada</th><th>Redes</th><th>Estado</th><th></th></tr></thead>
+                <tbody>
+                    @foreach (var p in _pubs)
+                    {
+                        <tr>
+                            <td style="padding-left:14px;font-weight:600;">@p.ClientName</td>
+                            <td style="max-width:340px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">@p.Caption</td>
+                            <td style="font-size:12px;color:var(--muted-foreground);">@(p.ScheduledAt is { } d ? d.LocalDateTime.ToString("dd MMM HH:mm") : "—")</td>
+                            <td>@p.TargetCount</td>
+                            <td><span class="cal-chip s-@p.Status.ToString().ToLowerInvariant()">@StatusLabel(p.Status)</span></td>
+                            <td style="text-align:right;padding-right:14px;">
+                                <select class="form-control-sm" style="width:auto;display:inline-block;" @onchange="e => SetStatus(p, e.Value?.ToString())">
+                                    @foreach (var s in _allStatuses) { <option value="@s" selected="@(s == p.Status)">@StatusLabel(s)</option> }
+                                </select>
+                            </td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+    }
+}
+
+@if (_createOpen)
+{
+    <div class="modal-overlay">
+        <div class="modal-dialog">
+            <div class="modal-head"><h3>Nueva publicacion</h3><button class="modal-close" @onclick="() => _createOpen = false">&times;</button></div>
+            <div class="modal-body">
+                <div class="field">
+                    <label class="form-label">Cliente</label>
+                    <select class="form-control" @bind="_fClient" @bind:after="OnClientChanged">
+                        <option value="">Selecciona...</option>
+                        @foreach (var c in _clients!) { <option value="@c.Id">@c.Name</option> }
+                    </select>
+                </div>
+                <div class="field"><label class="form-label">Copy</label><textarea class="form-control" rows="3" @bind="_fCaption"></textarea></div>
+                <div class="field"><label class="form-label">Programar (opcional)</label><input class="form-control" type="datetime-local" @bind="_fSchedule" /></div>
+                <div class="field">
+                    <label class="form-label">Cuentas destino</label>
+                    @if (_clientAccounts.Count == 0)
+                    {
+                        <div class="text-muted" style="font-size:12px;">Este cliente no tiene cuentas conectadas. Puedes crear la publicacion como borrador.</div>
+                    }
+                    else
+                    {
+                        @foreach (var a in _clientAccounts)
+                        {
+                            <label class="cal-acc"><input type="checkbox" checked="@_selected.Contains(a.Id)" @onchange="e => Toggle(a.Id, (bool)e.Value!)" /> <span>@a.NetworkDisplay @(string.IsNullOrWhiteSpace(a.Handle) ? "" : "@" + a.Handle)</span></label>
+                        }
+                    }
+                </div>
+                @if (_error is not null) { <div class="text-danger small">@_error</div> }
+            </div>
+            <div class="modal-foot">
+                <button class="btn btn-outline-secondary" @onclick="() => _createOpen = false">Cancelar</button>
+                <button class="btn btn-primary" @onclick="CreateAsync" disabled="@(_busy || string.IsNullOrWhiteSpace(_fClient) || string.IsNullOrWhiteSpace(_fCaption))">Crear</button>
+            </div>
+        </div>
+    </div>
+}
+
+<style>
+    .cal-legend { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 16px; }
+    .cal-chip { font-size: 11px; font-weight: 700; padding: 3px 10px; border-radius: 999px; background: var(--muted); color: var(--muted-foreground); }
+    .cal-chip.s-draft { background: var(--muted); color: var(--muted-foreground); }
+    .cal-chip.s-approved { background: var(--primary-soft); color: var(--primary); }
+    .cal-chip.s-scheduled { background: oklch(0.6 0.16 255 / 0.15); color: oklch(0.5 0.16 255); }
+    .cal-chip.s-published { background: oklch(0.62 0.16 155 / 0.15); color: var(--success); }
+    .cal-chip.s-failed { background: oklch(0.6 0.22 22 / 0.12); color: var(--destructive); }
+    .cal-acc { display: flex; align-items: center; gap: 8px; font-size: 13px; padding: 4px 0; }
+    .field { margin-bottom: 14px; }
+</style>
+
+@code {
+    private List<PublicationDto>? _pubs;
+    private List<ClientDto>? _clients;
+    private List<SocialAccountDto> _clientAccounts = new();
+    private readonly HashSet<Guid> _selected = new();
+    private bool _createOpen, _busy;
+    private string? _error;
+    private string _fClient = "", _fCaption = "";
+    private DateTime? _fSchedule;
+    private Guid _actor;
+    private readonly PublicationStatus[] _allStatuses = Enum.GetValues<PublicationStatus>();
+
+    protected override async Task OnInitializedAsync()
+    {
+        var st = await AuthProvider.GetAuthenticationStateAsync();
+        Guid.TryParse(st.User.FindFirst(ClaimTypes.NameIdentifier)?.Value, out _actor);
+        _clients = (await ClientsSvc.ListAsync()).ToList();
+        await Reload();
+    }
+
+    private async Task Reload() => _pubs = (await PubsSvc.ListAsync()).ToList();
+
+    private void OpenCreate() { _error = null; _fClient = ""; _fCaption = ""; _fSchedule = null; _selected.Clear(); _clientAccounts = new(); _createOpen = true; }
+
+    private async Task OnClientChanged()
+    {
+        _selected.Clear();
+        if (Guid.TryParse(_fClient, out var cid))
+        {
+            _clientAccounts = (await AccountsSvc.ListAsync(cid)).Where(a => a.Status == SocialAccountStatus.Connected).ToList();
+        }
+        else { _clientAccounts = new(); }
+    }
+
+    private void Toggle(Guid id, bool on) { if (on) { _selected.Add(id); } else { _selected.Remove(id); } }
+
+    private async Task CreateAsync()
+    {
+        _error = null; _busy = true;
+        try
+        {
+            if (!Guid.TryParse(_fClient, out var cid)) { return; }
+            DateTimeOffset? sched = _fSchedule is { } s ? new DateTimeOffset(s, TimeSpan.Zero) : null;
+            var dto = await PubsSvc.CreateAsync(new CreatePublicationRequest(cid, _fCaption, sched, _selected.ToList()), _actor);
+            if (dto is null) { _error = "No hay agencia activa o cliente invalido."; return; }
+            _createOpen = false;
+            await Reload();
+        }
+        catch (Exception ex) { _error = ex.Message; }
+        finally { _busy = false; }
+    }
+
+    private async Task SetStatus(PublicationDto p, string? value)
+    {
+        if (value is null || !Enum.TryParse<PublicationStatus>(value, out var s) || s == p.Status) { return; }
+        await PubsSvc.SetStatusAsync(p.Id, s, _actor);
+        await Reload();
+    }
+
+    private static string StatusLabel(PublicationStatus s) => s switch
+    {
+        PublicationStatus.Draft => "Borrador",
+        PublicationStatus.Approved => "Aprobada",
+        PublicationStatus.Scheduled => "Programada",
+        PublicationStatus.Published => "Publicada",
+        _ => "Fallida"
+    };
+}

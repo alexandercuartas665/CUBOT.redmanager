@@ -1,5 +1,196 @@
 @page "/bandeja"
-@attribute [Microsoft.AspNetCore.Authorization.Authorize(Policy = AppPolicies.TenantMember)]
+@attribute [Authorize(Policy = AppPolicies.TenantMember)]
+@rendermode InteractiveServer
+@using System.Security.Claims
+@using CubotRedManager.Application.Tenancy
+@using CubotRedManager.Domain.Enums
+@inject IInboxService InboxSvc
+@inject IClientService ClientsSvc
+@inject AuthenticationStateProvider AuthProvider
 
-<ModulePlaceholder Eyebrow="Operacion diaria" Title="Bandeja unificada" Phase="Fase 2"
-                   Description="DMs, comentarios y menciones de todas las redes en una sola bandeja." />
+<PageTitle>Bandeja unificada - CUBOT.redmanager</PageTitle>
+
+<div class="module-head">
+    <div>
+        <div class="module-eyebrow">
+            <div class="module-icon">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 12h-6l-2 3h-4l-2-3H2"/><path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/></svg>
+            </div>
+            <span>Operacion diaria</span>
+        </div>
+        <h1 class="page-title" style="margin-top:12px;">Bandeja unificada</h1>
+        <p class="page-sub" style="margin-bottom:0;">DMs, comentarios y menciones de todas las redes en una sola bandeja.</p>
+    </div>
+    <button class="btn btn-outline-secondary" @onclick="() => _simOpen = true" disabled="@(_clients is null || _clients.Count == 0)">Simular entrante</button>
+</div>
+
+<div class="ib-filters">
+    <button class="ib-f @(_filter is null ? "on" : "")" @onclick="() => SetFilter(null)">Todos</button>
+    <button class="ib-f @(_filter == InboxStatus.Unread ? "on" : "")" @onclick="() => SetFilter(InboxStatus.Unread)">Sin leer</button>
+    <button class="ib-f @(_filter == InboxStatus.Replied ? "on" : "")" @onclick="() => SetFilter(InboxStatus.Replied)">Respondidos</button>
+    <button class="ib-f @(_filter == InboxStatus.Archived ? "on" : "")" @onclick="() => SetFilter(InboxStatus.Archived)">Archivados</button>
+</div>
+
+@if (_msgs is null)
+{
+    <p class="text-muted">Cargando...</p>
+}
+else if (_msgs.Count == 0)
+{
+    <div class="coming-soon">
+        <div class="coming-soon-icon">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M22 12h-6l-2 3h-4l-2-3H2"/><path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/></svg>
+        </div>
+        <h3>Bandeja vacia</h3>
+        <p>Aqui llegan DMs, comentarios y menciones via webhook. Usa "Simular entrante" para probar.</p>
+    </div>
+}
+else
+{
+    <div class="ib-list">
+        @foreach (var m in _msgs)
+        {
+            <div class="ib-item @(m.Status == InboxStatus.Unread ? "unread" : "")">
+                <div class="ib-avatar">@Initials(m.AuthorName)</div>
+                <div style="flex:1;min-width:0;">
+                    <div class="ib-top">
+                        <span class="ib-author">@(m.AuthorName ?? "Anonimo")</span>
+                        <span class="ib-meta">@m.ClientName &middot; @m.NetworkCode &middot; @TypeLabel(m.Type) &middot; @m.ReceivedAt.LocalDateTime.ToString("dd MMM HH:mm")</span>
+                    </div>
+                    <div class="ib-body">@m.Body</div>
+                    @if (_replyTo == m.Id)
+                    {
+                        <div class="ib-reply">
+                            <input class="form-control" @bind="_replyText" placeholder="Escribe una respuesta..." />
+                            <button class="btn btn-sm btn-primary" @onclick="() => SendReply(m)" disabled="@string.IsNullOrWhiteSpace(_replyText)">Enviar</button>
+                            <button class="btn btn-sm btn-outline-secondary" @onclick="() => _replyTo = null">Cancelar</button>
+                        </div>
+                    }
+                    else
+                    {
+                        <div class="ib-actions">
+                            <button class="btn btn-sm btn-primary" @onclick="() => OpenReply(m)">Responder</button>
+                            @if (m.Status == InboxStatus.Unread)
+                            {
+                                <button class="btn btn-sm btn-outline-secondary" @onclick="() => SetStatus(m, InboxStatus.Read)">Marcar leido</button>
+                            }
+                            <button class="btn btn-sm btn-outline-secondary" @onclick="() => SetStatus(m, InboxStatus.Archived)">Archivar</button>
+                            @if (m.ReplyCount > 0) { <span class="ib-rc">@m.ReplyCount respuesta(s)</span> }
+                        </div>
+                    }
+                </div>
+                <span class="badge bg-@StatusColor(m.Status)">@StatusLabel(m.Status)</span>
+            </div>
+        }
+    </div>
+}
+
+@if (_simOpen)
+{
+    <div class="modal-overlay">
+        <div class="modal-dialog">
+            <div class="modal-head"><h3>Simular mensaje entrante</h3><button class="modal-close" @onclick="() => _simOpen = false">&times;</button></div>
+            <div class="modal-body">
+                <div class="field"><label class="form-label">Cliente</label>
+                    <select class="form-control" @bind="_sClient"><option value="">Selecciona...</option>@foreach (var c in _clients!) { <option value="@c.Id">@c.Name</option> }</select>
+                </div>
+                <div class="field-row">
+                    <div class="field"><label class="form-label">Red</label>
+                        <select class="form-control" @bind="_sNetwork"><option>meta_instagram</option><option>meta_facebook</option><option>tiktok</option><option>youtube</option></select>
+                    </div>
+                    <div class="field"><label class="form-label">Tipo</label>
+                        <select class="form-control" @bind="_sType">@foreach (var t in Enum.GetValues<InboxMessageType>()) { <option value="@t">@TypeLabel(t)</option> }</select>
+                    </div>
+                </div>
+                <div class="field"><label class="form-label">Autor</label><input class="form-control" @bind="_sAuthor" placeholder="ej. juanperez" /></div>
+                <div class="field"><label class="form-label">Mensaje</label><textarea class="form-control" rows="2" @bind="_sBody"></textarea></div>
+            </div>
+            <div class="modal-foot">
+                <button class="btn btn-outline-secondary" @onclick="() => _simOpen = false">Cancelar</button>
+                <button class="btn btn-primary" @onclick="Simulate" disabled="@(string.IsNullOrWhiteSpace(_sClient) || string.IsNullOrWhiteSpace(_sBody))">Recibir</button>
+            </div>
+        </div>
+    </div>
+}
+
+<style>
+    .ib-filters { display: flex; gap: 8px; margin-bottom: 16px; }
+    .ib-f { border: 1px solid var(--border); background: var(--card); border-radius: 999px; padding: 5px 14px; font-size: 12.5px; cursor: pointer; color: var(--muted-foreground); }
+    .ib-f.on { background: var(--primary-soft); color: var(--primary); border-color: var(--primary); font-weight: 600; }
+    .ib-list { display: flex; flex-direction: column; gap: 10px; max-width: 1040px; }
+    .ib-item { display: flex; gap: 12px; align-items: flex-start; border: 1px solid var(--border); border-radius: 12px; background: var(--card); padding: 14px 16px; box-shadow: var(--shadow-soft); }
+    .ib-item.unread { border-left: 3px solid var(--primary); }
+    .ib-avatar { width: 38px; height: 38px; flex: none; border-radius: 50%; background: var(--gradient-violet); color: #fff; display: grid; place-items: center; font-weight: 700; font-size: 12px; }
+    .ib-top { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+    .ib-author { font-weight: 700; font-size: 13.5px; }
+    .ib-meta { font-size: 11px; color: var(--muted-foreground); }
+    .ib-body { font-size: 13px; margin-top: 3px; }
+    .ib-actions, .ib-reply { display: flex; align-items: center; gap: 8px; margin-top: 10px; }
+    .ib-rc { font-size: 11px; color: var(--muted-foreground); }
+    .field { margin-bottom: 14px; } .field-row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+</style>
+
+@code {
+    private List<InboxMessageDto>? _msgs;
+    private List<ClientDto>? _clients;
+    private InboxStatus? _filter;
+    private Guid? _replyTo;
+    private string _replyText = "";
+    private bool _simOpen;
+    private string _sClient = "", _sNetwork = "meta_instagram", _sType = nameof(InboxMessageType.Comment), _sAuthor = "", _sBody = "";
+    private Guid _actor;
+
+    protected override async Task OnInitializedAsync()
+    {
+        var st = await AuthProvider.GetAuthenticationStateAsync();
+        Guid.TryParse(st.User.FindFirst(ClaimTypes.NameIdentifier)?.Value, out _actor);
+        _clients = (await ClientsSvc.ListAsync()).ToList();
+        await Reload();
+    }
+
+    private async Task Reload() => _msgs = (await InboxSvc.ListAsync(_filter)).ToList();
+    private async Task SetFilter(InboxStatus? f) { _filter = f; await Reload(); }
+
+    private void OpenReply(InboxMessageDto m) { _replyTo = m.Id; _replyText = ""; }
+
+    private async Task SendReply(InboxMessageDto m)
+    {
+        await InboxSvc.ReplyAsync(m.Id, _replyText, _actor);
+        _replyTo = null; _replyText = "";
+        await Reload();
+    }
+
+    private async Task SetStatus(InboxMessageDto m, InboxStatus s) { await InboxSvc.SetStatusAsync(m.Id, s, _actor); await Reload(); }
+
+    private async Task Simulate()
+    {
+        if (!Guid.TryParse(_sClient, out var cid)) { return; }
+        var type = Enum.Parse<InboxMessageType>(_sType);
+        await InboxSvc.SimulateIncomingAsync(new SimulateInboxRequest(cid, _sNetwork, type, string.IsNullOrWhiteSpace(_sAuthor) ? "Anonimo" : _sAuthor, _sBody));
+        _simOpen = false; _sBody = ""; _sAuthor = "";
+        await Reload();
+    }
+
+    private static string Initials(string? name)
+    {
+        if (string.IsNullOrWhiteSpace(name)) { return "?"; }
+        var p = name.Trim().Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        return p.Length == 1 ? p[0][..Math.Min(2, p[0].Length)].ToUpperInvariant() : $"{p[0][0]}{p[1][0]}".ToUpperInvariant();
+    }
+
+    private static string TypeLabel(InboxMessageType t) => t switch
+    {
+        InboxMessageType.DirectMessage => "DM", InboxMessageType.Mention => "Mencion", _ => "Comentario"
+    };
+
+    private static string StatusLabel(InboxStatus s) => s switch
+    {
+        InboxStatus.Unread => "Sin leer", InboxStatus.Read => "Leido", InboxStatus.Replied => "Respondido",
+        InboxStatus.Archived => "Archivado", _ => "Escalado"
+    };
+
+    private static string StatusColor(InboxStatus s) => s switch
+    {
+        InboxStatus.Unread => "warning", InboxStatus.Replied => "success", InboxStatus.EscalateToHuman => "danger", _ => "secondary"
+    };
+}
