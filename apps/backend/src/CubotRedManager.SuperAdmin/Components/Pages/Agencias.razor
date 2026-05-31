@@ -1,4 +1,172 @@
 @page "/agencias"
-@attribute [Authorize(Policy = AppPolicies.PlatformOperator)]
+@attribute [Authorize(Policy = "PlatformOperator")]
+@rendermode @(new InteractiveServerRenderMode(prerender: false))
+@using System.Security.Claims
+@using CubotRedManager.Application.Admin
+@using CubotRedManager.Domain.Enums
+@inject ITenantAdminService TenantsSvc
 
-<ModulePlaceholder Eyebrow="Super Admin SaaS" Title="Agencias" Description="Alta y ciclo de vida de las agencias (tenants): plan, limites, estado, suspension." />
+<PageTitle>Agencias - CUBOT.redmanager</PageTitle>
+
+<div class="module-head">
+    <div>
+        <div class="module-eyebrow">
+            <div class="module-icon">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 22V4a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v18Z"/><path d="M6 12H4a2 2 0 0 0-2 2v6a2 2 0 0 0 2 2h2"/><path d="M18 9h2a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2h-2"/><path d="M10 6h4"/><path d="M10 10h4"/><path d="M10 14h4"/></svg>
+            </div>
+            <span>Super Admin SaaS</span>
+        </div>
+        <h1 class="page-title" style="margin-top:12px;">Agencias</h1>
+        <p class="page-sub" style="margin-bottom:0;">Alta y ciclo de vida de las agencias (tenants): tipo, estado y datos.</p>
+    </div>
+    <button class="btn btn-primary" @onclick="OpenCreate">+ Nueva agencia</button>
+</div>
+
+@if (_tenants is null)
+{
+    <p><em>Cargando...</em></p>
+}
+else if (_tenants.Count == 0)
+{
+    <p class="text-muted">No hay agencias todavia. Crea la primera con "Nueva agencia".</p>
+}
+else
+{
+    <div class="card" style="max-width:1100px;padding:0;overflow:hidden;">
+        <table class="table table-hover" style="margin:0;">
+            <thead><tr><th style="padding-left:18px;">Agencia</th><th>Tipo</th><th>Pais</th><th>Estado</th><th>Creada</th><th></th></tr></thead>
+            <tbody>
+                @foreach (var t in _tenants)
+                {
+                    <tr>
+                        <td style="padding-left:18px;font-weight:600;">@t.Name</td>
+                        <td>@t.Kind</td>
+                        <td>@(t.Country ?? "—")</td>
+                        <td><span class="badge bg-@StatusColor(t.Status)">@t.Status</span></td>
+                        <td class="text-muted">@t.CreatedAt.LocalDateTime.ToString("dd MMM yyyy")</td>
+                        <td style="text-align:right;padding-right:18px;">
+                            <select class="form-control-sm" @onchange="e => ChangeStatus(t, e.Value?.ToString())">
+                                @foreach (var st in _statuses)
+                                {
+                                    <option value="@st" selected="@(st == t.Status)">@st</option>
+                                }
+                            </select>
+                        </td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+    </div>
+}
+
+@if (_modalOpen)
+{
+    <div class="modal-overlay">
+        <div class="modal-dialog">
+            <div class="modal-head">
+                <h3>Nueva agencia</h3>
+                <button class="modal-close" @onclick="() => _modalOpen = false">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div class="field"><label class="form-label">Nombre</label><input class="form-control" @bind="_form.Name" /></div>
+                <div class="field-row">
+                    <div class="field"><label class="form-label">Razon social</label><input class="form-control" @bind="_form.LegalName" /></div>
+                    <div class="field"><label class="form-label">NIT / Tax ID</label><input class="form-control" @bind="_form.TaxId" /></div>
+                </div>
+                <div class="field-row">
+                    <div class="field"><label class="form-label">Pais</label><input class="form-control" @bind="_form.Country" /></div>
+                    <div class="field"><label class="form-label">Moneda</label><input class="form-control" @bind="_form.Currency" /></div>
+                </div>
+                <div class="field">
+                    <label class="form-label">Tipo</label>
+                    <select class="form-control" @bind="_form.Kind">
+                        @foreach (var k in Enum.GetValues<TenantKind>())
+                        {
+                            <option value="@k">@k</option>
+                        }
+                    </select>
+                </div>
+                @if (_error is not null)
+                {
+                    <div class="text-danger small">@_error</div>
+                }
+            </div>
+            <div class="modal-foot">
+                <button class="btn btn-outline-secondary" @onclick="() => _modalOpen = false">Cancelar</button>
+                <button class="btn btn-primary" @onclick="SaveAsync" disabled="@(_busy || string.IsNullOrWhiteSpace(_form.Name))">Crear agencia</button>
+            </div>
+        </div>
+    </div>
+}
+
+@code {
+    [CascadingParameter] private Task<AuthenticationState>? AuthState { get; set; }
+
+    private List<TenantListItem>? _tenants;
+    private bool _modalOpen;
+    private bool _busy;
+    private string? _error;
+    private readonly Form _form = new();
+    private readonly TenantStatus[] _statuses = Enum.GetValues<TenantStatus>();
+
+    protected override async Task OnInitializedAsync() => await ReloadAsync();
+
+    private async Task ReloadAsync() => _tenants = (await TenantsSvc.ListAsync()).ToList();
+
+    private void OpenCreate()
+    {
+        _error = null;
+        _form.Reset();
+        _modalOpen = true;
+    }
+
+    private async Task SaveAsync()
+    {
+        _error = null;
+        _busy = true;
+        try
+        {
+            var actor = await ActorAsync();
+            await TenantsSvc.CreateAsync(new CreateTenantRequest(_form.Name, _form.LegalName, _form.TaxId, _form.Country, _form.Currency, _form.Kind), actor);
+            _modalOpen = false;
+            await ReloadAsync();
+        }
+        catch (Exception ex) { _error = ex.Message; }
+        finally { _busy = false; }
+    }
+
+    private async Task ChangeStatus(TenantListItem t, string? value)
+    {
+        if (value is null || !Enum.TryParse<TenantStatus>(value, out var status) || status == t.Status) { return; }
+        var actor = await ActorAsync();
+        await TenantsSvc.ChangeStatusAsync(t.Id, new ChangeTenantStatusRequest(status), actor);
+        await ReloadAsync();
+    }
+
+    private static string StatusColor(TenantStatus s) => s switch
+    {
+        TenantStatus.Active => "success",
+        TenantStatus.Trial => "info",
+        TenantStatus.Suspended or TenantStatus.Blocked => "danger",
+        TenantStatus.PastDue => "warning",
+        _ => "secondary"
+    };
+
+    private async Task<Guid> ActorAsync()
+    {
+        if (AuthState is null) return Guid.Empty;
+        var state = await AuthState;
+        return Guid.TryParse(state.User.FindFirst(ClaimTypes.NameIdentifier)?.Value, out var id) ? id : Guid.Empty;
+    }
+
+    private sealed class Form
+    {
+        public string Name { get; set; } = "";
+        public string? LegalName { get; set; }
+        public string? TaxId { get; set; }
+        public string? Country { get; set; }
+        public string? Currency { get; set; }
+        public TenantKind Kind { get; set; } = TenantKind.Standard;
+        public void Reset() { Name = ""; LegalName = null; TaxId = null; Country = null; Currency = null; Kind = TenantKind.Standard; }
+    }
+}

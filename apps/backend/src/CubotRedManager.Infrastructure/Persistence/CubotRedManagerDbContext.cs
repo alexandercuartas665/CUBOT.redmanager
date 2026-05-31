@@ -56,6 +56,7 @@ public class CubotRedManagerDbContext : DbContext, IApplicationDbContext
 
         // Enums como texto (no int).
         modelBuilder.Entity<Tenant>().Property(x => x.Status).HasConversion<string>();
+        modelBuilder.Entity<Tenant>().Property(x => x.Kind).HasConversion<string>();
         modelBuilder.Entity<PlatformUser>().Property(x => x.PlatformRole).HasConversion<string>();
         modelBuilder.Entity<PlatformUser>().Property(x => x.AuthProvider).HasConversion<string>();
         modelBuilder.Entity<TenantUser>().Property(x => x.TenantRole).HasConversion<string>();

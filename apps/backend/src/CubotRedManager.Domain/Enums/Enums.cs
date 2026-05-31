@@ -88,3 +88,12 @@ public enum LimitEnforcementMode
     Hard,
     Soft
 }
+
+/// <summary>Tipo de cuenta del tenant (agencia), separado del estado.</summary>
+public enum TenantKind
+{
+    Standard,
+    Demo,
+    Internal,
+    Test
+}

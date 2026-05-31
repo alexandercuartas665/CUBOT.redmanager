@@ -18,6 +18,7 @@ public class Tenant : BaseEntity
     public string? LogoUrl { get; set; }
     public string? BrandColorsJson { get; set; }
     public TenantStatus Status { get; set; } = TenantStatus.Trial;
+    public TenantKind Kind { get; set; } = TenantKind.Standard;
 
     public ICollection<TenantUser> TenantUsers { get; set; } = new List<TenantUser>();
     public ICollection<Client> Clients { get; set; } = new List<Client>();
