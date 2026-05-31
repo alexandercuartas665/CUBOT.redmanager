@@ -1,0 +1,32 @@
+@page "/login"
+@layout CubotRedManager.SuperAdmin.Components.Layout.EmptyLayout
+@attribute [AllowAnonymous]
+
+<PageTitle>Ingresar - Super Admin</PageTitle>
+
+<div class="login-wrap">
+    <div class="login-card">
+        <div class="login-logo">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4h16v12H5.17L4 17.17z"/><path d="M8 9h8"/><path d="M8 12h5"/></svg>
+        </div>
+        <div class="login-title">CUBOT<span>.redmanager</span></div>
+        <p class="login-sub">Consola Super Admin SaaS. Ingreso de desarrollo.</p>
+
+        <div class="login-roles">
+            <form method="post" action="/auth/dev-login" class="m-0">
+                <AntiforgeryToken />
+                <button type="submit" class="login-role">
+                    <span class="ic">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2 4 5v6c0 5 3.4 7.4 8 9 4.6-1.6 8-4 8-9V5z"/><path d="m9 12 2 2 4-4"/></svg>
+                    </span>
+                    <span>
+                        <span class="t">Entrar como Operador de plataforma</span>
+                        <span class="d">Gobierno SaaS: agencias, planes, Wompi, IA, Evolution.</span>
+                    </span>
+                </button>
+            </form>
+        </div>
+
+        <p class="login-note">Login de desarrollo temporal. La autenticacion real (cuentas + Google) se implementa con el modulo de identidad de plataforma.</p>
+    </div>
+</div>
