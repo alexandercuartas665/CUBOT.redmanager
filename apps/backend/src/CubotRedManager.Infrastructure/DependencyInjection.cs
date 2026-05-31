@@ -35,6 +35,7 @@ public static class DependencyInjection
         // Servicios de Application portados.
         services.AddScoped<IWhatsAppLineService, WhatsAppLineService>();
         services.AddScoped<IClientService, ClientService>();
+        services.AddScoped<ISocialAccountService, SocialAccountService>();
         services.AddScoped<IAiAgentService, AiAgentService>();
         services.AddScoped<IAiAgentCacheService, AiAgentCacheService>();
         services.AddScoped<IAiUsageService, AiUsageService>();

@@ -118,3 +118,6 @@ public enum PaymentStatus { Pending, Approved, Declined, Voided, Error, NeedsRev
 
 /// <summary>Distingue acciones humanas de acciones automaticas del sistema (auditoria).</summary>
 public enum AuditActorType { Human, System }
+
+/// <summary>Estado de una cuenta social conectada (Modulo 2.3).</summary>
+public enum SocialAccountStatus { Connected, Expired, Revoked, Disconnected }

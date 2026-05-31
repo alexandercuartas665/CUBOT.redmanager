@@ -1,5 +1,192 @@
 @page "/cuentas-sociales"
-@attribute [Microsoft.AspNetCore.Authorization.Authorize(Policy = AppPolicies.TenantMember)]
+@attribute [Authorize(Policy = AppPolicies.TenantMember)]
+@rendermode InteractiveServer
+@using System.Security.Claims
+@using CubotRedManager.Application.Tenancy
+@using CubotRedManager.Domain.Enums
+@inject ISocialAccountService AccountsSvc
+@inject IClientService ClientsSvc
+@inject AuthenticationStateProvider AuthProvider
 
-<ModulePlaceholder Eyebrow="Clientes y cuentas" Title="Cuentas sociales" Phase="Fase 2"
-                   Description="Cuentas conectadas, estado y proximas expiraciones." />
+<PageTitle>Cuentas sociales - CUBOT.redmanager</PageTitle>
+
+<div class="module-head">
+    <div>
+        <div class="module-eyebrow">
+            <div class="module-icon">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>
+            </div>
+            <span>Clientes y cuentas</span>
+        </div>
+        <h1 class="page-title" style="margin-top:12px;">Cuentas sociales</h1>
+        <p class="page-sub" style="margin-bottom:0;">Vista cruzada de todas las cuentas conectadas, estado y proximas expiraciones.</p>
+    </div>
+    <button class="btn btn-primary" @onclick="OpenConnect" disabled="@(_clients is null || _clients.Count == 0)">+ Conectar cuenta</button>
+</div>
+
+@if (_accounts is null)
+{
+    <p class="text-muted">Cargando...</p>
+}
+else
+{
+    @if (_expiring > 0)
+    {
+        <div class="cs-alert">@_expiring cuenta(s) con token por expirar en menos de 7 dias. Reconectar para no interrumpir publicaciones.</div>
+    }
+    @if (_accounts.Count == 0)
+    {
+        <div class="coming-soon">
+            <div class="coming-soon-icon">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>
+            </div>
+            <h3>Sin cuentas conectadas</h3>
+            <p>Conecta la primera cuenta social de un cliente. (OAuth oficial en Fase 2; aqui registro de demo.)</p>
+        </div>
+    }
+    else
+    {
+        <div class="card" style="max-width:1100px;padding:6px 16px;">
+            <table class="table table-hover" style="margin:0;">
+                <thead><tr><th style="padding-left:14px;">Cliente</th><th>Red</th><th>Cuenta</th><th>Estado</th><th>Expira</th><th></th></tr></thead>
+                <tbody>
+                    @foreach (var a in _accounts)
+                    {
+                        <tr>
+                            <td style="padding-left:14px;font-weight:600;">@a.ClientName</td>
+                            <td><span class="cs-net" style="background:@(a.ColorHex)22;color:@a.ColorHex;">@a.NetworkDisplay</span></td>
+                            <td>@(string.IsNullOrWhiteSpace(a.Handle) ? "—" : "@" + a.Handle)</td>
+                            <td><span class="badge bg-@StatusColor(a.Status)">@StatusText(a.Status)</span> @if (a.ExpiringSoon) { <span class="badge bg-warning">por expirar</span> }</td>
+                            <td style="font-size:12px;color:var(--muted-foreground);">@(a.ExpiresAt is { } e ? e.LocalDateTime.ToString("dd MMM yyyy") : "—")</td>
+                            <td style="text-align:right;padding-right:14px;">
+                                @if (a.Status == SocialAccountStatus.Connected)
+                                {
+                                    <button class="btn btn-sm btn-outline-secondary" @onclick="() => ChangeStatus(a, SocialAccountStatus.Disconnected)">Desconectar</button>
+                                }
+                                else
+                                {
+                                    <button class="btn btn-sm btn-primary" @onclick="() => ChangeStatus(a, SocialAccountStatus.Connected)">Reconectar</button>
+                                }
+                            </td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+    }
+}
+
+@if (_connectOpen)
+{
+    <div class="modal-overlay">
+        <div class="modal-dialog">
+            <div class="modal-head">
+                <h3>Conectar cuenta social</h3>
+                <button class="modal-close" @onclick="() => _connectOpen = false">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div class="field">
+                    <label class="form-label">Cliente (marca)</label>
+                    <select class="form-control" @bind="_cClient">
+                        <option value="">Selecciona...</option>
+                        @foreach (var c in _clients!)
+                        {
+                            <option value="@c.Id">@c.Name</option>
+                        }
+                    </select>
+                </div>
+                <div class="field">
+                    <label class="form-label">Red social</label>
+                    <select class="form-control" @bind="_cNetwork">
+                        @foreach (var n in _networks!)
+                        {
+                            <option value="@n.Code">@n.DisplayName</option>
+                        }
+                    </select>
+                </div>
+                <div class="field"><label class="form-label">Usuario / handle</label><input class="form-control" @bind="_cHandle" placeholder="ej. nikecolombia" /></div>
+                <div class="text-muted" style="font-size:11px;">El flujo OAuth oficial se integra en Fase 2 (Modulo 2.2). Aqui se registra una cuenta demo conectada.</div>
+                @if (_error is not null) { <div class="text-danger small">@_error</div> }
+            </div>
+            <div class="modal-foot">
+                <button class="btn btn-outline-secondary" @onclick="() => _connectOpen = false">Cancelar</button>
+                <button class="btn btn-primary" @onclick="ConnectAsync" disabled="@(_busy || string.IsNullOrWhiteSpace(_cClient))">Conectar</button>
+            </div>
+        </div>
+    </div>
+}
+
+<style>
+    .cs-net { font-size: 11px; font-weight: 700; padding: 3px 9px; border-radius: 7px; }
+    .cs-alert { max-width: 1100px; background: oklch(0.78 0.14 70 / 0.16); color: var(--gold-foreground); border: 1px solid oklch(0.78 0.14 70 / 0.4); border-radius: 10px; padding: 10px 14px; font-size: 13px; margin-bottom: 16px; }
+    .field { margin-bottom: 14px; }
+</style>
+
+@code {
+    private List<SocialAccountDto>? _accounts;
+    private List<ClientDto>? _clients;
+    private List<SocialNetworkDto>? _networks;
+    private int _expiring;
+    private bool _connectOpen, _busy;
+    private string? _error;
+    private string _cClient = "", _cNetwork = "meta_instagram", _cHandle = "";
+    private Guid _actor;
+
+    protected override async Task OnInitializedAsync()
+    {
+        var st = await AuthProvider.GetAuthenticationStateAsync();
+        Guid.TryParse(st.User.FindFirst(ClaimTypes.NameIdentifier)?.Value, out _actor);
+        _clients = (await ClientsSvc.ListAsync()).ToList();
+        _networks = (await AccountsSvc.ListNetworksAsync()).ToList();
+        await Reload();
+    }
+
+    private async Task Reload()
+    {
+        _accounts = (await AccountsSvc.ListAsync()).ToList();
+        _expiring = _accounts.Count(a => a.ExpiringSoon);
+    }
+
+    private void OpenConnect()
+    {
+        _error = null; _cClient = ""; _cHandle = "";
+        _cNetwork = _networks!.FirstOrDefault()?.Code ?? "meta_instagram";
+        _connectOpen = true;
+    }
+
+    private async Task ConnectAsync()
+    {
+        _error = null; _busy = true;
+        try
+        {
+            if (!Guid.TryParse(_cClient, out var clientId)) { _error = "Selecciona un cliente."; return; }
+            var dto = await AccountsSvc.ConnectDemoAsync(new ConnectSocialAccountRequest(clientId, _cNetwork, _cHandle), _actor);
+            if (dto is null) { _error = "No se pudo conectar (cuenta duplicada o cliente invalido)."; return; }
+            _connectOpen = false;
+            await Reload();
+        }
+        catch (Exception ex) { _error = ex.Message; }
+        finally { _busy = false; }
+    }
+
+    private async Task ChangeStatus(SocialAccountDto a, SocialAccountStatus status)
+    {
+        await AccountsSvc.ChangeStatusAsync(a.Id, status, _actor);
+        await Reload();
+    }
+
+    private static string StatusText(SocialAccountStatus s) => s switch
+    {
+        SocialAccountStatus.Connected => "Conectada",
+        SocialAccountStatus.Expired => "Expirada",
+        SocialAccountStatus.Revoked => "Revocada",
+        _ => "Desconectada"
+    };
+
+    private static string StatusColor(SocialAccountStatus s) => s switch
+    {
+        SocialAccountStatus.Connected => "success",
+        SocialAccountStatus.Expired or SocialAccountStatus.Revoked => "danger",
+        _ => "secondary"
+    };
+}

@@ -15,6 +15,8 @@ public interface IApplicationDbContext
     DbSet<Tenant> Tenants { get; }
     DbSet<Client> Clients { get; }
     DbSet<UserClientLink> UserClientLinks { get; }
+    DbSet<SocialNetwork> SocialNetworks { get; }
+    DbSet<SocialAccount> SocialAccounts { get; }
 
     // Planes SaaS
     DbSet<SaasPlan> SaasPlans { get; }

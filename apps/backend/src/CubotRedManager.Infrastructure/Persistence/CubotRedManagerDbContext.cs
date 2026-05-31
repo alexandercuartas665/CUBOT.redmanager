@@ -37,11 +37,13 @@ public class CubotRedManagerDbContext : DbContext, IApplicationDbContext
     public DbSet<TenantSubscription> TenantSubscriptions => Set<TenantSubscription>();
     public DbSet<TenantPayment> TenantPayments => Set<TenantPayment>();
     public DbSet<SuperAdminAuditLog> SuperAdminAuditLogs => Set<SuperAdminAuditLog>();
+    public DbSet<SocialNetwork> SocialNetworks => Set<SocialNetwork>();
 
     // Tenant-scoped
     public DbSet<TenantUser> TenantUsers => Set<TenantUser>();
     public DbSet<Client> Clients => Set<Client>();
     public DbSet<UserClientLink> UserClientLinks => Set<UserClientLink>();
+    public DbSet<SocialAccount> SocialAccounts => Set<SocialAccount>();
 
     // IA (capa 3)
     public DbSet<AiAgent> AiAgents => Set<AiAgent>();
@@ -86,6 +88,12 @@ public class CubotRedManagerDbContext : DbContext, IApplicationDbContext
         modelBuilder.Entity<TenantSubscription>().Property(x => x.BillingFrequency).HasConversion<string>();
         modelBuilder.Entity<TenantPayment>().Property(x => x.Status).HasConversion<string>();
         modelBuilder.Entity<TenantPayment>().Property(x => x.Amount).HasColumnType("numeric(14,2)");
+
+        // Redes y cuentas sociales (Modulo 2.2/2.3).
+        modelBuilder.Entity<SocialNetwork>().HasIndex(x => x.Code).IsUnique();
+        modelBuilder.Entity<SocialAccount>().Property(x => x.Status).HasConversion<string>();
+        modelBuilder.Entity<SocialAccount>()
+            .HasIndex(x => new { x.TenantId, x.ClientId, x.NetworkCode, x.ExternalId }).IsUnique();
 
         // Auditoria global.
         modelBuilder.Entity<SuperAdminAuditLog>().Property(x => x.ActorType).HasConversion<string>();
