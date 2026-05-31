@@ -187,3 +187,15 @@ h1, h2, h3 { letter-spacing: -0.01em; }
 .wlbl { font-size: 10px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted-foreground); font-weight: 700; }
 .wval { font-size: 0.92rem; font-weight: 600; margin-top: 2px; }
 .text-success { color: var(--success); }
+
+/* ===== Planes (tarjetas) ===== */
+.plan-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 16px; max-width: 1100px; }
+.plan-card { background: var(--card); border: 1px solid var(--border); border-radius: 1.25rem; box-shadow: var(--shadow-soft); padding: 24px; display: flex; flex-direction: column; }
+.plan-card .pname { font-size: 10px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted-foreground); font-weight: 700; }
+.plan-card .pprice { font-size: 1.9rem; font-weight: 800; line-height: 1.15; margin-top: 4px; }
+.plan-card .pprice small { font-size: 0.85rem; font-weight: 600; color: var(--muted-foreground); }
+.plan-features { list-style: none; padding: 0; margin: 18px 0 0; display: flex; flex-direction: column; gap: 9px; font-size: 0.9rem; }
+.plan-features li { display: flex; align-items: center; gap: 8px; }
+.plan-check { width: 16px; height: 16px; color: var(--success); flex-shrink: 0; }
+.plan-edit { margin-top: 22px; }
+.w-100 { width: 100%; }

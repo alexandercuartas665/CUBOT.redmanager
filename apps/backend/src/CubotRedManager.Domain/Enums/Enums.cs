@@ -81,3 +81,10 @@ public enum EvolutionIntegrationStatus
     Validated,
     Error
 }
+
+/// <summary>Estrategia de aplicacion de un limite de plan: duro bloquea, blando tolera.</summary>
+public enum LimitEnforcementMode
+{
+    Hard,
+    Soft
+}

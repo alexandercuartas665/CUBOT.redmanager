@@ -16,6 +16,10 @@ public interface IApplicationDbContext
     DbSet<Client> Clients { get; }
     DbSet<UserClientLink> UserClientLinks { get; }
 
+    // Planes SaaS
+    DbSet<SaasPlan> SaasPlans { get; }
+    DbSet<SaasPlanLimit> SaasPlanLimits { get; }
+
     // IA
     DbSet<AiProviderConfig> AiProviderConfigs { get; }
     DbSet<AiAgent> AiAgents { get; }

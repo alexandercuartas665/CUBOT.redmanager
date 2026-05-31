@@ -30,6 +30,8 @@ public class CubotRedManagerDbContext : DbContext, IApplicationDbContext
     public DbSet<PlatformUser> PlatformUsers => Set<PlatformUser>();
     public DbSet<AiProviderConfig> AiProviderConfigs => Set<AiProviderConfig>();
     public DbSet<EvolutionMasterConfig> EvolutionMasterConfigs => Set<EvolutionMasterConfig>();
+    public DbSet<SaasPlan> SaasPlans => Set<SaasPlan>();
+    public DbSet<SaasPlanLimit> SaasPlanLimits => Set<SaasPlanLimit>();
 
     // Tenant-scoped
     public DbSet<TenantUser> TenantUsers => Set<TenantUser>();
@@ -66,6 +68,8 @@ public class CubotRedManagerDbContext : DbContext, IApplicationDbContext
         modelBuilder.Entity<AiUsageLog>().Property(x => x.Provider).HasConversion<string>();
         modelBuilder.Entity<WhatsAppLine>().Property(x => x.Status).HasConversion<string>();
         modelBuilder.Entity<EvolutionMasterConfig>().Property(x => x.Status).HasConversion<string>();
+        modelBuilder.Entity<SaasPlanLimit>().Property(x => x.EnforcementMode).HasConversion<string>();
+        modelBuilder.Entity<SaasPlan>().HasMany(p => p.Limits).WithOne(l => l.Plan!).HasForeignKey(l => l.PlanId).OnDelete(DeleteBehavior.Cascade);
 
         // IA: indices y unicidad.
         modelBuilder.Entity<AiProviderConfig>().HasIndex(x => x.Provider).IsUnique();
