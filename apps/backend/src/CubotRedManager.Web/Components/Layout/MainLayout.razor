@@ -1,27 +1,52 @@
-﻿@inherits LayoutComponentBase
+@inherits LayoutComponentBase
 
-<div class="page">
-    <div class="sidebar">
+<div class="cubot-shell">
+    <!-- Toggle solo-CSS del menu (off-canvas en movil). Funciona en cualquier render mode. -->
+    <input type="checkbox" id="cubot-nav-toggle" class="cubot-nav-toggle" autocomplete="off" />
+
+    <aside class="cubot-sidebar">
         <NavMenu />
-    </div>
+    </aside>
 
-    <main>
-        <div class="top-row px-4 rm-topbar">
-            <span class="rm-topbar-title">Consola de la agencia</span>
-            <span class="rm-topbar-user">
-                <i class="bi bi-person-circle" aria-hidden="true"></i>
-                <span class="rm-topbar-user-name">Sin sesion</span>
-            </span>
+    <!-- Capa oscura: al tocarla se cierra el menu (es un label del checkbox). -->
+    <label for="cubot-nav-toggle" class="cubot-nav-overlay" aria-hidden="true"></label>
+
+    <div class="cubot-main">
+        <div class="cubot-topbar">
+            <label for="cubot-nav-toggle" class="cubot-hamburger" aria-label="Abrir menu">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M3 6h18"/><path d="M3 12h18"/><path d="M3 18h18"/></svg>
+            </label>
+            <span class="cubot-topbar-brand">CUBOT<span>.redmanager</span></span>
+
+            <AuthorizeView>
+                <Authorized>
+                    <span class="cubot-user-chip">@(context.User.FindFirst("platform_role") is not null ? "Operador" : "Agencia") &middot; <strong>@context.User.Identity?.Name</strong></span>
+                    <form method="post" action="/auth/logout" class="m-0">
+                        <AntiforgeryToken />
+                        <button type="submit" class="btn btn-sm btn-outline-secondary">Salir</button>
+                    </form>
+                </Authorized>
+            </AuthorizeView>
         </div>
 
-        <article class="content px-4">
+        <div class="cubot-content">
             @Body
-        </article>
-    </main>
+        </div>
+    </div>
 </div>
 
 <div id="blazor-error-ui" data-nosnippet>
-    An unhandled error has occurred.
-    <a href="." class="reload">Reload</a>
-    <span class="dismiss">🗙</span>
+    Ha ocurrido un error.
+    <a href="." class="reload">Recargar</a>
+    <span class="dismiss">X</span>
 </div>
+
+<script>
+    // Cierra el menu movil al tocar un enlace de navegacion.
+    document.addEventListener('click', function (e) {
+        if (e.target.closest && e.target.closest('.cubot-nav-link')) {
+            var t = document.getElementById('cubot-nav-toggle');
+            if (t) t.checked = false;
+        }
+    });
+</script>

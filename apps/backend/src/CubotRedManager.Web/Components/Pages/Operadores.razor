@@ -1,4 +1,5 @@
 @page "/operadores"
+@attribute [Microsoft.AspNetCore.Authorization.Authorize(Policy = AppPolicies.TenantMember)]
 
-<StubPage Title="Asesores y operadores" Phase="Fase 1" Icon="bi-person-badge"
-          Description="Equipo interno de la agencia (Admin/Operator)." />
+<ModulePlaceholder Eyebrow="Configuracion" Title="Asesores y operadores" Phase="Fase 1"
+                   Description="Equipo interno de la agencia (Admin/Operator)." />

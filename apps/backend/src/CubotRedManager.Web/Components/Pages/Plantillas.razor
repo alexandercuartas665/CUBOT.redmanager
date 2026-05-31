@@ -1,4 +1,5 @@
 @page "/plantillas"
+@attribute [Microsoft.AspNetCore.Authorization.Authorize(Policy = AppPolicies.TenantMember)]
 
-<StubPage Title="Plantillas" Phase="Fase 2" Icon="bi-card-text"
-          Description="Mensajes pregrabados para respuestas en bandeja." />
+<ModulePlaceholder Eyebrow="Configuracion" Title="Plantillas" Phase="Fase 2"
+                   Description="Mensajes pregrabados para respuestas en bandeja." />

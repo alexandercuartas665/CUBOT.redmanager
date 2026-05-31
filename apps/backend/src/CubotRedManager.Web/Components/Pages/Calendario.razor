@@ -1,4 +1,5 @@
 @page "/calendario"
+@attribute [Microsoft.AspNetCore.Authorization.Authorize(Policy = AppPolicies.TenantMember)]
 
-<StubPage Title="Calendario editorial" Phase="Fase 2" Icon="bi-calendar-week"
-          Description="Vista mensual y semanal de publicaciones por cliente." />
+<ModulePlaceholder Eyebrow="Operacion diaria" Title="Calendario editorial" Phase="Fase 2"
+                   Description="Vista mensual y semanal de publicaciones por cliente." />

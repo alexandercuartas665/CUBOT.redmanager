@@ -1,4 +1,5 @@
 @page "/reportes"
+@attribute [Microsoft.AspNetCore.Authorization.Authorize(Policy = AppPolicies.TenantMember)]
 
-<StubPage Title="Reportes ejecutivos" Phase="Fase 3" Icon="bi-file-earmark-bar-graph"
-          Description="Reportes mensuales por cliente exportables a PDF con marca blanca." />
+<ModulePlaceholder Eyebrow="Reportes" Title="Reportes ejecutivos" Phase="Fase 3"
+                   Description="Reportes mensuales por cliente exportables a PDF con marca blanca." />

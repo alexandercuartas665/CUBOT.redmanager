@@ -1,4 +1,5 @@
 @page "/bandeja"
+@attribute [Microsoft.AspNetCore.Authorization.Authorize(Policy = AppPolicies.TenantMember)]
 
-<StubPage Title="Bandeja unificada" Phase="Fase 2" Icon="bi-inbox"
-          Description="DMs, comentarios y menciones de todas las redes en una sola bandeja." />
+<ModulePlaceholder Eyebrow="Operacion diaria" Title="Bandeja unificada" Phase="Fase 2"
+                   Description="DMs, comentarios y menciones de todas las redes en una sola bandeja." />

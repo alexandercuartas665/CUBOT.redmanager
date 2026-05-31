@@ -1,4 +1,5 @@
 @page "/clientes"
+@attribute [Microsoft.AspNetCore.Authorization.Authorize(Policy = AppPolicies.TenantMember)]
 
-<StubPage Title="Clientes (Marcas)" Phase="Fase 2" Icon="bi-people"
-          Description="Cartera de marcas que la agencia gestiona." />
+<ModulePlaceholder Eyebrow="Clientes y cuentas" Title="Clientes (Marcas)" Phase="Fase 2"
+                   Description="Cartera de marcas que la agencia gestiona." />

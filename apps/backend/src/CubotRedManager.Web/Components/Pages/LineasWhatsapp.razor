@@ -1,4 +1,5 @@
 @page "/lineas-whatsapp"
+@attribute [Microsoft.AspNetCore.Authorization.Authorize(Policy = AppPolicies.TenantMember)]
 
-<StubPage Title="Lineas WhatsApp" Phase="Fase 3" Icon="bi-whatsapp"
-          Description="Lineas del equipo interno de la agencia." />
+<ModulePlaceholder Eyebrow="Comunicacion e IA" Title="Lineas WhatsApp" Phase="Fase 3"
+                   Description="Lineas del equipo interno de la agencia." />

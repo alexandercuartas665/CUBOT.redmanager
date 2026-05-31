@@ -1,4 +1,5 @@
 @page "/automatizaciones"
+@attribute [Microsoft.AspNetCore.Authorization.Authorize(Policy = AppPolicies.TenantMember)]
 
-<StubPage Title="Automatizaciones" Phase="Fase 3" Icon="bi-gear-wide-connected"
-          Description="Reglas: alerta de token por expirar, recordatorios, asignacion de DMs." />
+<ModulePlaceholder Eyebrow="Comunicacion e IA" Title="Automatizaciones" Phase="Fase 3"
+                   Description="Reglas: alerta de token por expirar, recordatorios, asignacion de DMs." />

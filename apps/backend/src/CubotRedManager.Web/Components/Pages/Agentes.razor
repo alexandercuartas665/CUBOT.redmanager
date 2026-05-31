@@ -1,4 +1,5 @@
 @page "/agentes"
+@attribute [Microsoft.AspNetCore.Authorization.Authorize(Policy = AppPolicies.TenantMember)]
 
-<StubPage Title="Agentes de IA" Phase="Fase 4" Icon="bi-robot"
-          Description="Copywriter, Bandeja IA, Resumen, Analista, Detector de crisis." />
+<ModulePlaceholder Eyebrow="Comunicacion e IA" Title="Agentes de IA" Phase="Fase 4"
+                   Description="Copywriter, Bandeja IA, Resumen, Analista, Detector de crisis." />

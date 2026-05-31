@@ -1,4 +1,5 @@
 @page "/autorespuesta"
+@attribute [Microsoft.AspNetCore.Authorization.Authorize(Policy = AppPolicies.TenantMember)]
 
-<StubPage Title="Autorespuesta de comentarios" Phase="Fase 4" Icon="bi-reply-all"
-          Description="Motor de respuestas automaticas por cuenta (plantillas + IA + horario + resumen WhatsApp)." />
+<ModulePlaceholder Eyebrow="Comunicacion e IA" Title="Autorespuesta de comentarios" Phase="Fase 4"
+                   Description="Motor de respuestas automaticas por cuenta (plantillas + IA + horario + resumen WhatsApp)." />

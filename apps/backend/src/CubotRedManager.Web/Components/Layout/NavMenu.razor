@@ -1,77 +1,174 @@
-@* Menu de la consola de agencia CUBOT.redmanager (Modulo 1.5 - Primera tarea funcional).
-   Estructura por secciones segun la Hoja de Ruta. Items gateados por politica (tarea 4). *@
+@implements IDisposable
+@inject NavigationManager Navigation
 
-<div class="rm-sidebar-brand">
-    <span class="rm-brand-mark">CUBOT</span><span class="rm-brand-sub">.redmanager</span>
+<div class="cubot-brand">
+    <div class="cubot-logo">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4h16v12H5.17L4 17.17z"/><path d="M8 9h8"/><path d="M8 12h5"/></svg>
+    </div>
+    <div>
+        <div class="cubot-brand-name">CUBOT<span>.redmanager</span></div>
+        <div class="cubot-brand-sub">Gestor de Redes Sociales</div>
+    </div>
 </div>
 
-<input type="checkbox" title="Menu de navegacion" class="navbar-toggler rm-toggler" />
+<div class="cubot-agency">
+    @if (_isPlatformOperator)
+    {
+        <div class="lbl">Plataforma</div>
+        <div class="name">CUBOT.redmanager</div>
+        <div class="meta">Consola de gobierno</div>
+    }
+    else
+    {
+        <div class="lbl">Agencia</div>
+        <div class="name">@(_agencyName ?? "Mi agencia")</div>
+        <div class="meta">@_roleLabel</div>
+    }
+</div>
 
-<div class="nav-scrollable" onclick="document.querySelector('.rm-toggler').click()">
-    <nav class="rm-nav">
-        @foreach (var section in _sections)
-        {
-            <div class="rm-section">
-                <div class="rm-section-title">@section.Title</div>
-                @foreach (var item in section.Items)
-                {
-                    <div class="rm-nav-item">
-                        <NavLink class="rm-nav-link" href="@item.Href"
-                                 Match="@(item.Href == "/" ? NavLinkMatch.All : NavLinkMatch.Prefix)">
-                            <i class="bi @item.Icon" aria-hidden="true"></i>
-                            <span class="rm-nav-text">@item.Label</span>
-                            @if (item.ShowInboxBadge)
-                            {
-                                <span class="rm-badge" title="Mensajes sin responder">@_inboxUnread</span>
-                            }
-                        </NavLink>
-                    </div>
-                }
-            </div>
-        }
-    </nav>
+<nav class="cubot-nav">
+    @if (_showTenant)
+    {
+        <div class="cubot-nav-label">Operacion diaria</div>
+
+        <NavLink class="cubot-nav-link" href="dashboard">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v18h18"/><path d="m19 9-5 5-4-4-3 3"/></svg>
+            <span>Dashboard</span>
+        </NavLink>
+        <NavLink class="cubot-nav-link" href="calendario">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="18" height="18" x="3" y="4" rx="2"/><path d="M3 10h18"/><path d="M8 2v4"/><path d="M16 2v4"/></svg>
+            <span>Calendario editorial</span>
+        </NavLink>
+        <NavLink class="cubot-nav-link" href="bandeja">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 12h-6l-2 3h-4l-2-3H2"/><path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/></svg>
+            <span>Bandeja unificada</span>
+            <span class="cubot-nav-badge">@_inboxUnread</span>
+        </NavLink>
+        <NavLink class="cubot-nav-link" href="tableros">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="7" height="7" x="3" y="3" rx="1"/><rect width="7" height="7" x="14" y="3" rx="1"/><rect width="7" height="7" x="14" y="14" rx="1"/><rect width="7" height="7" x="3" y="14" rx="1"/></svg>
+            <span>Tableros de tareas</span>
+        </NavLink>
+        <NavLink class="cubot-nav-link" href="conversaciones">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 9a2 2 0 0 1-2 2H6l-4 4V4a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2z"/><path d="M18 9h2a2 2 0 0 1 2 2v11l-4-4h-6a2 2 0 0 1-2-2v-1"/></svg>
+            <span>Conversaciones</span>
+        </NavLink>
+
+        <div class="cubot-nav-label">Clientes y cuentas</div>
+
+        <NavLink class="cubot-nav-link" href="clientes">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+            <span>Clientes (Marcas)</span>
+        </NavLink>
+        <NavLink class="cubot-nav-link" href="cuentas-sociales">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>
+            <span>Cuentas sociales</span>
+        </NavLink>
+        <NavLink class="cubot-nav-link" href="conexiones">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z"/><path d="m9 12 2 2 4-4"/></svg>
+            <span>OAuth y conexiones</span>
+        </NavLink>
+
+        <div class="cubot-nav-label">Reportes</div>
+
+        <NavLink class="cubot-nav-link" href="reportes">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7z"/><path d="M14 2v5h5"/><path d="M8 18v-4"/><path d="M12 18v-2"/><path d="M16 18v-6"/></svg>
+            <span>Reportes ejecutivos</span>
+        </NavLink>
+        <NavLink class="cubot-nav-link" href="metricas">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v18h18"/><path d="M18 17V9"/><path d="M13 17V5"/><path d="M8 17v-3"/></svg>
+            <span>Metricas</span>
+        </NavLink>
+
+        <div class="cubot-nav-label">Comunicacion e IA</div>
+
+        <NavLink class="cubot-nav-link" href="lineas-whatsapp">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="14" height="20" x="5" y="2" rx="2" ry="2"/><path d="M12 18h.01"/></svg>
+            <span>Lineas WhatsApp</span>
+        </NavLink>
+        <NavLink class="cubot-nav-link" href="agentes">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 8V4H8"/><rect width="16" height="12" x="4" y="8" rx="2"/><path d="M2 14h2"/><path d="M20 14h2"/><path d="M15 13v2"/><path d="M9 13v2"/></svg>
+            <span>Agentes de IA</span>
+        </NavLink>
+        <NavLink class="cubot-nav-link" href="autorespuesta">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m7 17-5-5 5-5"/><path d="M2 12h12a8 8 0 0 1 8 8v1"/></svg>
+            <span>Autorespuesta</span>
+        </NavLink>
+        <NavLink class="cubot-nav-link" href="automatizaciones">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 14a1 1 0 0 1-.78-1.63l9.9-10.2a.5.5 0 0 1 .86.46l-1.92 6.02A1 1 0 0 0 13 10h7a1 1 0 0 1 .78 1.63l-9.9 10.2a.5.5 0 0 1-.86-.46l1.92-6.02A1 1 0 0 0 11 14z"/></svg>
+            <span>Automatizaciones</span>
+        </NavLink>
+
+        <div class="cubot-nav-label">Configuracion</div>
+
+        <NavLink class="cubot-nav-link" href="operadores">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 21a8 8 0 0 0-16 0"/><circle cx="10" cy="8" r="5"/><path d="M22 20c0-3.37-2-6.5-4-8a5 5 0 0 0-.45-8.3"/></svg>
+            <span>Asesores y operadores</span>
+        </NavLink>
+        <NavLink class="cubot-nav-link" href="plantillas">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5z"/><path d="M14 2v6h6"/><path d="M8 13h8"/><path d="M8 17h8"/><path d="M8 9h2"/></svg>
+            <span>Plantillas</span>
+        </NavLink>
+        <NavLink class="cubot-nav-link" href="cuenta">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
+            <span>Mi cuenta</span>
+        </NavLink>
+    }
+</nav>
+
+<div class="cubot-user">
+    <div class="cubot-avatar">@_avatar</div>
+    <div>
+        <div class="nm">@(_userName ?? "Usuario")</div>
+        <div class="rl">@_roleLabel</div>
+    </div>
+    <span class="cubot-dot"></span>
 </div>
 
 @code {
-    // Badge en vivo de Bandeja unificada. En Fase 2 se alimenta por SignalR; arranca en 0.
+    [CascadingParameter] private Task<AuthenticationState>? AuthState { get; set; }
+
     private int _inboxUnread = 0;
+    private bool _isPlatformOperator;
+    private bool _showTenant;
+    private string? _userName;
+    private string? _agencyName;
+    private string _roleLabel = "Sin sesion";
+    private string _avatar = "U";
 
-    private record NavItem(string Label, string Href, string Icon, bool ShowInboxBadge = false);
-    private record NavSection(string Title, NavItem[] Items);
+    protected override async Task OnInitializedAsync()
+    {
+        Navigation.LocationChanged += OnLocationChanged;
+        if (AuthState is null) { return; }
 
-    private readonly NavSection[] _sections =
-    [
-        new("Operacion diaria",
-        [
-            new("Dashboard", "/dashboard", "bi-speedometer2"),
-            new("Calendario editorial", "/calendario", "bi-calendar-week"),
-            new("Bandeja unificada", "/bandeja", "bi-inbox", ShowInboxBadge: true),
-            new("Tableros de tareas", "/tableros", "bi-kanban"),
-            new("Conversaciones", "/conversaciones", "bi-chat-dots"),
-        ]),
-        new("Clientes y cuentas",
-        [
-            new("Clientes (Marcas)", "/clientes", "bi-people"),
-            new("Cuentas sociales", "/cuentas-sociales", "bi-link-45deg"),
-            new("OAuth y conexiones", "/conexiones", "bi-shield-check"),
-        ]),
-        new("Reportes",
-        [
-            new("Reportes ejecutivos", "/reportes", "bi-file-earmark-bar-graph"),
-            new("Metricas", "/metricas", "bi-graph-up"),
-        ]),
-        new("Comunicacion e IA",
-        [
-            new("Lineas WhatsApp", "/lineas-whatsapp", "bi-whatsapp"),
-            new("Agentes de IA", "/agentes", "bi-robot"),
-            new("Autorespuesta de comentarios", "/autorespuesta", "bi-reply-all"),
-            new("Automatizaciones", "/automatizaciones", "bi-gear-wide-connected"),
-        ]),
-        new("Configuracion",
-        [
-            new("Asesores y operadores", "/operadores", "bi-person-badge"),
-            new("Plantillas", "/plantillas", "bi-card-text"),
-            new("Mi cuenta", "/cuenta", "bi-person-circle"),
-        ]),
-    ];
+        var state = await AuthState;
+        var user = state.User;
+        _isPlatformOperator = user.FindFirst("platform_role") is not null;
+        var isTenantUser = user.FindFirst("tenant_id") is not null;
+        _showTenant = _isPlatformOperator || isTenantUser;
+
+        _userName = user.Identity?.Name;
+        _avatar = Initials(_userName);
+
+        if (_isPlatformOperator)
+        {
+            _roleLabel = "Operador de plataforma";
+        }
+        else if (isTenantUser)
+        {
+            _roleLabel = user.FindFirst("tenant_role")?.Value ?? "Agencia";
+            _agencyName = user.FindFirst("agency_name")?.Value;
+        }
+    }
+
+    private static string Initials(string? name)
+    {
+        if (string.IsNullOrWhiteSpace(name)) { return "U"; }
+        var parts = name.Trim().Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        return parts.Length == 1
+            ? parts[0][..Math.Min(2, parts[0].Length)].ToUpperInvariant()
+            : $"{parts[0][0]}{parts[1][0]}".ToUpperInvariant();
+    }
+
+    private void OnLocationChanged(object? sender, Microsoft.AspNetCore.Components.Routing.LocationChangedEventArgs e) => StateHasChanged();
+    public void Dispose() => Navigation.LocationChanged -= OnLocationChanged;
 }

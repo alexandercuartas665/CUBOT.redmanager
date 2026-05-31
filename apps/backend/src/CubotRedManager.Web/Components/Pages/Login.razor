@@ -1,0 +1,47 @@
+@page "/login"
+@layout CubotRedManager.Web.Components.Layout.EmptyLayout
+@attribute [AllowAnonymous]
+
+<PageTitle>Ingresar - CUBOT.redmanager</PageTitle>
+
+<div class="login-wrap">
+    <div class="login-card">
+        <div class="login-logo">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4h16v12H5.17L4 17.17z"/><path d="M8 9h8"/><path d="M8 12h5"/></svg>
+        </div>
+        <div class="login-title">CUBOT<span>.redmanager</span></div>
+        <p class="login-sub">Consola de la agencia. Elige un perfil para entrar (modo de desarrollo).</p>
+
+        <div class="login-roles">
+            <form method="post" action="/auth/dev-login" class="m-0">
+                <AntiforgeryToken />
+                <input type="hidden" name="role" value="admin" />
+                <button type="submit" class="login-role">
+                    <span class="ic">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 7h-9"/><path d="M14 17H5"/><circle cx="17" cy="17" r="3"/><circle cx="7" cy="7" r="3"/></svg>
+                    </span>
+                    <span>
+                        <span class="t">Entrar como Admin de agencia</span>
+                        <span class="d">Acceso total a la consola de la agencia.</span>
+                    </span>
+                </button>
+            </form>
+
+            <form method="post" action="/auth/dev-login" class="m-0">
+                <AntiforgeryToken />
+                <input type="hidden" name="role" value="operator" />
+                <button type="submit" class="login-role">
+                    <span class="ic">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
+                    </span>
+                    <span>
+                        <span class="t">Entrar como Operador</span>
+                        <span class="d">Opera el dia a dia de los clientes asignados.</span>
+                    </span>
+                </button>
+            </form>
+        </div>
+
+        <p class="login-note">Login de desarrollo temporal. La autenticacion real (cuentas, contrasena, Google) se implementa con el modulo de Usuarios y Onboarding.</p>
+    </div>
+</div>

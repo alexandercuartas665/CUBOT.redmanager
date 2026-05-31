@@ -1,0 +1,10 @@
+@inject NavigationManager Navigation
+
+@code {
+    // Envia al login conservando la URL de retorno.
+    protected override void OnInitialized()
+    {
+        var returnUrl = Uri.EscapeDataString(Navigation.ToBaseRelativePath(Navigation.Uri));
+        Navigation.NavigateTo($"/login?returnUrl={returnUrl}", forceLoad: true, replace: true);
+    }
+}

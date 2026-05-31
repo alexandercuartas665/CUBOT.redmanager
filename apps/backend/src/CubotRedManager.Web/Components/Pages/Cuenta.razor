@@ -1,4 +1,5 @@
 @page "/cuenta"
+@attribute [Microsoft.AspNetCore.Authorization.Authorize(Policy = AppPolicies.TenantMember)]
 
-<StubPage Title="Mi cuenta" Phase="Fase 1" Icon="bi-person-circle"
-          Description="Plan activo, limites, consumo, facturas y marca de la agencia." />
+<ModulePlaceholder Eyebrow="Configuracion" Title="Mi cuenta" Phase="Fase 1"
+                   Description="Plan activo, limites, consumo, facturas y marca de la agencia." />

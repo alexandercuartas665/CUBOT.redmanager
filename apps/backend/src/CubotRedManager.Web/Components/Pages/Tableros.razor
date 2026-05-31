@@ -1,4 +1,5 @@
 @page "/tableros"
+@attribute [Microsoft.AspNetCore.Authorization.Authorize(Policy = AppPolicies.TenantMember)]
 
-<StubPage Title="Tableros de tareas" Phase="Fase 3" Icon="bi-kanban"
-          Description="Kanban del equipo por cliente o campania (origen del prototipo)." />
+<ModulePlaceholder Eyebrow="Operacion diaria" Title="Tableros de tareas" Phase="Fase 3"
+                   Description="Kanban del equipo por cliente o campania (origen del prototipo)." />

@@ -1,4 +1,5 @@
 @page "/cuentas-sociales"
+@attribute [Microsoft.AspNetCore.Authorization.Authorize(Policy = AppPolicies.TenantMember)]
 
-<StubPage Title="Cuentas sociales" Phase="Fase 2" Icon="bi-link-45deg"
-          Description="Cuentas conectadas, estado y proximas expiraciones." />
+<ModulePlaceholder Eyebrow="Clientes y cuentas" Title="Cuentas sociales" Phase="Fase 2"
+                   Description="Cuentas conectadas, estado y proximas expiraciones." />

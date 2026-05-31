@@ -1,4 +1,5 @@
 @page "/conversaciones"
+@attribute [Microsoft.AspNetCore.Authorization.Authorize(Policy = AppPolicies.TenantMember)]
 
-<StubPage Title="Conversaciones" Phase="Fase 3" Icon="bi-chat-dots"
-          Description="Chats internos y WhatsApp del equipo de la agencia." />
+<ModulePlaceholder Eyebrow="Operacion diaria" Title="Conversaciones" Phase="Fase 3"
+                   Description="Chats internos y WhatsApp del equipo de la agencia." />
