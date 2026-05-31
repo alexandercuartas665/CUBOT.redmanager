@@ -1,13 +1,26 @@
 using System.Security.Claims;
+using CubotRedManager.Application.Abstractions;
+using CubotRedManager.Infrastructure;
+using CubotRedManager.Infrastructure.Persistence;
+using CubotRedManager.Web.Auth;
 using CubotRedManager.Web.Components;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.EntityFrameworkCore;
 
 var builder = WebApplication.CreateBuilder(args);
 
 builder.Services.AddRazorComponents()
     .AddInteractiveServerComponents();
+
+// Persistencia (PostgreSQL) + servicios de Application portados.
+builder.Services.AddInfrastructure(builder.Configuration);
+
+// Resolucion de agencia/usuario desde los claims de la cookie.
+builder.Services.AddScoped<HttpTenantContext>();
+builder.Services.AddScoped<ITenantProvider>(sp => sp.GetRequiredService<HttpTenantContext>());
+builder.Services.AddScoped<ITenantContext>(sp => sp.GetRequiredService<HttpTenantContext>());
 
 // Estado de autenticacion en cascada para los componentes (AuthorizeView, AuthorizeRouteView).
 builder.Services.AddCascadingAuthenticationState();
@@ -30,6 +43,13 @@ builder.Services.AddAuthorizationBuilder()
     .AddPolicy(CubotRedManager.Web.Authorization.AppPolicies.TenantAdmin, p => p.RequireClaim("tenant_role", "Owner", "Admin"));
 
 var app = builder.Build();
+
+// Aplica migraciones pendientes al arrancar (dev). En produccion se controla aparte.
+using (var scope = app.Services.CreateScope())
+{
+    var db = scope.ServiceProvider.GetRequiredService<CubotRedManagerDbContext>();
+    await db.Database.MigrateAsync();
+}
 
 if (!app.Environment.IsDevelopment())
 {

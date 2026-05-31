@@ -1,5 +1,6 @@
 using System.Linq.Expressions;
 using CubotRedManager.Application.Abstractions;
+// IApplicationDbContext vive en Application.Abstractions (incluido arriba).
 using CubotRedManager.Domain.Common;
 using CubotRedManager.Domain.Entities;
 using Microsoft.EntityFrameworkCore;
@@ -12,7 +13,7 @@ namespace CubotRedManager.Infrastructure.Persistence;
 /// - filtro global por tenant en toda entidad ITenantScoped.
 /// - auditoria automatica de CreatedAt/UpdatedAt.
 /// </summary>
-public class CubotRedManagerDbContext : DbContext
+public class CubotRedManagerDbContext : DbContext, IApplicationDbContext
 {
     private readonly ITenantProvider _tenantProvider;
 

@@ -135,6 +135,17 @@ h1, h2, h3 { letter-spacing: -0.01em; }
 .login-role .d { font-size: .8rem; color: var(--muted-foreground); }
 .login-note { margin-top: 18px; font-size: .75rem; color: var(--muted-foreground); line-height: 1.5; }
 
+/* ===== Modal ===== */
+.modal-overlay { position: fixed; inset: 0; background: oklch(0.2 0.04 280 / 0.45); backdrop-filter: blur(2px); display: grid; place-items: center; z-index: 50; padding: 20px; }
+.modal-dialog { pointer-events: auto; background: var(--card); border-radius: 1.1rem; box-shadow: 0 16px 40px -12px oklch(0.42 0.22 285 / 0.28); width: 100%; max-width: 480px; max-height: 90vh; overflow-y: auto; margin: 0; }
+.modal-head { display: flex; align-items: center; justify-content: space-between; padding: 18px 22px; border-bottom: 1px solid var(--border); }
+.modal-head h3 { font-size: 1.05rem; font-weight: 700; margin: 0; }
+.modal-close { display: grid; place-items: center; width: 34px; height: 34px; margin: -6px -6px -6px 0; border-radius: 0.6rem; background: none; border: none; font-size: 1.4rem; color: var(--muted-foreground); cursor: pointer; line-height: 1; }
+.modal-close:hover { background: var(--muted); color: var(--foreground); }
+.modal-body { padding: 20px 22px; }
+.modal-foot { display: flex; justify-content: flex-end; gap: 8px; padding: 16px 22px; border-top: 1px solid var(--border); }
+.field { margin-bottom: 14px; }
+
 /* error boundary */
 .blazor-error-boundary { background: var(--destructive); padding: 1rem; color: white; border-radius: 8px; }
 .blazor-error-boundary::after { content: "Ha ocurrido un error."; }
