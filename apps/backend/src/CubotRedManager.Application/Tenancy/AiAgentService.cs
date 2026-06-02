@@ -59,6 +59,7 @@ public sealed class AiAgentService : IAiAgentService
             Model = string.IsNullOrWhiteSpace(request.Model) ? null : request.Model.Trim(),
             SystemPrompt = request.SystemPrompt ?? "",
             IsActive = false,
+            EnableDataContainerMcp = request.EnableDataContainerMcp,
             SortOrder = nextOrder
         };
         _db.AiAgents.Add(agent);
@@ -77,6 +78,7 @@ public sealed class AiAgentService : IAiAgentService
         agent.Provider = request.Provider;
         agent.Model = string.IsNullOrWhiteSpace(request.Model) ? null : request.Model.Trim();
         agent.SystemPrompt = request.SystemPrompt ?? "";
+        agent.EnableDataContainerMcp = request.EnableDataContainerMcp;
         await _db.SaveChangesAsync(cancellationToken);
         var count = await _db.AiAgentResources.CountAsync(r => r.AgentId == id, cancellationToken);
         return Map(agent, count);
@@ -190,7 +192,7 @@ public sealed class AiAgentService : IAiAgentService
     }
 
     private static AiAgentDto Map(AiAgent a, int resourceCount) =>
-        new(a.Id, a.Name, a.Role, a.Provider, a.Model, a.SystemPrompt, a.IsActive, a.SortOrder, resourceCount);
+        new(a.Id, a.Name, a.Role, a.Provider, a.Model, a.SystemPrompt, a.IsActive, a.EnableDataContainerMcp, a.SortOrder, resourceCount);
 
     private static AiAgentResourceDto MapResource(AiAgentResource r) =>
         new(r.Id, r.AgentId, r.Name, r.ResourceType, r.Detail, r.FileUrl, r.FileName, r.SortOrder);

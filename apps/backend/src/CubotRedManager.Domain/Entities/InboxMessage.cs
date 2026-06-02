@@ -22,5 +22,18 @@ public class InboxMessage : TenantEntity
     public Guid? RelatedPublicationId { get; set; }
     public Guid? ParentMessageId { get; set; }
 
+    /// <summary>
+    /// Etapa del embudo comercial (TikTok Manager Pipeline). Por defecto New al ingresar.
+    /// Solo se usa cuando Type=Comment; para DMs/Menciones se ignora en UI.
+    /// </summary>
+    public CommentPipelineStage PipelineStage { get; set; } = CommentPipelineStage.New;
+
+    /// <summary>Titulo del video al que pertenece el comentario (se llena cuando aplica).</summary>
+    public string? RelatedVideoTitle { get; set; }
+    /// <summary>Thumbnail del video, si esta disponible.</summary>
+    public string? RelatedVideoThumbUrl { get; set; }
+    /// <summary>External id del video en la red (TikTok video_id, IG media_id, etc.).</summary>
+    public string? RelatedVideoExternalId { get; set; }
+
     public ICollection<InboxReply> Replies { get; set; } = new List<InboxReply>();
 }

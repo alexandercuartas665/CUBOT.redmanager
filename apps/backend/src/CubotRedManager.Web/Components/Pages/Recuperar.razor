@@ -1,0 +1,76 @@
+@page "/recuperar"
+@layout CubotRedManager.Web.Components.Layout.EmptyLayout
+@attribute [AllowAnonymous]
+@inject CubotRedManager.Application.Admin.IPlatformBrandingService BrandingSvc
+
+<PageTitle>Recuperar contrasena - @_brand.PlatformName</PageTitle>
+
+<div class="auth-shell">
+    <aside class="auth-aside">
+        <div class="auth-aside-deco auth-deco-tr"></div>
+        <div class="auth-aside-deco auth-deco-bl"></div>
+        <div class="auth-brand">
+            @if (!string.IsNullOrWhiteSpace(_brand.LoginLogoUrl))
+            {
+                <img class="auth-brand-logo-img" src="@_brand.LoginLogoUrl" alt="@_brand.PlatformName" />
+            }
+            else
+            {
+                <div class="auth-brand-logo">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"><path d="M17.8 19.2 16 11l3.5-3.5C21 6 21.5 4 21 3c-1-.5-3 0-4.5 1.5L13 8 4.8 6.2c-.5-.1-.9.1-1.1.5l-.3.5c-.2.5-.1 1 .3 1.3L9 12l-2 3H4l-1 1 3 2 2 3 1-1v-3l3-2 3.5 5.3c.3.4.8.5 1.3.3l.5-.2c.4-.3.6-.7.5-1.2z"/></svg>
+                </div>
+            }
+            <span class="auth-brand-name">@_brand.PlatformName</span>
+        </div>
+        <div class="auth-aside-body">
+            <h2>Recupera tu acceso</h2>
+            <p>Te enviaremos un enlace a tu correo para crear una nueva contrasena.</p>
+            <div class="auth-dots"><span></span><span></span><span></span></div>
+        </div>
+    </aside>
+
+    <main class="auth-main">
+        <div class="auth-form-wrap">
+            <section class="auth-pane" style="display:block;">
+                <div class="auth-head">
+                    <h1>Recuperar contrasena</h1>
+                    <p>Escribe tu correo y te enviaremos instrucciones.</p>
+                </div>
+
+                @if (Sent == 1)
+                {
+                    <div class="auth-alert auth-alert-ok">Si el correo existe, te enviamos un enlace para restablecer tu contrasena. Revisa tu bandeja (y spam).</div>
+                }
+                @if (!string.IsNullOrWhiteSpace(ErrorMsg))
+                {
+                    <div class="auth-alert auth-alert-error">@ErrorMsg</div>
+                }
+
+                <form method="post" action="/auth/forgot" class="auth-form">
+                    <div class="auth-field">
+                        <label for="fp-email">Correo electronico</label>
+                        <input id="fp-email" name="email" type="email" required placeholder="tu.correo@ejemplo.com" />
+                    </div>
+                    <button class="auth-submit" type="submit">
+                        <span>Enviar enlace</span>
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M14 5l7 7m0 0l-7 7m7-7H3"/></svg>
+                    </button>
+                </form>
+
+                <p class="auth-switch">
+                    <a href="/login" style="color:var(--primary);font-weight:700;text-decoration:none;">Volver a iniciar sesion</a>
+                </p>
+            </section>
+        </div>
+        <footer class="auth-footer">&copy; @DateTime.UtcNow.Year @_brand.PlatformName. Todos los derechos reservados.</footer>
+    </main>
+</div>
+
+@code {
+    [SupplyParameterFromQuery] public int? Sent { get; set; }
+    [SupplyParameterFromQuery(Name = "error")] public string? ErrorMsg { get; set; }
+
+    private CubotRedManager.Application.Admin.PlatformBrandingDto _brand = CubotRedManager.Application.Admin.PlatformBrandingDto.Default;
+
+    protected override async Task OnInitializedAsync() => _brand = await BrandingSvc.GetAsync();
+}

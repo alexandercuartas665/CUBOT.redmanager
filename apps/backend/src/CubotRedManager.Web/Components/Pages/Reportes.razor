@@ -1,5 +1,214 @@
 @page "/reportes"
-@attribute [Microsoft.AspNetCore.Authorization.Authorize(Policy = AppPolicies.TenantMember)]
+@attribute [Authorize(Policy = AppPolicies.TenantMember)]
+@rendermode InteractiveServer
+@using CubotRedManager.Application.Abstractions
+@using CubotRedManager.Application.Tenancy
+@using Microsoft.EntityFrameworkCore
+@inject ITenantMetricsService MetricsSvc
+@inject IApplicationDbContext Db
+@inject ITenantContext TenantContext
+@inject IJSRuntime JS
 
-<ModulePlaceholder Eyebrow="Reportes" Title="Reportes ejecutivos" Phase="Fase 3"
-                   Description="Reportes mensuales por cliente exportables a PDF con marca blanca." />
+<PageTitle>Reporte ejecutivo - CUBOT.redmanager</PageTitle>
+
+<div class="module-head no-print">
+    <div>
+        <div class="module-eyebrow">
+            <div class="module-icon">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+            </div>
+            <span>Reportes</span>
+        </div>
+        <h1 class="page-title" style="margin-top:12px;">Reporte ejecutivo</h1>
+        <p class="page-sub" style="margin-bottom:0;">Resumen consolidado de la operacion. Usa Ctrl+P (Cmd+P) para imprimir o exportar a PDF.</p>
+    </div>
+    <button class="btn btn-primary" @onclick="Print">Imprimir / PDF</button>
+</div>
+
+@if (_data is null)
+{
+    <p class="text-muted">Cargando...</p>
+}
+else
+{
+    <div class="rep-doc">
+        <header class="rep-doc-head">
+            <div>
+                <div class="rep-eyebrow">CUBOT.redmanager &middot; Reporte ejecutivo</div>
+                <h1 class="rep-title">@(_agencyName ?? "Agencia")</h1>
+                <div class="rep-sub">Generado el @_now.ToString("dd 'de' MMMM 'de' yyyy 'a las' HH:mm")</div>
+            </div>
+        </header>
+
+        <section class="rep-section">
+            <h2 class="rep-h2">Resumen general</h2>
+            <table class="rep-table">
+                <tbody>
+                    <tr><th>Cuentas conectadas</th><td>@_data.ActiveAccounts / @_data.TotalAccounts</td></tr>
+                    <tr><th>Publicaciones publicadas</th><td>@_data.PublishedPublications / @_data.TotalPublications</td></tr>
+                    <tr><th>Comentarios totales</th><td>@_data.TotalComments</td></tr>
+                    <tr><th>Comentarios respondidos</th><td>@_data.RepliedComments</td></tr>
+                    <tr><th>Comentarios pendientes</th><td>@_data.PendingComments</td></tr>
+                </tbody>
+            </table>
+        </section>
+
+        <section class="rep-section">
+            <h2 class="rep-h2">Actividad por cuenta</h2>
+            @if (_data.AccountActivity.Count == 0)
+            {
+                <p class="rep-empty">Sin cuentas conectadas todavia.</p>
+            }
+            else
+            {
+                <table class="rep-table">
+                    <thead>
+                        <tr>
+                            <th>Red</th>
+                            <th>Cuenta</th>
+                            <th>Cliente</th>
+                            <th class="rep-num">Videos</th>
+                            <th class="rep-num">Comentarios</th>
+                            <th class="rep-num">Respondidos</th>
+                            <th class="rep-num">Pendientes</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var a in _data.AccountActivity)
+                        {
+                            <tr>
+                                <td style="text-transform:uppercase;">@a.Network</td>
+                                <td>@(string.IsNullOrWhiteSpace(a.Handle) ? "-" : "@" + a.Handle)</td>
+                                <td>@a.ClientName</td>
+                                <td class="rep-num">@a.Videos</td>
+                                <td class="rep-num">@a.Comments</td>
+                                <td class="rep-num">@a.RepliedComments</td>
+                                <td class="rep-num">@a.PendingComments</td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            }
+        </section>
+
+        <section class="rep-section">
+            <h2 class="rep-h2">Publicaciones por estado</h2>
+            <table class="rep-table">
+                <thead>
+                    <tr><th>Estado</th><th class="rep-num">Cantidad</th></tr>
+                </thead>
+                <tbody>
+                    @foreach (var p in _data.PublicationsByStatus)
+                    {
+                        <tr><td>@p.Status</td><td class="rep-num">@p.Count</td></tr>
+                    }
+                </tbody>
+            </table>
+        </section>
+
+        <section class="rep-section">
+            <h2 class="rep-h2">Top 10 videos</h2>
+            @if (_data.TopVideos.Count == 0)
+            {
+                <p class="rep-empty">Sin videos sincronizados.</p>
+            }
+            else
+            {
+                <table class="rep-table">
+                    <thead>
+                        <tr>
+                            <th>#</th>
+                            <th>Caption</th>
+                            <th class="rep-num">Comentarios</th>
+                            <th class="rep-num">Likes</th>
+                            <th class="rep-num">Vistas</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @{ var i = 1; }
+                        @foreach (var v in _data.TopVideos)
+                        {
+                            <tr>
+                                <td>@(i++)</td>
+                                <td>@(string.IsNullOrWhiteSpace(v.Caption) ? v.ExternalId : v.Caption)</td>
+                                <td class="rep-num">@v.CommentCount</td>
+                                <td class="rep-num">@v.LikeCount</td>
+                                <td class="rep-num">@v.ViewCount</td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            }
+        </section>
+
+        <section class="rep-section">
+            <h2 class="rep-h2">Comentarios mensuales (ultimos 6 meses)</h2>
+            <table class="rep-table">
+                <thead>
+                    <tr><th>Mes</th><th class="rep-num">Comentarios</th></tr>
+                </thead>
+                <tbody>
+                    @foreach (var m in _data.CommentsLast6Months)
+                    {
+                        <tr><td>@MonthName(m.Month) @m.Year</td><td class="rep-num">@m.Count</td></tr>
+                    }
+                </tbody>
+            </table>
+        </section>
+
+        <footer class="rep-doc-foot">
+            <span>CUBOT.redmanager &middot; Reporte ejecutivo &middot; @_now.ToString("yyyy-MM-dd HH:mm")</span>
+        </footer>
+    </div>
+}
+
+<style>
+    .rep-doc { background: #fff; max-width: 980px; padding: 28px 32px; border-radius: 14px; box-shadow: var(--shadow-soft); }
+    .rep-doc-head { border-bottom: 2px solid #e5e7eb; padding-bottom: 18px; margin-bottom: 22px; }
+    .rep-eyebrow { font-size: 11px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; color: #A03DC9; }
+    .rep-title { font-size: 26px; font-weight: 800; margin: 6px 0 4px; color: #1f2937; }
+    .rep-sub { font-size: 13px; color: #6b7280; }
+    .rep-section { margin-bottom: 22px; page-break-inside: avoid; }
+    .rep-h2 { font-size: 15px; font-weight: 700; margin: 0 0 10px; color: #1f2937; border-bottom: 1px solid #e5e7eb; padding-bottom: 6px; }
+    .rep-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+    .rep-table th, .rep-table td { padding: 8px 10px; text-align: left; border-bottom: 1px solid #f1f5f9; }
+    .rep-table thead th { font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; color: #6b7280; font-weight: 700; background: #f9fafb; }
+    .rep-table .rep-num { text-align: right; font-variant-numeric: tabular-nums; }
+    .rep-empty { color: #6b7280; font-size: 13px; margin: 6px 0 0; }
+    .rep-doc-foot { margin-top: 26px; padding-top: 14px; border-top: 1px solid #e5e7eb; font-size: 11px; color: #9ca3af; text-align: center; }
+
+    @@media print {
+        .cubot-sidebar, .cubot-topbar { display: none !important; }
+        .no-print { display: none !important; }
+        body, html { background: #fff !important; }
+        .cubot-main, main { padding: 0 !important; margin: 0 !important; }
+        .rep-doc { box-shadow: none; border-radius: 0; max-width: 100%; padding: 0; margin: 0; }
+        @@page { margin: 14mm; }
+    }
+</style>
+
+@code {
+    private TenantMetricsDto? _data;
+    private DateTime _now = DateTime.Now;
+    private string? _agencyName;
+
+    protected override async Task OnInitializedAsync()
+    {
+        _now = DateTime.Now;
+        if (TenantContext.TenantId is Guid tenantId)
+        {
+            var t = await Db.Tenants.AsNoTracking().FirstOrDefaultAsync(x => x.Id == tenantId);
+            _agencyName = t?.Name;
+        }
+        _data = await MetricsSvc.GetMetricsAsync();
+    }
+
+    private async Task Print() => await JS.InvokeVoidAsync("window.print");
+
+    private static string MonthName(int m) => m switch
+    {
+        1 => "Enero", 2 => "Febrero", 3 => "Marzo", 4 => "Abril", 5 => "Mayo", 6 => "Junio",
+        7 => "Julio", 8 => "Agosto", 9 => "Septiembre", 10 => "Octubre", 11 => "Noviembre", 12 => "Diciembre",
+        _ => m.ToString()
+    };
+}

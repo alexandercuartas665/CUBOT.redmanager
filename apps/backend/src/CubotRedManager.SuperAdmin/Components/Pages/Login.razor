@@ -1,32 +1,42 @@
 @page "/login"
 @layout CubotRedManager.SuperAdmin.Components.Layout.EmptyLayout
 @attribute [AllowAnonymous]
+@inject NavigationManager Nav
 
-<PageTitle>Ingresar - Super Admin</PageTitle>
+<PageTitle>Redirigiendo al login - Super Admin</PageTitle>
+
+<!-- Login unificado: el formulario real vive en el Web (:5036). El Super Admin (:5037) solo
+     redirige al Web pasando el ReturnUrl, y la cookie compartida permite la sesion en ambos hosts. -->
+<head>
+    <meta http-equiv="refresh" content="0;url=@_redirectUrl" />
+</head>
 
 <div class="login-wrap">
     <div class="login-card">
-        <div class="login-logo">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4h16v12H5.17L4 17.17z"/><path d="M8 9h8"/><path d="M8 12h5"/></svg>
-        </div>
         <div class="login-title">CUBOT<span>.redmanager</span></div>
-        <p class="login-sub">Consola Super Admin SaaS. Ingreso de desarrollo.</p>
-
-        <div class="login-roles">
-            <form method="post" action="/auth/dev-login" class="m-0">
-                <AntiforgeryToken />
-                <button type="submit" class="login-role">
-                    <span class="ic">
-                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2 4 5v6c0 5 3.4 7.4 8 9 4.6-1.6 8-4 8-9V5z"/><path d="m9 12 2 2 4-4"/></svg>
-                    </span>
-                    <span>
-                        <span class="t">Entrar como Operador de plataforma</span>
-                        <span class="d">Gobierno SaaS: agencias, planes, Wompi, IA, Evolution.</span>
-                    </span>
-                </button>
-            </form>
-        </div>
-
-        <p class="login-note">Login de desarrollo temporal. La autenticacion real (cuentas + Google) se implementa con el modulo de identidad de plataforma.</p>
+        <p class="login-sub">Redirigiendo al login unificado...</p>
+        <p class="login-note">Si no te redirige automaticamente, <a href="@_redirectUrl">haz clic aqui</a>.</p>
     </div>
 </div>
+
+@code {
+    [SupplyParameterFromQuery(Name = "ReturnUrl")] public string? ReturnUrl { get; set; }
+
+    private string _redirectUrl = "http://localhost:5036/login";
+
+    protected override void OnInitialized()
+    {
+        var ret = string.IsNullOrWhiteSpace(ReturnUrl)
+            ? "http://localhost:5037/"
+            : ReturnUrl;
+        _redirectUrl = $"http://localhost:5036/login?ReturnUrl={Uri.EscapeDataString(ret)}";
+    }
+
+    protected override void OnAfterRender(bool firstRender)
+    {
+        if (firstRender)
+        {
+            Nav.NavigateTo(_redirectUrl, forceLoad: true);
+        }
+    }
+}

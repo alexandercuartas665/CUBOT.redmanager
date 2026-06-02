@@ -1,5 +1,236 @@
 @page "/automatizaciones"
-@attribute [Microsoft.AspNetCore.Authorization.Authorize(Policy = AppPolicies.TenantMember)]
+@attribute [Authorize(Policy = AppPolicies.TenantMember)]
+@rendermode InteractiveServer
+@using System.Security.Claims
+@using CubotRedManager.Application.Tenancy
+@using CubotRedManager.Domain.Enums
+@inject IAutomationService AutoSvc
+@inject AuthenticationStateProvider AuthProvider
+@inject IJSRuntime JS
 
-<ModulePlaceholder Eyebrow="Comunicacion e IA" Title="Automatizaciones" Phase="Fase 3"
-                   Description="Reglas: alerta de token por expirar, recordatorios, asignacion de DMs." />
+<PageTitle>Automatizaciones - CUBOT.redmanager</PageTitle>
+
+<div class="module-head">
+    <div>
+        <div class="module-eyebrow">
+            <div class="module-icon">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2 3 14h9l-1 8 10-12h-9z"/></svg>
+            </div>
+            <span>Automatizacion</span>
+        </div>
+        <h1 class="page-title" style="margin-top:12px;">Reglas de automatizacion</h1>
+        <p class="page-sub" style="margin-bottom:0;">Define triggers + acciones que el motor ejecuta sin intervencion.</p>
+    </div>
+    <button class="btn btn-primary" @onclick="OpenNew">+ Nueva regla</button>
+</div>
+
+@if (_rules is null)
+{
+    <p class="text-muted">Cargando...</p>
+}
+else if (_rules.Count == 0)
+{
+    <div class="coming-soon" style="max-width:760px;">
+        <div class="coming-soon-icon">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2 3 14h9l-1 8 10-12h-9z"/></svg>
+        </div>
+        <h3>Sin reglas configuradas</h3>
+        <p>Crea la primera regla con "+ Nueva regla". Por ejemplo: cuando un comentario lleve mas de 30 minutos sin respuesta, crear una tarea para el operador.</p>
+    </div>
+}
+else
+{
+    <div class="card" style="padding:6px 16px;">
+        <table class="table table-hover" style="margin:0;">
+            <thead>
+                <tr>
+                    <th style="padding-left:14px;">Nombre</th>
+                    <th>Trigger</th>
+                    <th>Accion</th>
+                    <th style="text-align:right;">Ejecuciones</th>
+                    <th>Ultima ejecucion</th>
+                    <th style="text-align:center;">Activa</th>
+                    <th></th>
+                </tr>
+            </thead>
+            <tbody>
+                @foreach (var r in _rules)
+                {
+                    <tr>
+                        <td style="padding-left:14px;font-weight:600;">@r.Name</td>
+                        <td>@TriggerLabel(r.Trigger)@(r.Trigger == AutomationTrigger.NoReply && r.NoReplyMinutes is { } m ? $" ({m} min)" : "")</td>
+                        <td>@ActionLabel(r.Action)</td>
+                        <td style="text-align:right;font-variant-numeric:tabular-nums;">@r.ExecutionCount</td>
+                        <td style="font-size:12px;color:var(--muted-foreground);">@(r.LastExecutedAt is { } d ? d.LocalDateTime.ToString("dd MMM HH:mm") : "—")</td>
+                        <td style="text-align:center;">
+                            <label class="ag-switch" title="@(r.IsActive ? "Pausar" : "Activar")">
+                                <input type="checkbox" checked="@r.IsActive" @onchange="@(e => ToggleActive(r, (bool)e.Value!))" />
+                                <span class="ag-slider"></span>
+                            </label>
+                        </td>
+                        <td style="text-align:right;padding-right:14px;white-space:nowrap;">
+                            <button class="btn btn-sm btn-outline-secondary" style="margin-right:6px;" @onclick="() => OpenEdit(r)">Editar</button>
+                            <button class="btn btn-sm btn-outline-danger" @onclick="() => Delete(r)">Eliminar</button>
+                        </td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+    </div>
+}
+
+@if (_modalOpen)
+{
+    <div class="modal-overlay">
+        <div class="modal-dialog" style="max-width:560px;">
+            <div class="modal-head">
+                <h3>@(_editId is null ? "Nueva regla" : "Editar regla")</h3>
+                <button class="modal-close" @onclick="CloseModal">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div class="field">
+                    <label class="form-label">Nombre *</label>
+                    <input class="form-control" @bind="_fName" autocomplete="off" />
+                </div>
+                <div class="field">
+                    <label class="form-label">Trigger</label>
+                    <select class="form-control" @bind="_fTrigger">
+                        <option value="@AutomationTrigger.NoReply">@TriggerLabel(AutomationTrigger.NoReply)</option>
+                        <option value="@AutomationTrigger.CommentReceived">@TriggerLabel(AutomationTrigger.CommentReceived)</option>
+                        <option value="@AutomationTrigger.PublicationFailed">@TriggerLabel(AutomationTrigger.PublicationFailed)</option>
+                        <option value="@AutomationTrigger.TokenExpired">@TriggerLabel(AutomationTrigger.TokenExpired)</option>
+                        <option value="@AutomationTrigger.DailySchedule">@TriggerLabel(AutomationTrigger.DailySchedule)</option>
+                    </select>
+                </div>
+                @if (_fTrigger == AutomationTrigger.NoReply)
+                {
+                    <div class="field">
+                        <label class="form-label">Minutos sin respuesta</label>
+                        <input class="form-control" type="number" min="1" @bind="_fNoReplyMinutes" style="max-width:160px;" />
+                    </div>
+                }
+                <div class="field">
+                    <label class="form-label">Accion</label>
+                    <select class="form-control" @bind="_fAction">
+                        <option value="@AutomationAction.CreateTask">@ActionLabel(AutomationAction.CreateTask)</option>
+                        <option value="@AutomationAction.NotifyOperator">@ActionLabel(AutomationAction.NotifyOperator)</option>
+                        <option value="@AutomationAction.EscalateToHuman">@ActionLabel(AutomationAction.EscalateToHuman)</option>
+                        <option value="@AutomationAction.AssignToTeam">@ActionLabel(AutomationAction.AssignToTeam)</option>
+                        <option value="@AutomationAction.SendWhatsAppSummary">@ActionLabel(AutomationAction.SendWhatsAppSummary)</option>
+                    </select>
+                </div>
+                <div class="field">
+                    <label class="ag-switch" style="display:flex;align-items:center;gap:10px;">
+                        <input type="checkbox" @bind="_fActive" />
+                        <span class="ag-slider"></span>
+                        <span style="font-size:13px;">Activa</span>
+                    </label>
+                </div>
+                @if (_modalError is not null)
+                {
+                    <div class="text-danger small">@_modalError</div>
+                }
+            </div>
+            <div class="modal-foot">
+                <button class="btn btn-outline-secondary" @onclick="CloseModal">Cancelar</button>
+                <button class="btn btn-primary" @onclick="Save">Guardar</button>
+            </div>
+        </div>
+    </div>
+}
+
+@code {
+    private List<AutomationRuleDto>? _rules;
+    private Guid _actor;
+
+    private bool _modalOpen;
+    private Guid? _editId;
+    private string _fName = "";
+    private AutomationTrigger _fTrigger = AutomationTrigger.NoReply;
+    private AutomationAction _fAction = AutomationAction.CreateTask;
+    private bool _fActive = true;
+    private int? _fNoReplyMinutes = 30;
+    private string? _modalError;
+
+    protected override async Task OnInitializedAsync()
+    {
+        var st = await AuthProvider.GetAuthenticationStateAsync();
+        Guid.TryParse(st.User.FindFirst(ClaimTypes.NameIdentifier)?.Value, out _actor);
+        await Reload();
+    }
+
+    private async Task Reload() => _rules = (await AutoSvc.ListAsync()).ToList();
+
+    private void OpenNew()
+    {
+        _editId = null;
+        _fName = "";
+        _fTrigger = AutomationTrigger.NoReply;
+        _fAction = AutomationAction.CreateTask;
+        _fActive = true;
+        _fNoReplyMinutes = 30;
+        _modalError = null;
+        _modalOpen = true;
+    }
+
+    private void OpenEdit(AutomationRuleDto r)
+    {
+        _editId = r.Id;
+        _fName = r.Name;
+        _fTrigger = r.Trigger;
+        _fAction = r.Action;
+        _fActive = r.IsActive;
+        _fNoReplyMinutes = r.NoReplyMinutes ?? 30;
+        _modalError = null;
+        _modalOpen = true;
+    }
+
+    private void CloseModal() => _modalOpen = false;
+
+    private async Task Save()
+    {
+        _modalError = null;
+        if (string.IsNullOrWhiteSpace(_fName)) { _modalError = "El nombre es obligatorio."; return; }
+        var req = new SaveAutomationRuleRequest(
+            _editId, _fName, _fTrigger, _fAction, _fActive,
+            _fTrigger == AutomationTrigger.NoReply ? _fNoReplyMinutes : null);
+        var saved = await AutoSvc.SaveAsync(req, _actor);
+        if (saved is null) { _modalError = "No se pudo guardar la regla."; return; }
+        _modalOpen = false;
+        await Reload();
+    }
+
+    private async Task Delete(AutomationRuleDto r)
+    {
+        var ok = await JS.InvokeAsync<bool>("confirm", $"Eliminar la regla \"{r.Name}\"?");
+        if (!ok) return;
+        await AutoSvc.DeleteAsync(r.Id, _actor);
+        await Reload();
+    }
+
+    private async Task ToggleActive(AutomationRuleDto r, bool active)
+    {
+        await AutoSvc.ToggleActiveAsync(r.Id, active, _actor);
+        await Reload();
+    }
+
+    private static string TriggerLabel(AutomationTrigger t) => t switch
+    {
+        AutomationTrigger.NoReply => "Sin respuesta del cliente",
+        AutomationTrigger.CommentReceived => "Comentario recibido",
+        AutomationTrigger.PublicationFailed => "Publicacion fallida",
+        AutomationTrigger.TokenExpired => "Token expirado",
+        AutomationTrigger.DailySchedule => "Programado diario",
+        _ => t.ToString()
+    };
+
+    private static string ActionLabel(AutomationAction a) => a switch
+    {
+        AutomationAction.CreateTask => "Crear tarea",
+        AutomationAction.NotifyOperator => "Notificar operador",
+        AutomationAction.EscalateToHuman => "Escalar a humano",
+        AutomationAction.AssignToTeam => "Asignar a equipo",
+        AutomationAction.SendWhatsAppSummary => "Enviar resumen WhatsApp",
+        _ => a.ToString()
+    };
+}

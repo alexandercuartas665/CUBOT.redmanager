@@ -16,14 +16,22 @@ public sealed class AiInferenceService : IAiInferenceService
     private readonly IAiProviderClient _client;
     private readonly IAiUsageService _usage;
     private readonly IAiAgentCacheService _cache;
+    private readonly IDataContainerMcpService _mcp;
 
-    public AiInferenceService(IApplicationDbContext db, ISecretProtector secretProtector, IAiProviderClient client, IAiUsageService usage, IAiAgentCacheService cache)
+    public AiInferenceService(
+        IApplicationDbContext db,
+        ISecretProtector secretProtector,
+        IAiProviderClient client,
+        IAiUsageService usage,
+        IAiAgentCacheService cache,
+        IDataContainerMcpService mcp)
     {
         _db = db;
         _secretProtector = secretProtector;
         _client = client;
         _usage = usage;
         _cache = cache;
+        _mcp = mcp;
     }
 
     public async Task<AiChatResult> TestChatAsync(Guid agentId, IReadOnlyList<AiChatTurn> turns, string? systemPromptOverride = null, CancellationToken cancellationToken = default)
@@ -72,7 +80,7 @@ public sealed class AiInferenceService : IAiInferenceService
             .Where(v => v.AgentId == agentId && v.SessionId == sessionId)
             .ToDictionaryAsync(v => v.FieldKey, v => v.Value, cancellationToken);
 
-        var systemPrompt = await BuildSystemPrompt(agentId, systemPromptOverride ?? agent.SystemPrompt, resources, cacheFields, cacheValues, turns, cancellationToken);
+        var systemPrompt = await BuildSystemPrompt(agentId, systemPromptOverride ?? agent.SystemPrompt, resources, cacheFields, cacheValues, turns, agent.EnableDataContainerMcp, cancellationToken);
 
         var debugPrompts = new List<AiDebugPrompt>
         {
@@ -116,6 +124,7 @@ public sealed class AiInferenceService : IAiInferenceService
         IReadOnlyList<CacheFieldInfo> cacheFields,
         IReadOnlyDictionary<string, string?> cacheValues,
         IReadOnlyList<AiChatTurn> turns,
+        bool mcpEnabled,
         CancellationToken ct)
     {
         var sb = new StringBuilder(ExpandResourceRefs(basePrompt, resources));
@@ -181,7 +190,13 @@ public sealed class AiInferenceService : IAiInferenceService
             }
         }
 
-        return sb.ToString();
+        // MCP DataContainer: resuelve placeholders {{LIST.CONTAINERS}} y {{CONTAINER:nombre}}
+        // sobre TODO el prompt ensamblado (base + enrutador + recursos + cache + turnos),
+        // antes de enviar al proveedor. Idempotente: si no hay placeholders, no hace I/O.
+        // Si el agente NO tiene EnableDataContainerMcp, los placeholders se sustituyen por una
+        // nota informativa en vez de leer datos del tenant.
+        var assembled = sb.ToString();
+        return await _mcp.ResolvePlaceholdersAsync(assembled, mcpEnabled, ct);
     }
 
     private async Task ExtractAndStoreCacheUpdatesAsync(

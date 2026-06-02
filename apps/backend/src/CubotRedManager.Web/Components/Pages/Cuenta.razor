@@ -1,5 +1,942 @@
 @page "/cuenta"
 @attribute [Microsoft.AspNetCore.Authorization.Authorize(Policy = AppPolicies.TenantMember)]
+@rendermode @(new InteractiveServerRenderMode(prerender: false))
+@using System.Security.Claims
+@using Microsoft.AspNetCore.Components.Authorization
+@using Microsoft.AspNetCore.Components.Forms
+@using CubotRedManager.Application.Admin
+@using CubotRedManager.Application.Tenancy
+@using CubotRedManager.Application.Auth
+@using CubotRedManager.Domain.Enums
+@using CubotRedManager.Web.Authorization
+@inject ITenantAdminService TenantsSvc
+@inject ISubscriptionAdminService SubsSvc
+@inject IPaymentAdminService PaymentsSvc
+@inject IPlanAdminService PlansSvc
+@inject IWompiCheckoutService CheckoutSvc
+@inject IRecurringBillingService RecurringSvc
+@inject IWompiConfigService WompiCfgSvc
+@inject Microsoft.AspNetCore.Hosting.IWebHostEnvironment Env
+@inject NavigationManager Nav
+@inject IJSRuntime JS
+@inject IAuthService AuthSvc
+@inject ITenantApiService TenantApiSvc
 
-<ModulePlaceholder Eyebrow="Configuracion" Title="Mi cuenta" Phase="Fase 1"
-                   Description="Plan activo, limites, consumo, facturas y marca de la agencia." />
+<PageTitle>Mi cuenta - CUBOT.redmanager</PageTitle>
+
+<div class="module-head">
+    <div>
+        <div class="module-eyebrow">
+            <div class="module-icon">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
+            </div>
+            <span>Mi agencia</span>
+        </div>
+        <h1 class="page-title" style="margin-top:12px;">Mi cuenta</h1>
+        <p class="page-sub" style="margin-bottom:0;">Tu plan activo, limites incluidos, facturas y cambio de plan.</p>
+    </div>
+</div>
+
+@if (_loading)
+{
+    <p><em>Cargando...</em></p>
+}
+else
+{
+    <div class="card" style="max-width:1040px;padding:22px 24px;margin-bottom:16px;">
+        <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:16px;flex-wrap:wrap;">
+            <div style="display:flex;align-items:center;gap:16px;">
+                @if (_tenant?.LogoUrl is { } logo)
+                {
+                    <img src="@logo" alt="Logo" class="acct-logo" />
+                }
+                else
+                {
+                    <div class="acct-logo acct-logo-empty">@Initials(_tenant?.Name)</div>
+                }
+                <div>
+                    <div class="wlbl">Datos de la empresa</div>
+                    <div style="font-size:1.25rem;font-weight:800;">@(_tenant?.Name ?? "-")</div>
+                    <div class="text-muted" style="font-size:12px;">
+                        @(string.IsNullOrWhiteSpace(_tenant?.LegalName) ? "Sin razon social" : _tenant!.LegalName)
+                        @if (!string.IsNullOrWhiteSpace(_tenant?.TaxId)) { <span> &middot; NIT @_tenant!.TaxId</span> }
+                    </div>
+                    <div class="text-muted" style="font-size:12px;">@(_tenant?.Country ?? "-") &middot; @(_tenant?.Currency ?? "-")</div>
+                </div>
+            </div>
+            <button class="btn btn-outline-secondary" @onclick="OpenProfile" disabled="@(_tenant is null)">Editar datos</button>
+        </div>
+    </div>
+
+    <div class="acct-grid">
+        <div class="card" style="padding:22px 24px;">
+            <div class="wlbl">Plan activo</div>
+            @if (_sub is not null && _plan is not null)
+            {
+                <div style="display:flex;align-items:baseline;gap:10px;margin-top:6px;">
+                    <div style="font-size:1.6rem;font-weight:800;">@_plan.Name</div>
+                    <span class="badge bg-@SubStatusColor(_sub.Status)">@_sub.Status</span>
+                </div>
+                <div class="pprice" style="font-size:1.6rem;font-weight:800;margin-top:10px;">
+                    @($"$ {Price(_plan, _sub.BillingFrequency):N0}") <small style="font-size:0.85rem;font-weight:600;color:var(--muted-foreground);">@_plan.Currency / @FreqText(_sub.BillingFrequency)</small>
+                </div>
+                <div class="text-muted" style="font-size:12px;margin-top:8px;">Proximo corte: @_sub.CurrentPeriodEndsAt.LocalDateTime.ToString("dd MMM yyyy")</div>
+                <button class="btn btn-primary" style="margin-top:18px;" @onclick="OpenChange">Cambiar de plan</button>
+            }
+            else
+            {
+                <p class="text-muted" style="margin-top:8px;">Esta agencia no tiene un plan activo.</p>
+                <button class="btn btn-primary" style="margin-top:10px;" @onclick="OpenChange">Elegir un plan</button>
+            }
+            @if (_changeInfo is not null)
+            {
+                <div class="@(_changeInfoOk ? "text-success" : "text-danger")" style="font-size:12.5px;margin-top:14px;line-height:1.4;">@_changeInfo</div>
+            }
+        </div>
+
+        <div class="card" style="padding:22px 24px;">
+            <div class="wlbl">Limites de tu plan</div>
+            @if (_plan is not null && _plan.Limits.Count > 0)
+            {
+                <ul class="plan-features" style="margin-top:12px;">
+                    @foreach (var l in _plan.Limits)
+                    {
+                        <li>
+                            <svg class="plan-check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>
+                            <span>@FriendlyLimit(l)</span>
+                        </li>
+                    }
+                </ul>
+            }
+            else
+            {
+                <p class="text-muted" style="margin-top:8px;">Sin limites definidos.</p>
+            }
+        </div>
+    </div>
+
+    <div class="card" style="max-width:1040px;padding:18px 22px;margin-top:16px;display:flex;align-items:flex-start;gap:14px;">
+        <div class="kpi-icon tone-primary" style="width:38px;height:38px;flex-shrink:0;">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="20" height="14" x="2" y="5" rx="2"/><line x1="2" x2="22" y1="10" y2="10"/></svg>
+        </div>
+        <div>
+            <div style="font-weight:700;">Metodo de pago de tu suscripcion</div>
+            <p class="text-muted" style="font-size:0.88rem;margin:4px 0 0;max-width:680px;">
+                CUBOT.redmanager cobra tu plan a traves de su pasarela Wompi. No necesitas configurar llaves ni una pasarela propia.
+                Al pagar se abre el checkout seguro de Wompi (tarjeta / PSE); la confirmacion se aplica automaticamente.
+            </p>
+            <button class="btn btn-primary btn-sm" style="margin-top:10px;" @onclick="PayNow" disabled="@(_checkoutBusy || _sub is null)">
+                @(_checkoutBusy ? "Generando checkout..." : "Pagar suscripcion ahora")
+            </button>
+            @if (_checkoutError is not null)
+            {
+                <div class="text-danger small" style="margin-top:8px;">@_checkoutError</div>
+            }
+        </div>
+    </div>
+
+    <div class="card" style="max-width:1040px;padding:18px 22px;margin-top:16px;">
+        <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:14px;flex-wrap:wrap;">
+            <div style="display:flex;align-items:flex-start;gap:14px;">
+                <div class="kpi-icon @(_sub?.AutoRenew == true ? "tone-success" : "tone-primary")" style="width:38px;height:38px;flex-shrink:0;">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/><path d="M8 16H3v5"/></svg>
+                </div>
+                <div>
+                    <div style="font-weight:700;">Debito automatico</div>
+                    @if (_sub?.AutoRenew == true)
+                    {
+                        <p class="text-muted" style="font-size:0.88rem;margin:4px 0 0;">
+                            Activo. Se cobrara automaticamente en cada corte con <strong>@(_sub.PaymentMethodLabel ?? "tu tarjeta guardada")</strong>.
+                        </p>
+                    }
+                    else
+                    {
+                        <p class="text-muted" style="font-size:0.88rem;margin:4px 0 0;max-width:620px;">
+                            Guarda una tarjeta y CUBOT cobrara tu suscripcion sola en cada corte. Puedes desactivarlo cuando quieras.
+                        </p>
+                    }
+                    @if (_autoMsg is not null)
+                    {
+                        <div class="@(_autoOk ? "text-success" : "text-danger")" style="font-size:0.85rem;margin-top:8px;">@_autoMsg</div>
+                    }
+                </div>
+            </div>
+            <div style="display:flex;gap:8px;flex-wrap:wrap;">
+                @if (_sub?.AutoRenew == true)
+                {
+                    <button class="btn btn-outline-secondary btn-sm" @onclick="ChargeNow" disabled="@(_autoBusy)">Cobrar ahora</button>
+                    <button class="btn btn-outline-danger btn-sm" @onclick="DisableAutoDebit" disabled="@(_autoBusy)">Desactivar</button>
+                }
+                else
+                {
+                    <button class="btn btn-primary btn-sm" @onclick="OpenAutoDebit" disabled="@(_sub is null)">Activar debito automatico</button>
+                }
+            </div>
+        </div>
+    </div>
+
+    <details class="card acct-api" style="max-width:1040px;padding:0;margin-top:26px;">
+        <summary class="acct-api-summary">
+            <span style="font-weight:700;font-size:1.05rem;">API de integracion
+                <span class="text-muted" style="font-weight:400;font-size:12px;">(opcional &middot; para conectar sistemas externos)</span>
+            </span>
+            <span class="text-muted" style="font-size:12px;">Ver configuracion</span>
+        </summary>
+        <div style="padding:4px 20px 20px;">
+        <p class="text-muted" style="font-size:13px;margin-bottom:14px;">
+            Crea recursos en tu agencia desde sistemas externos. Se autentica con tu API key (header <code>X-Api-Key</code>),
+            que identifica a tu agencia. Puedes activarla o desactivarla cuando quieras.
+        </p>
+
+        <div style="margin-bottom:14px;">
+            <label class="form-label" style="font-size:12px;font-weight:700;">ID de tu agencia (tenant)</label>
+            <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+                <code style="background:var(--muted);padding:4px 10px;border-radius:7px;font-size:12.5px;">@_tenantId</code>
+                <button class="btn btn-outline-secondary btn-sm" @onclick="() => Copy(_tenantId.ToString())">Copiar</button>
+            </div>
+        </div>
+
+        @if (_api is null || !_api.HasKey)
+        {
+            <button class="btn btn-primary" disabled="@_apiBusy" @onclick="RegenerateApiKeyAsync">@(_apiBusy ? "Generando..." : "Generar API key")</button>
+            <p class="text-muted" style="font-size:11px;margin-top:8px;">
+                En esta version la API publica esta en construccion. Al generar una clave veras un ejemplo de uso, pero el endpoint aun no esta activo.
+            </p>
+        }
+        else
+        {
+            <div style="margin-bottom:14px;">
+                <label class="form-label" style="font-size:12px;font-weight:700;">API key</label>
+                <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+                    <code style="background:var(--muted);padding:4px 10px;border-radius:7px;font-size:12.5px;word-break:break-all;">@_api.ApiKey</code>
+                    <button class="btn btn-outline-secondary btn-sm" @onclick="() => Copy(_api!.ApiKey ?? string.Empty)">Copiar</button>
+                </div>
+            </div>
+
+            <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:14px;">
+                <span class="badge bg-@(_api.IsEnabled ? "success" : "secondary")">@(_api.IsEnabled ? "Activa" : "Inactiva")</span>
+                <button class="btn btn-outline-secondary btn-sm" disabled="@_apiBusy" @onclick="ToggleApiAsync">@(_api.IsEnabled ? "Desactivar" : "Activar")</button>
+                <button class="btn btn-outline-secondary btn-sm" disabled="@_apiBusy" @onclick="RegenerateApiKeyAsync">Regenerar clave</button>
+                @if (_api.LastUsedAt is { } lu)
+                {
+                    <span class="text-muted" style="font-size:11px;">Ultimo uso: @lu.LocalDateTime.ToString("dd MMM yyyy HH:mm")</span>
+                }
+            </div>
+
+            <label class="form-label" style="font-size:12px;font-weight:700;">Ejemplo (curl)</label>
+            <div style="position:relative;">
+                <pre style="background:var(--muted);border:1px solid var(--border);border-radius:8px;padding:12px;font-size:11.5px;white-space:pre-wrap;overflow:auto;margin:0;">@ApiCurl()</pre>
+                <button class="btn btn-outline-secondary btn-sm" style="position:absolute;top:8px;right:8px;" @onclick="() => Copy(ApiCurl())">Copiar</button>
+            </div>
+            <p class="text-muted" style="font-size:11px;margin-top:8px;">
+                La clave se muestra solo aqui; si la regeneras, la anterior deja de funcionar.
+            </p>
+        }
+        </div>
+    </details>
+
+    <h2 style="font-size:1.05rem;font-weight:700;margin:26px 0 12px;">Mis facturas</h2>
+    @if (_payments.Count == 0)
+    {
+        <p class="text-muted">Aun no tienes facturas registradas.</p>
+    }
+    else
+    {
+        <div class="card" style="max-width:1040px;padding:6px 16px;">
+            <table class="table table-hover align-middle" style="margin-bottom:0;">
+                <thead>
+                    <tr><th>Factura</th><th class="text-end">Monto</th><th>Fecha</th><th>Periodo</th><th>Estado</th><th class="text-end">Comprobante</th></tr>
+                </thead>
+                <tbody>
+                    @foreach (var p in _payments)
+                    {
+                        <tr>
+                            <td style="font-family:var(--bs-font-monospace);font-size:12px;">@Reference(p)</td>
+                            <td class="text-end" style="font-weight:600;font-variant-numeric:tabular-nums;">@($"$ {p.Amount:N0}")</td>
+                            <td style="font-size:12px;color:var(--muted-foreground);">@p.CreatedAt.LocalDateTime.ToString("dd MMM yyyy")</td>
+                            <td style="font-size:12px;color:var(--muted-foreground);">@p.BillingPeriodStart.LocalDateTime.ToString("dd MMM") - @p.BillingPeriodEnd.LocalDateTime.ToString("dd MMM yyyy")</td>
+                            <td><span class="badge bg-@PayStatusColor(p.Status)">@p.Status</span></td>
+                            <td class="text-end">
+                                @if (p.Status == PaymentStatus.Approved)
+                                {
+                                    <a class="btn btn-outline-secondary" style="padding:2px 10px;font-size:12px;" href="/comprobante/@p.Id" target="_blank">Descargar</a>
+                                }
+                                else
+                                {
+                                    <span class="text-muted" style="font-size:12px;">-</span>
+                                }
+                            </td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+    }
+
+    <h2 style="font-size:1.05rem;font-weight:700;margin:26px 0 12px;">Acceso y seguridad</h2>
+    <div class="card" style="max-width:1040px;padding:18px 22px;">
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap;">
+            <div>
+                <div style="font-weight:600;">Clave de acceso</div>
+                <div class="text-muted" style="font-size:12px;">Cambia la clave con la que ingresas a la plataforma.</div>
+            </div>
+            <button class="btn btn-outline-secondary" @onclick="OpenPassword">Cambiar clave</button>
+        </div>
+    </div>
+}
+
+@if (_pwOpen)
+{
+    <div class="modal-overlay">
+        <div class="modal-dialog">
+            <div class="modal-head">
+                <h3>Cambiar clave</h3>
+                <button class="modal-close" @onclick="() => _pwOpen = false">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div class="field">
+                    <label class="form-label">Clave actual</label>
+                    <input class="form-control" type="password" @bind="_pwCurrent" autocomplete="current-password" />
+                </div>
+                <div class="field">
+                    <label class="form-label">Nueva clave</label>
+                    <input class="form-control" type="password" @bind="_pwNew" autocomplete="new-password" />
+                </div>
+                <div class="field">
+                    <label class="form-label">Confirma la nueva clave</label>
+                    <input class="form-control" type="password" @bind="_pwConfirm" autocomplete="new-password" />
+                </div>
+                @if (_pwError is not null)
+                {
+                    <div class="text-danger small">@_pwError</div>
+                }
+            </div>
+            <div class="modal-foot">
+                <button class="btn btn-outline-secondary" @onclick="() => _pwOpen = false">Cancelar</button>
+                <button class="btn btn-primary" @onclick="ChangePasswordAsync" disabled="@_pwBusy">Guardar clave</button>
+            </div>
+        </div>
+    </div>
+}
+
+@if (_profileOpen)
+{
+    <div class="modal-overlay">
+        <div class="modal-dialog">
+            <div class="modal-head">
+                <h3>Datos de la empresa</h3>
+                <button class="modal-close" @onclick="CloseProfile">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div class="field">
+                    <label class="form-label">Logo</label>
+                    <div style="display:flex;align-items:center;gap:14px;">
+                        @if (_logoPreview is { } prev)
+                        {
+                            <img src="@prev" alt="Logo" class="acct-logo" />
+                        }
+                        else if (_tenant?.LogoUrl is { } cur)
+                        {
+                            <img src="@cur" alt="Logo" class="acct-logo" />
+                        }
+                        else
+                        {
+                            <div class="acct-logo acct-logo-empty">@Initials(_pf.Name)</div>
+                        }
+                        <InputFile OnChange="OnLogoSelected" accept="image/png,image/jpeg,image/webp" class="form-control" style="max-width:320px;" />
+                    </div>
+                    <div class="text-muted" style="font-size:11px;margin-top:6px;">PNG, JPG o WEBP, maximo 2 MB.</div>
+                </div>
+                <div class="field">
+                    <label class="form-label">Nombre para mostrar</label>
+                    <input class="form-control" @bind="_pf.Name" />
+                </div>
+                <div class="field-row">
+                    <div class="field">
+                        <label class="form-label">Razon social</label>
+                        <input class="form-control" @bind="_pf.LegalName" />
+                    </div>
+                    <div class="field">
+                        <label class="form-label">NIT / Tax ID</label>
+                        <input class="form-control" @bind="_pf.TaxId" />
+                    </div>
+                </div>
+                <div class="field-row">
+                    <div class="field">
+                        <label class="form-label">Pais</label>
+                        <input class="form-control" @bind="_pf.Country" />
+                    </div>
+                    <div class="field">
+                        <label class="form-label">Moneda</label>
+                        <input class="form-control" @bind="_pf.Currency" />
+                    </div>
+                </div>
+                @if (_profileError is not null)
+                {
+                    <div class="text-danger small">@_profileError</div>
+                }
+            </div>
+            <div class="modal-foot">
+                <button class="btn btn-outline-secondary" @onclick="CloseProfile">Cancelar</button>
+                <button class="btn btn-primary" @onclick="SaveProfileAsync" disabled="@(_profileBusy || string.IsNullOrWhiteSpace(_pf.Name))">Guardar datos</button>
+            </div>
+        </div>
+    </div>
+}
+
+@if (_autoOpen)
+{
+    <div class="modal-overlay">
+        <div class="modal-dialog">
+            <div class="modal-head">
+                <h3>Activar debito automatico</h3>
+                <button class="modal-close" @onclick="CloseAutoDebit">&times;</button>
+            </div>
+            <div class="modal-body">
+                <p class="text-muted" style="font-size:12px;margin-top:0;">
+                    Tu tarjeta se valida directo con Wompi; CUBOT nunca guarda el numero. (Modo pruebas: usa 4242 4242 4242 4242.)
+                </p>
+                <div class="field">
+                    <label class="form-label">Nombre en la tarjeta</label>
+                    <input id="cc-name" class="form-control" autocomplete="off" />
+                </div>
+                <div class="field">
+                    <label class="form-label">Numero de tarjeta</label>
+                    <input id="cc-number" class="form-control" inputmode="numeric" autocomplete="off" placeholder="4242 4242 4242 4242" />
+                </div>
+                <div class="field-row">
+                    <div class="field">
+                        <label class="form-label">Mes (MM)</label>
+                        <input id="cc-mm" class="form-control" inputmode="numeric" autocomplete="off" placeholder="12" />
+                    </div>
+                    <div class="field">
+                        <label class="form-label">Año (YY)</label>
+                        <input id="cc-yy" class="form-control" inputmode="numeric" autocomplete="off" placeholder="29" />
+                    </div>
+                    <div class="field">
+                        <label class="form-label">CVC</label>
+                        <input id="cc-cvc" class="form-control" inputmode="numeric" autocomplete="off" placeholder="123" />
+                    </div>
+                </div>
+                @if (_autoError is not null)
+                {
+                    <div class="text-danger small">@_autoError</div>
+                }
+            </div>
+            <div class="modal-foot">
+                <button class="btn btn-outline-secondary" @onclick="CloseAutoDebit">Cancelar</button>
+                <button class="btn btn-primary" @onclick="ActivateAutoDebit" disabled="@_autoBusy">@(_autoBusy ? "Guardando..." : "Guardar y activar")</button>
+            </div>
+        </div>
+    </div>
+}
+
+@if (_changeOpen)
+{
+    <div class="modal-overlay">
+        <div class="modal-dialog">
+            <div class="modal-head">
+                <h3>Cambiar de plan</h3>
+                <button class="modal-close" @onclick="CloseChange">&times;</button>
+            </div>
+            <div class="modal-body">
+                @if (_plans.Count == 0)
+                {
+                    <p class="text-muted">No hay planes disponibles.</p>
+                }
+                else
+                {
+                    <div class="field">
+                        <label class="form-label">Plan</label>
+                        <select class="form-control" @bind="_changePlanId">
+                            @foreach (var p in _plans)
+                            {
+                                <option value="@p.Id">@p.Name</option>
+                            }
+                        </select>
+                    </div>
+                    <div class="field">
+                        <label class="form-label">Frecuencia de cobro</label>
+                        <select class="form-control" @bind="_changeFreq">
+                            <option value="@BillingFrequency.Monthly">Mensual</option>
+                            <option value="@BillingFrequency.Yearly">Anual</option>
+                        </select>
+                    </div>
+                    <p class="text-muted" style="font-size:12px;">El cambio aplica de inmediato. Si subes a un plan mayor se cobra el plan nuevo completo ya y la fecha de corte se reinicia a hoy. Si bajas a un plan menor no se cobra nada ahora y conservas tu fecha de corte actual; el nuevo valor aplica en la proxima renovacion.</p>
+                }
+                @if (_changeError is not null)
+                {
+                    <div class="text-danger small">@_changeError</div>
+                }
+            </div>
+            <div class="modal-foot">
+                <button class="btn btn-outline-secondary" @onclick="CloseChange">Cancelar</button>
+                <button class="btn btn-primary" @onclick="ConfirmChangeAsync" disabled="@(_changeBusy || _plans.Count == 0)">Confirmar cambio</button>
+            </div>
+        </div>
+    </div>
+}
+
+@code {
+    [CascadingParameter] private Task<AuthenticationState>? AuthState { get; set; }
+
+    private List<PlanDetail> _plans = new();
+    private Guid _tenantId;
+    private bool _loading = true;
+
+    private SubscriptionDetail? _sub;
+    private PlanDetail? _plan;
+    private List<PaymentDetail> _payments = new();
+    private TenantDetail? _tenant;
+    private TenantApiConfigDto? _api;
+    private bool _apiBusy;
+
+    private bool _profileOpen;
+    private bool _profileBusy;
+    private string? _profileError;
+    private IBrowserFile? _logoFile;
+    private string? _logoPreview;
+    private readonly ProfileForm _pf = new();
+
+    private bool _pwOpen;
+    private bool _pwBusy;
+    private string? _pwError;
+    private string _pwCurrent = "";
+    private string _pwNew = "";
+    private string _pwConfirm = "";
+
+    private bool _changeOpen;
+    private bool _changeBusy;
+    private string? _changeError;
+    private string? _changeInfo;
+    private bool _changeInfoOk;
+    private Guid _changePlanId;
+    private BillingFrequency _changeFreq = BillingFrequency.Monthly;
+
+    protected override async Task OnInitializedAsync()
+    {
+        _plans = (await PlansSvc.ListAsync()).ToList();
+
+        if (AuthState is not null)
+        {
+            var state = await AuthState;
+            _userEmail = state.User.FindFirst(ClaimTypes.Email)?.Value;
+            if (Guid.TryParse(state.User.FindFirst("tenant_id")?.Value, out var tid))
+            {
+                _tenantId = tid;
+            }
+        }
+
+        await ReloadAsync();
+    }
+
+    private async Task ReloadAsync()
+    {
+        _loading = true;
+        if (_tenantId == Guid.Empty)
+        {
+            _sub = null; _plan = null; _payments = new(); _tenant = null;
+            _loading = false;
+            return;
+        }
+        _tenant = await TenantsSvc.GetAsync(_tenantId);
+        _sub = (await SubsSvc.ListByTenantAsync(_tenantId)).FirstOrDefault();
+        _plan = _sub is null ? null : _plans.FirstOrDefault(p => p.Id == _sub.PlanId);
+        _payments = (await PaymentsSvc.ListAsync(_tenantId)).ToList();
+        _api = await TenantApiSvc.GetAsync(_tenantId);
+        _loading = false;
+    }
+
+    private async Task RegenerateApiKeyAsync()
+    {
+        _apiBusy = true;
+        try { _api = await TenantApiSvc.RegenerateAsync(_tenantId, await ActorAsync()); }
+        finally { _apiBusy = false; }
+    }
+
+    private async Task ToggleApiAsync()
+    {
+        if (_api is null || !_api.HasKey) { return; }
+        _apiBusy = true;
+        try { _api = await TenantApiSvc.SetEnabledAsync(_tenantId, !_api.IsEnabled, await ActorAsync()) ?? _api; }
+        finally { _apiBusy = false; }
+    }
+
+    private async Task Copy(string text)
+    {
+        try { await JS.InvokeVoidAsync("navigator.clipboard.writeText", text); } catch { }
+    }
+
+    private string ApiCurl()
+    {
+        var baseUrl = Nav.BaseUri.TrimEnd('/');
+        var key = _api?.ApiKey ?? "TU_API_KEY";
+
+        var sb = new System.Text.StringBuilder();
+        sb.Append($"curl -X POST {baseUrl}/api/public/ping \\\n");
+        sb.Append($"  -H \"X-Api-Key: {key}\" \\\n");
+        sb.Append("  -H \"Content-Type: application/json\" \\\n");
+        sb.Append("  -d '{ \"message\": \"hola desde un sistema externo\" }'");
+        return sb.ToString();
+    }
+
+    private void OpenChange()
+    {
+        _changeError = null;
+        _changePlanId = _sub?.PlanId ?? _plans.FirstOrDefault()?.Id ?? Guid.Empty;
+        _changeFreq = _sub?.BillingFrequency ?? BillingFrequency.Monthly;
+        _changeOpen = true;
+    }
+
+    private void CloseChange() => _changeOpen = false;
+
+    private void OpenPassword()
+    {
+        _pwError = null;
+        _pwCurrent = _pwNew = _pwConfirm = "";
+        _pwOpen = true;
+    }
+
+    private async Task ChangePasswordAsync()
+    {
+        _pwError = null;
+        if (_pwNew != _pwConfirm)
+        {
+            _pwError = "Las claves nuevas no coinciden.";
+            return;
+        }
+        _pwBusy = true;
+        try
+        {
+            var actor = await ActorAsync();
+            var result = await AuthSvc.ChangePasswordAsync(actor, _pwCurrent, _pwNew);
+            if (!result.Ok)
+            {
+                _pwError = result.Error ?? "No se pudo cambiar la clave.";
+                return;
+            }
+            _pwOpen = false;
+        }
+        finally
+        {
+            _pwBusy = false;
+        }
+    }
+
+    private async Task ConfirmChangeAsync()
+    {
+        _changeError = null;
+        _changeBusy = true;
+        try
+        {
+            if (_changePlanId == Guid.Empty)
+            {
+                _changeError = "Selecciona un plan.";
+                return;
+            }
+            var actor = await ActorAsync();
+            var result = await SubsSvc.ChangePlanAsync(_tenantId, _changePlanId, _changeFreq, actor);
+            if (result is null)
+            {
+                _changeError = "No se pudo cambiar el plan.";
+                return;
+            }
+            _changeInfo = result.Message;
+            _changeInfoOk = !result.RequiresPayment;
+            _changeOpen = false;
+            await ReloadAsync();
+        }
+        catch (Exception ex)
+        {
+            _changeError = ex.Message;
+        }
+        finally
+        {
+            _changeBusy = false;
+        }
+    }
+
+    private void OpenProfile()
+    {
+        _profileError = null;
+        _logoFile = null;
+        _logoPreview = null;
+        _pf.Name = _tenant?.Name ?? string.Empty;
+        _pf.LegalName = _tenant?.LegalName;
+        _pf.TaxId = _tenant?.TaxId;
+        _pf.Country = _tenant?.Country;
+        _pf.Currency = _tenant?.Currency;
+        _profileOpen = true;
+    }
+
+    private void CloseProfile() => _profileOpen = false;
+
+    private async Task OnLogoSelected(InputFileChangeEventArgs e)
+    {
+        _profileError = null;
+        var file = e.File;
+        var allowed = new[] { "image/png", "image/jpeg", "image/webp" };
+        if (!allowed.Contains(file.ContentType))
+        {
+            _profileError = "Formato no permitido (usa PNG, JPG o WEBP).";
+            return;
+        }
+        if (file.Size > 2 * 1024 * 1024)
+        {
+            _profileError = "El logo no debe superar 2 MB.";
+            return;
+        }
+        _logoFile = file;
+        using var ms = new MemoryStream();
+        await file.OpenReadStream(2 * 1024 * 1024).CopyToAsync(ms);
+        _logoPreview = $"data:{file.ContentType};base64,{Convert.ToBase64String(ms.ToArray())}";
+    }
+
+    private async Task SaveProfileAsync()
+    {
+        _profileError = null;
+        _profileBusy = true;
+        try
+        {
+            var logoUrl = _tenant?.LogoUrl;
+            if (_logoFile is not null)
+            {
+                var ext = _logoFile.ContentType switch
+                {
+                    "image/jpeg" => ".jpg",
+                    "image/webp" => ".webp",
+                    _ => ".png"
+                };
+                var fileName = $"tenant-{_tenantId}{ext}";
+                var dir = Path.Combine(Env.WebRootPath, "uploads");
+                Directory.CreateDirectory(dir);
+                var path = Path.Combine(dir, fileName);
+                await using (var fs = File.Create(path))
+                await using (var rs = _logoFile.OpenReadStream(2 * 1024 * 1024))
+                {
+                    await rs.CopyToAsync(fs);
+                }
+                logoUrl = $"/uploads/{fileName}?v={DateTimeOffset.UtcNow.Ticks}";
+            }
+
+            var actor = await ActorAsync();
+            var request = new UpdateTenantProfileRequest(_pf.Name, _pf.LegalName, _pf.TaxId, _pf.Country, _pf.Currency, logoUrl);
+            var result = await TenantsSvc.UpdateProfileAsync(_tenantId, request, actor);
+            if (result is null)
+            {
+                _profileError = "No se pudieron guardar los datos.";
+                return;
+            }
+            _tenant = result;
+            _logoFile = null;
+            _logoPreview = null;
+            _profileOpen = false;
+        }
+        catch (Exception ex)
+        {
+            _profileError = ex.Message;
+        }
+        finally
+        {
+            _profileBusy = false;
+        }
+    }
+
+    private static string Initials(string? name)
+    {
+        if (string.IsNullOrWhiteSpace(name)) return "??";
+        var parts = name.Trim().Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        return parts.Length == 1
+            ? parts[0][..Math.Min(2, parts[0].Length)].ToUpperInvariant()
+            : $"{parts[0][0]}{parts[1][0]}".ToUpperInvariant();
+    }
+
+    private bool _checkoutBusy;
+    private string? _checkoutError;
+
+    private string? _userEmail;
+    private bool _autoOpen;
+    private bool _autoBusy;
+    private string? _autoError;
+    private string? _autoMsg;
+    private bool _autoOk;
+
+    private void OpenAutoDebit()
+    {
+        _autoError = null;
+        _autoOpen = true;
+    }
+
+    private void CloseAutoDebit() => _autoOpen = false;
+
+    private async Task ActivateAutoDebit()
+    {
+        _autoError = null;
+        _autoBusy = true;
+        try
+        {
+            var cfg = await WompiCfgSvc.GetAsync();
+            if (cfg?.PublicKey is null)
+            {
+                _autoError = "La pasarela Wompi no esta configurada.";
+                return;
+            }
+            var baseUrl = cfg.Environment == WompiEnvironment.Production
+                ? "https://production.wompi.co/v1"
+                : "https://sandbox.wompi.co/v1";
+
+            var tk = await JS.InvokeAsync<TokenizeResult>("cubotTokenizeCard", baseUrl, cfg.PublicKey);
+            if (tk is null || !tk.Ok || string.IsNullOrEmpty(tk.Token))
+            {
+                _autoError = tk?.Error ?? "No se pudo validar la tarjeta.";
+                return;
+            }
+
+            var email = string.IsNullOrWhiteSpace(_userEmail) ? "billing@cubot.redmanager" : _userEmail!;
+            var actor = await ActorAsync();
+            var result = await RecurringSvc.EnableAutoRenewAsync(_tenantId, tk.Token!, email, actor);
+            if (!result.Ok)
+            {
+                _autoError = result.Error ?? "No se pudo activar el debito automatico.";
+                return;
+            }
+            _autoOpen = false;
+            _autoOk = true;
+            _autoMsg = $"Debito automatico activado con {result.Label ?? "tu tarjeta"}.";
+            await ReloadAsync();
+        }
+        catch (Exception ex)
+        {
+            _autoError = ex.Message;
+        }
+        finally
+        {
+            _autoBusy = false;
+        }
+    }
+
+    private async Task ChargeNow()
+    {
+        _autoMsg = null;
+        _autoBusy = true;
+        try
+        {
+            var actor = await ActorAsync();
+            var result = await RecurringSvc.ChargeNowAsync(_tenantId, actor);
+            _autoOk = result.Ok;
+            _autoMsg = result.Ok
+                ? $"Cobro enviado a Wompi (estado: {result.Label}). La confirmacion se aplica automaticamente."
+                : $"No se pudo cobrar: {result.Error}";
+            await ReloadAsync();
+        }
+        catch (Exception ex)
+        {
+            _autoOk = false;
+            _autoMsg = ex.Message;
+        }
+        finally
+        {
+            _autoBusy = false;
+        }
+    }
+
+    private async Task DisableAutoDebit()
+    {
+        _autoBusy = true;
+        try
+        {
+            var actor = await ActorAsync();
+            await RecurringSvc.DisableAutoRenewAsync(_tenantId, actor);
+            _autoOk = true;
+            _autoMsg = "Debito automatico desactivado.";
+            await ReloadAsync();
+        }
+        finally
+        {
+            _autoBusy = false;
+        }
+    }
+
+    private sealed class TokenizeResult
+    {
+        public bool Ok { get; set; }
+        public string? Token { get; set; }
+        public string? Error { get; set; }
+    }
+
+    private async Task PayNow()
+    {
+        _checkoutError = null;
+        _checkoutBusy = true;
+        try
+        {
+            var actor = await ActorAsync();
+            var returnUrl = $"{Nav.BaseUri}cuenta";
+            var result = await CheckoutSvc.CreateSubscriptionCheckoutAsync(_tenantId, returnUrl, actor);
+            if (!result.Ok || result.CheckoutUrl is null)
+            {
+                _checkoutError = result.Error ?? "No se pudo generar el cobro.";
+                return;
+            }
+            await ReloadAsync();
+            await JS.InvokeVoidAsync("open", result.CheckoutUrl, "_blank");
+        }
+        catch (Exception ex)
+        {
+            _checkoutError = ex.Message;
+        }
+        finally
+        {
+            _checkoutBusy = false;
+        }
+    }
+
+    private async Task<Guid> ActorAsync()
+    {
+        if (AuthState is null) return Guid.Empty;
+        var state = await AuthState;
+        return Guid.TryParse(state.User.FindFirst(ClaimTypes.NameIdentifier)?.Value, out var id) ? id : Guid.Empty;
+    }
+
+    private static decimal Price(PlanDetail p, BillingFrequency freq) =>
+        (freq == BillingFrequency.Yearly ? p.YearlyPrice : p.MonthlyPrice) ?? 0m;
+
+    private static string FreqText(BillingFrequency freq) => freq == BillingFrequency.Yearly ? "ano" : "mes";
+
+    private static string FriendlyLimit(PlanLimitDto l) => l.LimitKey switch
+    {
+        "max_users" => $"{l.LimitValue} usuarios",
+        "max_whatsapp_lines" => $"{l.LimitValue} lineas WhatsApp",
+        "max_ai_tokens_monthly" => $"{l.LimitValue:N0} llamadas IA",
+        _ => $"{l.LimitValue:N0} {l.LimitKey}"
+    };
+
+    private static string Reference(PaymentDetail p) =>
+        string.IsNullOrWhiteSpace(p.ProviderReference) ? $"PG-{p.Id.ToString()[..8]}" : p.ProviderReference!;
+
+    private static string SubStatusColor(SubscriptionStatus status) => status switch
+    {
+        SubscriptionStatus.Active => "success",
+        SubscriptionStatus.Trialing => "info",
+        SubscriptionStatus.PendingPayment or SubscriptionStatus.PastDue or SubscriptionStatus.GracePeriod => "warning",
+        SubscriptionStatus.Suspended or SubscriptionStatus.Cancelled => "danger",
+        _ => "secondary"
+    };
+
+    private static string PayStatusColor(PaymentStatus status) => status switch
+    {
+        PaymentStatus.Approved => "success",
+        PaymentStatus.Pending or PaymentStatus.NeedsReview => "warning",
+        PaymentStatus.Declined or PaymentStatus.Voided or PaymentStatus.Error => "danger",
+        _ => "secondary"
+    };
+
+    private sealed class ProfileForm
+    {
+        public string Name { get; set; } = string.Empty;
+        public string? LegalName { get; set; }
+        public string? TaxId { get; set; }
+        public string? Country { get; set; }
+        public string? Currency { get; set; }
+    }
+}

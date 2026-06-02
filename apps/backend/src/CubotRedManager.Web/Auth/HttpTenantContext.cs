@@ -11,16 +11,21 @@ namespace CubotRedManager.Web.Auth;
 public sealed class HttpTenantContext : ITenantProvider, ITenantContext
 {
     private readonly IHttpContextAccessor _accessor;
+    private readonly IAmbientTenantOverride _ambient;
 
-    public HttpTenantContext(IHttpContextAccessor accessor) => _accessor = accessor;
+    public HttpTenantContext(IHttpContextAccessor accessor, IAmbientTenantOverride ambient)
+    {
+        _accessor = accessor;
+        _ambient = ambient;
+    }
 
     private ClaimsPrincipal? User => _accessor.HttpContext?.User;
 
     public Guid? CurrentTenantId => TenantId;
 
     public Guid? TenantId =>
-        Guid.TryParse(User?.FindFirst("tenant_id")?.Value, out var id) ? id : null;
+        _ambient.TenantId ?? (Guid.TryParse(User?.FindFirst("tenant_id")?.Value, out var id) ? id : null);
 
     public Guid? UserId =>
-        Guid.TryParse(User?.FindFirst(ClaimTypes.NameIdentifier)?.Value, out var id) ? id : null;
+        _ambient.UserId ?? (Guid.TryParse(User?.FindFirst(ClaimTypes.NameIdentifier)?.Value, out var id) ? id : null);
 }

@@ -1,0 +1,435 @@
+@page "/tiktok/videos"
+@attribute [Authorize(Policy = AppPolicies.TenantMember)]
+@rendermode InteractiveServer
+@using System.Security.Claims
+@using CubotRedManager.Application.Tenancy
+@using CubotRedManager.Domain.Enums
+@inject ITikTokSyncService SyncSvc
+@inject ISocialAccountService AccountsSvc
+@inject IInboxService InboxSvc
+@inject AuthenticationStateProvider AuthProvider
+@inject IJSRuntime JS
+
+<PageTitle>Videos TikTok - CUBOT.redmanager</PageTitle>
+
+<div class="module-head">
+    <div>
+        <div class="module-eyebrow">
+            <div class="module-icon">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 12a4 4 0 1 0 4 4V4a5 5 0 0 0 5 5"/></svg>
+            </div>
+            <span>TikTok Manager</span>
+        </div>
+        <h1 class="page-title" style="margin-top:12px;">Videos sincronizados</h1>
+        <p class="page-sub" style="margin-bottom:0;">Videos descargados de TikTok por cuenta. Los comentarios alimentan el Pipeline.</p>
+    </div>
+</div>
+
+@if (_loading) { <p class="text-muted">Cargando...</p> }
+else if (_accounts.Count == 0)
+{
+    <div class="coming-soon" style="max-width:760px;">
+        <h3>Sin cuentas TikTok conectadas</h3>
+        <p>Primero <a href="/tiktok/cuentas">conecta una cuenta</a>.</p>
+    </div>
+}
+else
+{
+@* Header de stats *@
+@if (_stats is not null)
+{
+<div class="tk-stats">
+    <div class="tk-stat">
+        <div class="tk-stat-ic" style="background:#dbeafe;color:#1d4ed8;">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="23 7 16 12 23 17 23 7"/><rect x="1" y="5" width="15" height="14" rx="2"/></svg>
+        </div>
+        <div><div class="tk-stat-lbl">Videos</div><div class="tk-stat-val">@_stats.TotalVideos</div></div>
+    </div>
+    <div class="tk-stat">
+        <div class="tk-stat-ic" style="background:#f3e8ff;color:#7c3aed;">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+        </div>
+        <div><div class="tk-stat-lbl">Comentarios</div><div class="tk-stat-val">@_stats.TotalComments</div></div>
+    </div>
+    <div class="tk-stat">
+        <div class="tk-stat-ic" style="background:#fef3c7;color:#a16207;">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12a9 9 0 1 0 9-9"/><path d="M3 4v5h5"/></svg>
+        </div>
+        <div><div class="tk-stat-lbl">Pendientes</div><div class="tk-stat-val">@_stats.PendingComments</div></div>
+    </div>
+    <div class="tk-stat">
+        <div class="tk-stat-ic" style="background:#dcfce7;color:#15803d;">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg>
+        </div>
+        <div><div class="tk-stat-lbl">Respondidos</div><div class="tk-stat-val">@_stats.RepliedComments</div></div>
+    </div>
+</div>
+}
+
+<div class="tk-sync-bar" style="margin-top:18px;">
+    <div class="field" style="flex:1; margin:0; min-width:200px;">
+        <label class="form-label">Cuenta</label>
+        <select class="form-control" @bind="_selectedAccount" @bind:after="OnAccountChanged">
+            @foreach (var a in _accounts) { <option value="@a.Id">@(string.IsNullOrEmpty(a.Handle) ? a.ClientName : "@" + a.Handle)</option> }
+        </select>
+    </div>
+    <div class="field" style="flex:1; margin:0; min-width:160px;">
+        <label class="form-label">Buscar (caption / id)</label>
+        <input class="form-control" @bind="_textFilter" @bind:after="Reload" placeholder="Texto..." />
+    </div>
+    <div class="field" style="width:110px; margin:0;">
+        <label class="form-label">Max videos</label>
+        <input type="number" min="1" max="500" class="form-control" @bind="_maxVideos" />
+    </div>
+    <div style="display:flex; gap:8px; align-self:flex-end; flex-wrap:wrap;">
+        <button class="btn @(_onlyWithPending ? "btn-warning" : "btn-outline-secondary")" @onclick="TogglePending">
+            @(_onlyWithPending ? "Mostrando solo pendientes" : "Solo con pendientes")
+            @if (_stats?.PendingComments > 0) { <span class="badge bg-warning" style="margin-left:6px;">@_stats.PendingComments</span> }
+        </button>
+        <button class="btn btn-outline-secondary" @onclick="SyncVideos" disabled="@_busy">@(_busy && _stage == "v" ? "..." : "1. Videos")</button>
+        <button class="btn btn-outline-secondary" @onclick="SyncComments" disabled="@_busy">@(_busy && _stage == "c" ? "..." : "2. Comentarios")</button>
+        <button class="btn btn-primary" @onclick="SyncAll" disabled="@_busy">@(_busy && _stage == "a" ? "Sincronizando..." : "Sincronizar todo")</button>
+    </div>
+</div>
+
+@if (_lastResult is not null)
+{
+<div class="card cx-card" style="margin-top:18px;">
+    <div class="cx-trace-head">
+        <h3 class="cx-h" style="margin:0;">Ultima sincronizacion</h3>
+        <span class="cx-overall @(_lastResult.Success ? "cx-ov-ok" : "cx-ov-fail")">
+            @(_lastResult.Success ? "OK" : "Con errores") · @_lastResult.TotalChanges cambios
+        </span>
+    </div>
+    <div class="tk-sync-stats">
+        <span><b>@_lastResult.VideosInserted</b> videos nuevos</span>
+        <span><b>@_lastResult.VideosUpdated</b> videos actualizados</span>
+        <span><b>@_lastResult.CommentsInserted</b> comentarios nuevos</span>
+        <span><b>@_lastResult.CommentsUpdated</b> comentarios actualizados</span>
+        <span><b>@_lastResult.RepliesInserted</b> replies</span>
+        @if (_lastResult.Errors > 0) { <span class="text-danger"><b>@_lastResult.Errors</b> errores</span> }
+    </div>
+    <pre class="cx-trace" style="margin-top:14px;">@_lastResult.Trace</pre>
+</div>
+}
+
+<div class="card cx-card" style="margin-top:18px;">
+    <h3 class="cx-h" style="margin:0 0 14px;">Videos (@_videos.Count)</h3>
+    @if (_videos.Count == 0)
+    {
+        <p class="text-muted" style="margin:0;">@(_onlyWithPending ? "No hay videos con comentarios pendientes." : "Aun no hay videos sincronizados. Pulsa \"Sincronizar todo\".")</p>
+    }
+    else
+    {
+    <div class="tk-vid-grid">
+        @foreach (var v in _videos)
+        {
+            <div class="tk-vid-card" @onclick="() => OpenDetail(v)" role="button">
+                <div class="tk-vid-thumb" style="@(string.IsNullOrEmpty(v.ThumbnailUrl) ? "" : $"background-image:url('{v.ThumbnailUrl}');")">
+                    @if (string.IsNullOrEmpty(v.ThumbnailUrl))
+                    {
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><polygon points="23 7 16 12 23 17 23 7"/><rect x="1" y="5" width="15" height="14" rx="2"/></svg>
+                    }
+                    @if (v.PendingCount > 0)
+                    {
+                        <span class="tk-vid-pending">@v.PendingCount pend.</span>
+                    }
+                </div>
+                <div class="tk-vid-body">
+                    <p class="tk-vid-title">@(string.IsNullOrEmpty(v.Caption) ? v.ExternalId : v.Caption)</p>
+                    <div class="tk-vid-meta">
+                        <span title="Comentarios en TikTok">💬 @v.CommentCount</span>
+                        <span title="Likes">❤ @v.LikeCount</span>
+                        <span title="Vistas">👁 @v.ViewCount</span>
+                    </div>
+                    <div class="tk-vid-meta" style="margin-top:6px;">
+                        <span class="text-muted" style="font-size:11px;">@(v.PublishedAt?.LocalDateTime.ToString("dd MMM yyyy") ?? "—")</span>
+                        @if (v.LocalCommentCount > 0)
+                        {
+                            <span class="cx-tag" style="background:#dbeafe;color:#1d4ed8;">@v.LocalCommentCount en BD</span>
+                        }
+                    </div>
+                </div>
+            </div>
+        }
+    </div>
+    }
+</div>
+
+@* Modal Detalle del video *@
+@if (_detailOpen && _detailVideo is not null)
+{
+<div class="tk-modal-bd" @onclick="CloseDetail">
+    <div class="tk-detail" @onclick:stopPropagation>
+        <div class="tk-detail-head">
+            <div style="flex:1; min-width:0;">
+                <div class="tk-detail-eyebrow">Video TikTok · @_detailVideo.ExternalId</div>
+                <h3>@(string.IsNullOrEmpty(_detailVideo.Caption) ? "Sin titulo" : _detailVideo.Caption)</h3>
+                <div class="tk-detail-meta">
+                    <span>💬 @_detailVideo.CommentCount</span>
+                    <span>❤ @_detailVideo.LikeCount</span>
+                    <span>👁 @_detailVideo.ViewCount</span>
+                    <span class="text-muted">@(_detailVideo.PublishedAt?.LocalDateTime.ToString("dd MMM yyyy HH:mm") ?? "—")</span>
+                    @if (!string.IsNullOrEmpty(_detailVideo.ShareUrl)) { <a href="@_detailVideo.ShareUrl" target="_blank" class="btn btn-sm btn-outline-dark" style="margin-left:auto;">Ver en TikTok</a> }
+                </div>
+            </div>
+            <button class="tk-modal-close" @onclick="CloseDetail">&times;</button>
+        </div>
+        <div class="tk-detail-actions">
+            <button class="btn btn-sm btn-outline-secondary" @onclick="ResyncVideo" disabled="@_busy">@(_busy && _stage == "rv" ? "Re-sincronizando..." : "Re-sincronizar comentarios")</button>
+            <span class="text-muted" style="font-size:12px;">@_detailRoots.Count comentarios raiz · @_detailAllComments.Count totales</span>
+        </div>
+        @if (_detailError is not null) { <div class="alert alert-danger" style="margin:10px 22px;">@_detailError</div> }
+        <div class="tk-detail-body">
+            @if (_detailRoots.Count == 0)
+            {
+                <p class="text-muted" style="margin:20px;">Este video aun no tiene comentarios sincronizados en BD.</p>
+            }
+            else
+            {
+                @foreach (var root in _detailRoots)
+                {
+                    var replies = _detailReplies.TryGetValue(root.Id, out var rs) ? rs : new List<InboxMessageDto>();
+                    <div class="tk-thread">
+                        <div class="tk-thread-head">
+                            <div class="tk-thread-avatar">@(string.IsNullOrEmpty(root.AuthorName) ? "?" : root.AuthorName![..1].ToUpperInvariant())</div>
+                            <div style="flex:1; min-width:0;">
+                                <div>
+                                    <b>@root.AuthorName</b>
+                                    <span class="text-muted" style="font-size:11px; margin-left:8px;">@root.ReceivedAt.LocalDateTime.ToString("dd MMM HH:mm")</span>
+                                    <span class="badge bg-@StatusColor(root.Status)" style="margin-left:8px;">@StatusText(root.Status)</span>
+                                </div>
+                                <p style="margin:6px 0 0; color:#374151;">@root.Body</p>
+                            </div>
+                        </div>
+                        @if (replies.Count > 0)
+                        {
+                            <div class="tk-thread-replies">
+                                @foreach (var r in replies)
+                                {
+                                    <div class="tk-thread-reply">
+                                        <div class="tk-thread-avatar" style="width:24px; height:24px; font-size:10px;">@(string.IsNullOrEmpty(r.AuthorName) ? "?" : r.AuthorName![..1].ToUpperInvariant())</div>
+                                        <div style="flex:1; min-width:0;">
+                                            <div><b>@r.AuthorName</b><span class="text-muted" style="font-size:10px; margin-left:6px;">@r.ReceivedAt.LocalDateTime.ToString("dd MMM HH:mm")</span></div>
+                                            <p style="margin:3px 0 0; color:#374151; font-size:13px;">@r.Body</p>
+                                        </div>
+                                    </div>
+                                }
+                            </div>
+                        }
+                        @if (_replyingTo == root.Id)
+                        {
+                            <div class="tk-thread-reply-form">
+                                <textarea class="form-control" rows="2" @bind="_replyText" placeholder="Responder en TikTok..."></textarea>
+                                <div style="display:flex; gap:6px; justify-content:flex-end; margin-top:6px;">
+                                    <button class="btn btn-sm" @onclick="() => _replyingTo = null">Cancelar</button>
+                                    <button class="btn btn-sm btn-primary" @onclick="() => SendReply(root)" disabled="@_busy">@(_busy && _stage == "rep" ? "Enviando..." : "Publicar en TikTok")</button>
+                                </div>
+                            </div>
+                        }
+                        else if (root.Status != InboxStatus.Replied)
+                        {
+                            <button class="btn btn-sm btn-outline-primary tk-thread-reply-btn" @onclick="() => StartReply(root)">Responder</button>
+                        }
+                    </div>
+                }
+            }
+        </div>
+    </div>
+</div>
+}
+}
+
+<style>
+    .tk-stats { display:grid; grid-template-columns: repeat(4, 1fr); gap:14px; }
+    @@media (max-width: 900px){ .tk-stats { grid-template-columns: repeat(2, 1fr); } }
+    .tk-stat { background:#fff; border:1px solid var(--border); border-radius:14px; padding:16px 18px; display:flex; gap:12px; align-items:center; }
+    .tk-stat-ic { width:40px; height:40px; border-radius:10px; display:flex; align-items:center; justify-content:center; }
+    .tk-stat-ic svg { width:20px; height:20px; }
+    .tk-stat-lbl { font-size:12px; color:var(--muted-foreground); font-weight:600; }
+    .tk-stat-val { font-size:20px; font-weight:700; color:#111827; }
+
+    .tk-sync-bar { display:flex; gap:14px; align-items:flex-end; flex-wrap:wrap; background:#fff; border:1px solid var(--border); border-radius:14px; padding:14px 18px; }
+    .tk-sync-stats { display:flex; gap:18px; flex-wrap:wrap; font-size:13px; color:#374151; }
+
+    .tk-vid-grid { display:grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap:14px; }
+    .tk-vid-card { background:#fff; border:1px solid var(--border); border-radius:12px; overflow:hidden; display:flex; flex-direction:column; cursor:pointer; transition: border-color .15s, transform .1s; }
+    .tk-vid-card:hover { border-color:#A03DC9; transform: translateY(-2px); }
+    .tk-vid-thumb { aspect-ratio: 9/12; background:#111827 center/cover; display:flex; align-items:center; justify-content:center; color:#4b5563; position:relative; }
+    .tk-vid-thumb svg { width:40px; height:40px; }
+    .tk-vid-pending { position:absolute; top:8px; right:8px; background:#f59e0b; color:#fff; font-size:10px; font-weight:700; padding:3px 8px; border-radius:8px; }
+    .tk-vid-body { padding:12px 14px; flex:1; display:flex; flex-direction:column; }
+    .tk-vid-title { font-size:13px; font-weight:600; color:#1f2937; margin:0 0 10px; line-height:1.35; display:-webkit-box; -webkit-line-clamp:3; -webkit-box-orient:vertical; overflow:hidden; }
+    .tk-vid-meta { display:flex; gap:10px; font-size:12px; color:#6b7280; align-items:center; flex-wrap:wrap; }
+
+    .cx-tag { font-size:10px; font-weight:700; padding:2px 7px; border-radius:6px; }
+    .cx-trace { background:#0f172a; color:#cbd5e1; font-size:11px; padding:10px 12px; border-radius:8px; max-height:200px; overflow:auto; white-space:pre-wrap; margin:0; }
+    .cx-trace-head { display:flex; justify-content:space-between; align-items:center; margin-bottom:10px; }
+    .cx-overall { font-size:11px; font-weight:700; padding:4px 10px; border-radius:8px; }
+    .cx-ov-ok { background:#dcfce7; color:#15803d; }
+    .cx-ov-fail { background:#fee2e2; color:#b91c1c; }
+    .field { display:flex; flex-direction:column; }
+
+    /* Modal detalle */
+    .tk-modal-bd { position:fixed; inset:0; background:rgba(0,0,0,.55); backdrop-filter: blur(2px); z-index:50; display:flex; align-items:center; justify-content:center; padding:20px; }
+    .tk-detail { background:#fff; border-radius:18px; width:100%; max-width:780px; max-height:88vh; display:flex; flex-direction:column; box-shadow:0 20px 60px rgba(0,0,0,.3); overflow:hidden; }
+    .tk-detail-head { display:flex; padding:20px 22px; border-bottom:1px solid #f3f4f6; gap:12px; }
+    .tk-detail-eyebrow { font-size:10px; font-weight:700; color:#7c3aed; text-transform:uppercase; letter-spacing:.05em; }
+    .tk-detail-head h3 { margin:6px 0; font-size:17px; font-weight:700; line-height:1.3; }
+    .tk-detail-meta { display:flex; gap:14px; flex-wrap:wrap; font-size:12px; color:#6b7280; align-items:center; }
+    .tk-modal-close { background:none; border:none; font-size:28px; color:#9ca3af; cursor:pointer; line-height:1; padding:0 4px; align-self:flex-start; }
+    .tk-detail-actions { padding:10px 22px; border-bottom:1px solid #f3f4f6; display:flex; justify-content:space-between; align-items:center; }
+    .tk-detail-body { padding:14px 22px 20px; overflow-y:auto; }
+
+    .tk-thread { padding:14px 0; border-bottom:1px solid #f3f4f6; }
+    .tk-thread:last-child { border-bottom:none; }
+    .tk-thread-head { display:flex; gap:10px; align-items:flex-start; }
+    .tk-thread-avatar { width:34px; height:34px; border-radius:50%; background:linear-gradient(135deg,#A03DC9,#C7398B); color:#fff; display:flex; align-items:center; justify-content:center; font-weight:700; font-size:13px; flex-shrink:0; }
+    .tk-thread-replies { margin:10px 0 0 44px; padding-left:14px; border-left:2px solid #e5e7eb; display:flex; flex-direction:column; gap:8px; }
+    .tk-thread-reply { display:flex; gap:8px; align-items:flex-start; background:#f9fafb; padding:8px 10px; border-radius:8px; }
+    .tk-thread-reply-form { margin:10px 0 0 44px; }
+    .tk-thread-reply-btn { margin:8px 0 0 44px; }
+</style>
+
+@code {
+    private bool _loading = true, _busy;
+    private string _stage = "";
+    private Guid _actor;
+    private List<SocialAccountDto> _accounts = new();
+    private List<TikTokVideoDto> _videos = new();
+    private string _selectedAccount = "";
+    private int _maxVideos = 30;
+    private string _textFilter = "";
+    private bool _onlyWithPending;
+    private TikTokSyncResult? _lastResult;
+    private TikTokAccountStats? _stats;
+
+    // Detalle del video
+    private bool _detailOpen;
+    private TikTokVideoDto? _detailVideo;
+    private List<InboxMessageDto> _detailAllComments = new();
+    private List<InboxMessageDto> _detailRoots = new();
+    private Dictionary<Guid, List<InboxMessageDto>> _detailReplies = new();
+    private Guid? _replyingTo;
+    private string _replyText = "";
+    private string? _detailError;
+
+    protected override async Task OnInitializedAsync()
+    {
+        var st = await AuthProvider.GetAuthenticationStateAsync();
+        Guid.TryParse(st.User.FindFirst(ClaimTypes.NameIdentifier)?.Value, out _actor);
+        _accounts = (await AccountsSvc.ListAsync()).Where(a => a.NetworkCode == "tiktok").ToList();
+        if (_accounts.Count > 0) { _selectedAccount = _accounts[0].Id.ToString(); await Reload(); }
+        _loading = false;
+    }
+
+    private async Task OnAccountChanged() => await Reload();
+
+    private async Task Reload()
+    {
+        if (Guid.TryParse(_selectedAccount, out var gid))
+        {
+            _stats = await SyncSvc.GetStatsAsync(gid);
+            _videos = (await SyncSvc.ListVideosAsync(gid, _onlyWithPending, _textFilter)).ToList();
+        }
+    }
+
+    private async Task TogglePending() { _onlyWithPending = !_onlyWithPending; await Reload(); }
+
+    private async Task SyncVideos() => await RunSync("v", id => SyncSvc.SyncVideosAsync(id, _maxVideos, _actor));
+    private async Task SyncComments() => await RunSync("c", id => SyncSvc.SyncCommentsAsync(id, _actor));
+    private async Task SyncAll() => await RunSync("a", id => SyncSvc.SyncAllAsync(id, _maxVideos, _actor));
+
+    private async Task RunSync(string stage, Func<Guid, Task<TikTokSyncResult>> op)
+    {
+        if (!Guid.TryParse(_selectedAccount, out var gid)) { return; }
+        _busy = true; _stage = stage;
+        try
+        {
+            _lastResult = await op(gid);
+            await Reload();
+        }
+        catch (Exception ex)
+        {
+            _lastResult = new TikTokSyncResult(false, 0, 0, 0, 0, 0, 1, "[ERROR] " + ex.Message, ex.Message);
+        }
+        finally { _busy = false; _stage = ""; }
+    }
+
+    private async Task OpenDetail(TikTokVideoDto v)
+    {
+        _detailVideo = v;
+        _detailOpen = true;
+        _detailError = null;
+        _replyingTo = null; _replyText = "";
+        await ReloadDetail();
+    }
+
+    private async Task ReloadDetail()
+    {
+        if (_detailVideo is null) { return; }
+        _detailAllComments = (await InboxSvc.ListCommentsAsync(networkCode: "tiktok",
+            socialAccountId: _detailVideo.SocialAccountId,
+            videoExternalId: _detailVideo.ExternalId)).ToList();
+        _detailRoots = _detailAllComments.Where(c => c.ParentMessageId is null)
+                                          .OrderByDescending(c => c.ReceivedAt).ToList();
+        _detailReplies = _detailAllComments.Where(c => c.ParentMessageId is not null)
+                                            .GroupBy(c => c.ParentMessageId!.Value)
+                                            .ToDictionary(g => g.Key, g => g.OrderBy(c => c.ReceivedAt).ToList());
+    }
+
+    private void CloseDetail() { _detailOpen = false; _detailVideo = null; }
+
+    private async Task ResyncVideo()
+    {
+        if (_detailVideo is null) { return; }
+        _busy = true; _stage = "rv"; _detailError = null;
+        try
+        {
+            var r = await SyncSvc.SyncCommentsForVideoAsync(_detailVideo.SocialAccountId, _detailVideo.ExternalId, _actor);
+            if (!r.Success) { _detailError = r.ErrorMessage ?? "Sync fallido."; }
+            await ReloadDetail();
+            await Reload();
+        }
+        finally { _busy = false; _stage = ""; }
+    }
+
+    private void StartReply(InboxMessageDto root) { _replyingTo = root.Id; _replyText = ""; }
+
+    private async Task SendReply(InboxMessageDto root)
+    {
+        if (string.IsNullOrWhiteSpace(_replyText)) { return; }
+        _busy = true; _stage = "rep"; _detailError = null;
+        try
+        {
+            var r = await InboxSvc.ReplyWithDetailsAsync(root.Id, _replyText, _actor);
+            if (!r.Success)
+            {
+                _detailError = "No se pudo publicar en TikTok: " + (r.Error ?? "error desconocido");
+                return;
+            }
+            _replyingTo = null; _replyText = "";
+            await ReloadDetail();
+            await Reload();
+        }
+        finally { _busy = false; _stage = ""; }
+    }
+
+    private static string StatusText(InboxStatus s) => s switch
+    {
+        InboxStatus.Unread => "Sin leer",
+        InboxStatus.Read => "Leido",
+        InboxStatus.Replied => "Respondido",
+        InboxStatus.Archived => "Archivado",
+        InboxStatus.EscalateToHuman => "Escalado",
+        _ => s.ToString()
+    };
+
+    private static string StatusColor(InboxStatus s) => s switch
+    {
+        InboxStatus.Unread => "warning",
+        InboxStatus.Replied => "success",
+        InboxStatus.Archived => "secondary",
+        _ => "info"
+    };
+}

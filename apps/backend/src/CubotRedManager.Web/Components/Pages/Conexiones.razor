@@ -1,5 +1,294 @@
 @page "/conexiones"
-@attribute [Microsoft.AspNetCore.Authorization.Authorize(Policy = AppPolicies.TenantMember)]
+@attribute [Authorize(Policy = AppPolicies.TenantMember)]
+@rendermode InteractiveServer
+@using System.Security.Claims
+@using CubotRedManager.Application.Tenancy
+@using CubotRedManager.Domain.Enums
+@inject ITikTokConnectionService TikTokSvc
+@inject ISocialAccountService AccountsSvc
+@inject IClientService ClientsSvc
+@inject AuthenticationStateProvider AuthProvider
+@inject IJSRuntime JS
 
-<ModulePlaceholder Eyebrow="Clientes y cuentas" Title="OAuth y conexiones" Phase="Fase 2"
-                   Description="Conexion guiada: elegir cliente, red y autorizar." />
+<PageTitle>OAuth y conexiones - CUBOT.redmanager</PageTitle>
+
+<div class="module-head">
+    <div>
+        <div class="module-eyebrow">
+            <div class="module-icon">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>
+            </div>
+            <span>Clientes y cuentas</span>
+        </div>
+        <h1 class="page-title" style="margin-top:12px;">OAuth y conexiones - TikTok</h1>
+        <p class="page-sub" style="margin-bottom:0;">Conexion guiada via OAuth oficial de TikTok for Business: configura la app, autoriza y canjea el codigo.</p>
+    </div>
+</div>
+
+@if (_loading)
+{
+    <p class="text-muted">Cargando...</p>
+}
+else
+{
+<div class="cx-grid">
+    <!-- Configuracion de la app -->
+    <div class="card cx-card">
+        <h3 class="cx-h">1. App de TikTok del tenant</h3>
+        <p class="cx-help">Credenciales de tu app en el portal de TikTok for Business. El secret se guarda cifrado y nunca se muestra.</p>
+        <div class="field"><label class="form-label">App Key (client_key)</label><input class="form-control" @bind="_clientKey" /></div>
+        <div class="field"><label class="form-label">App Secret (client_secret) @if (_hasSecret){<span class="cx-tag">configurado</span>}</label><input class="form-control" type="password" @bind="_clientSecret" placeholder="@(_hasSecret ? "Dejar vacio para no cambiar" : "")" /></div>
+        <div class="field"><label class="form-label">Redirect URI</label><input class="form-control" @bind="_redirectUri" /></div>
+        <div class="field"><label class="form-label">Scopes</label><input class="form-control" @bind="_scope" /></div>
+        <div style="display:flex; gap:8px; flex-wrap:wrap;">
+            <button class="btn btn-primary" @onclick="SaveConfig" disabled="@_busy">Guardar configuracion</button>
+            <button class="btn btn-outline-secondary" @onclick="Validate" disabled="@_busy">@(_validating ? "Validando..." : "Validar configuracion")</button>
+        </div>
+        @if (_cfgMsg is not null) { <span class="cx-inline-msg">@_cfgMsg</span> }
+    </div>
+
+    <!-- Autorizacion + canje -->
+    <div class="card cx-card">
+        <h3 class="cx-h">2. Autorizar y canjear</h3>
+        <div class="field">
+            <label class="form-label">Cliente (marca)</label>
+            <select class="form-control" @bind="_clientId">
+                <option value="">Selecciona...</option>
+                @foreach (var c in _clients!) { <option value="@c.Id">@c.Name</option> }
+            </select>
+        </div>
+        <button class="btn btn-outline-secondary" @onclick="GenerateUrl" disabled="@_busy">Generar URL OAuth y abrir</button>
+        <p class="cx-help" style="margin-top:10px;">TikTok te devolvera a tu Redirect URI con un parametro <code>code</code>. Copialo y pegalo aqui:</p>
+        <div class="field"><label class="form-label">Auth Code</label><input class="form-control" @bind="_authCode" placeholder="Pega el code de la URL de retorno" /></div>
+        <button class="btn btn-primary" @onclick="Exchange" disabled="@(_busy || string.IsNullOrWhiteSpace(_clientId) || string.IsNullOrWhiteSpace(_authCode))">Canjear Auth Code</button>
+    </div>
+</div>
+
+@* Diagnostico de configuracion *@
+@if (_validation is not null)
+{
+<div class="card cx-card" style="margin-top:18px;">
+    <div class="cx-trace-head">
+        <h3 class="cx-h" style="margin:0;">Diagnostico de configuracion</h3>
+        <span class="cx-overall @(_validation.OverallOk ? "cx-ov-ok" : "cx-ov-fail")">@(_validation.OverallOk ? "Lista para conectar cuentas" : "Hay problemas a resolver")</span>
+    </div>
+    <div class="cx-checks">
+        @foreach (var c in _validation.Checks)
+        {
+            <div class="cx-check @(c.Ok ? "cx-ok" : "cx-fail")">
+                <div class="cx-check-ic">
+                    @if (c.Ok)
+                    {
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+                    }
+                    else
+                    {
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+                    }
+                </div>
+                <div style="flex:1; min-width:0;">
+                    <div class="cx-check-lbl">@c.Label</div>
+                    <div class="cx-check-det">@c.Detail</div>
+                </div>
+            </div>
+        }
+    </div>
+    @if (_validation.OverallOk)
+    {
+        <p class="cx-help" style="margin:14px 0 0;">Todo OK. Ya puedes <a href="/tiktok/cuentas">conectar cuentas TikTok</a>.</p>
+    }
+</div>
+}
+
+<!-- Traza -->
+<div class="card cx-card" style="margin-top:18px;">
+    <div class="cx-trace-head"><h3 class="cx-h" style="margin:0;">Traza de ejecucion</h3><button class="btn btn-sm btn-outline-secondary" @onclick="() => _trace = string.Empty">Limpiar</button></div>
+    <pre class="cx-trace">@(string.IsNullOrEmpty(_trace) ? "Sin ejecuciones aun." : _trace)</pre>
+</div>
+
+<!-- Cuentas TikTok conectadas -->
+<div class="card cx-card" style="margin-top:18px;">
+    <h3 class="cx-h">Cuentas de TikTok conectadas</h3>
+    @if (_accounts is null || _accounts.Count == 0)
+    {
+        <p class="text-muted" style="margin:0;">Aun no hay cuentas de TikTok conectadas.</p>
+    }
+    else
+    {
+        <table class="table table-hover" style="margin:0;">
+            <thead><tr><th>Cliente</th><th>open_id</th><th>Estado</th><th>Expira</th><th></th></tr></thead>
+            <tbody>
+                @foreach (var a in _accounts)
+                {
+                    <tr>
+                        <td style="font-weight:600;">@a.ClientName</td>
+                        <td style="font-size:12px;color:var(--muted-foreground);">@(string.IsNullOrWhiteSpace(a.Handle) ? "—" : a.Handle)</td>
+                        <td><span class="badge bg-@StatusColor(a.Status)">@StatusText(a.Status)</span> @if (a.ExpiringSoon){<span class="badge bg-warning">por expirar</span>}</td>
+                        <td style="font-size:12px;color:var(--muted-foreground);">@(a.ExpiresAt is { } e ? e.LocalDateTime.ToString("dd MMM yyyy HH:mm") : "—")</td>
+                        <td style="text-align:right;"><button class="btn btn-sm btn-outline-secondary" @onclick="() => RefreshAccount(a.Id)" disabled="@_busy">Renovar token</button></td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+    }
+</div>
+}
+
+<style>
+    .cx-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
+    @@media (max-width: 900px) { .cx-grid { grid-template-columns: 1fr; } }
+    .cx-card { padding: 20px 22px; max-width: 100%; }
+    .cx-h { font-size: 15px; font-weight: 700; margin: 0 0 4px; }
+    .cx-help { font-size: 12px; color: var(--muted-foreground); margin: 0 0 14px; }
+    .field { margin-bottom: 12px; }
+    .cx-tag { font-size: 10px; font-weight: 700; background: oklch(0.7 0.15 150 / 0.2); color: #16a34a; padding: 2px 7px; border-radius: 6px; margin-left: 6px; }
+    .cx-inline-msg { margin-left: 12px; font-size: 12px; color: var(--muted-foreground); }
+    .cx-trace-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
+    .cx-trace { background: #0f172a; color: #cbd5e1; font-size: 12px; padding: 12px 14px; border-radius: 10px; max-height: 240px; overflow:auto; white-space: pre-wrap; margin: 0; }
+    .cx-overall { font-size: 11px; font-weight: 700; padding: 4px 10px; border-radius: 8px; }
+    .cx-ov-ok { background: #dcfce7; color: #15803d; }
+    .cx-ov-fail { background: #fee2e2; color: #b91c1c; }
+    .cx-checks { display: flex; flex-direction: column; gap: 8px; }
+    .cx-check { display: flex; align-items: flex-start; gap: 12px; padding: 12px 14px; border-radius: 10px; border: 1px solid transparent; }
+    .cx-ok { background: oklch(0.95 0.06 150 / 0.4); border-color: oklch(0.85 0.12 150 / 0.4); }
+    .cx-fail { background: oklch(0.95 0.06 25 / 0.4); border-color: oklch(0.85 0.14 25 / 0.4); }
+    .cx-check-ic { width: 26px; height: 26px; border-radius: 50%; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+    .cx-ok .cx-check-ic { background: #22c55e; color: #fff; }
+    .cx-fail .cx-check-ic { background: #ef4444; color: #fff; }
+    .cx-check-ic svg { width: 14px; height: 14px; }
+    .cx-check-lbl { font-weight: 600; font-size: 13px; color: #1f2937; }
+    .cx-check-det { font-size: 12px; color: #6b7280; margin-top: 2px; word-wrap: break-word; }
+</style>
+
+@code {
+    private bool _loading = true, _busy, _validating;
+    private Guid _actor;
+    private List<ClientDto>? _clients;
+    private List<SocialAccountDto>? _accounts;
+
+    private string _clientKey = "", _clientSecret = "", _redirectUri = "", _scope = "";
+    private bool _hasSecret;
+    private string? _cfgMsg;
+    private TikTokValidationResult? _validation;
+
+    private string _clientId = "", _authCode = "";
+    private string _trace = string.Empty;
+
+    protected override async Task OnInitializedAsync()
+    {
+        var st = await AuthProvider.GetAuthenticationStateAsync();
+        Guid.TryParse(st.User.FindFirst(ClaimTypes.NameIdentifier)?.Value, out _actor);
+        _clients = (await ClientsSvc.ListAsync()).ToList();
+        var cfg = await TikTokSvc.GetAppConfigAsync();
+        if (cfg is not null)
+        {
+            _clientKey = cfg.ClientKey; _hasSecret = cfg.HasSecret; _redirectUri = cfg.RedirectUri; _scope = cfg.Scope;
+        }
+        else
+        {
+            _redirectUri = "https://app.bitcode.com.co/Formularios/Modulos/RedirectURI/RedirectTiktok.aspx";
+            _scope = "user.info.basic,biz.creator.info,biz.creator.insights,video.list";
+        }
+        await ReloadAccounts();
+        _loading = false;
+    }
+
+    private async Task ReloadAccounts() =>
+        _accounts = (await AccountsSvc.ListAsync()).Where(a => a.NetworkCode == "tiktok").ToList();
+
+    private async Task SaveConfig()
+    {
+        _busy = true; _cfgMsg = null;
+        try
+        {
+            var dto = await TikTokSvc.SaveAppConfigAsync(new SaveTikTokAppConfigRequest(_clientKey, _clientSecret, _redirectUri, _scope), _actor);
+            _hasSecret = dto.HasSecret; _clientSecret = ""; _cfgMsg = "Guardado.";
+            AppendTrace("[OK] Configuracion de app guardada.");
+            // Auto-validar tras guardar para dar feedback inmediato.
+            await Validate();
+        }
+        catch (Exception ex) { _cfgMsg = ex.Message; }
+        finally { _busy = false; }
+    }
+
+    private async Task Validate()
+    {
+        _validating = true;
+        try
+        {
+            AppendTrace("[INFO] Ejecutando diagnostico de configuracion TikTok...");
+            _validation = await TikTokSvc.ValidateConfigAsync();
+            AppendTrace(_validation.OverallOk
+                ? "[OK] Diagnostico OK. Listo para conectar cuentas."
+                : "[WARN] Diagnostico encontro problemas. Revisa el panel.");
+        }
+        catch (Exception ex) { AppendTrace("[ERROR] " + ex.Message); }
+        finally { _validating = false; }
+    }
+
+    private async Task GenerateUrl()
+    {
+        _busy = true;
+        try
+        {
+            var (url, state, error) = await TikTokSvc.BuildAuthorizeUrlAsync();
+            if (error is not null) { AppendTrace("[ERROR] " + error); return; }
+            AppendTrace($"[OK] URL OAuth generada (state={state}). Abriendo en nueva pestana...");
+            await JS.InvokeVoidAsync("open", url, "_blank");
+        }
+        catch (Exception ex) { AppendTrace("[ERROR] " + ex.Message); }
+        finally { _busy = false; }
+    }
+
+    private async Task Exchange()
+    {
+        _busy = true;
+        try
+        {
+            if (!Guid.TryParse(_clientId, out var clientId)) { AppendTrace("[ERROR] Selecciona un cliente."); return; }
+            AppendTrace("[INFO] Canjeando auth_code con TikTok...");
+            var r = await TikTokSvc.ExchangeCodeAsync(clientId, _authCode, _actor);
+            AppendTrace(r.Trace.TrimEnd());
+            if (r.Success) { AppendTrace("[OK] Cuenta conectada: " + (r.Account?.ClientName ?? "")); _authCode = ""; await ReloadAccounts(); }
+            else { AppendTrace("[ERROR] " + r.Error); }
+        }
+        catch (Exception ex) { AppendTrace("[ERROR] " + ex.Message); }
+        finally { _busy = false; }
+    }
+
+    private async Task RefreshAccount(Guid accountId)
+    {
+        _busy = true;
+        try
+        {
+            AppendTrace("[INFO] Renovando token...");
+            var r = await TikTokSvc.RefreshAccountAsync(accountId, _actor);
+            AppendTrace(r.Trace.TrimEnd());
+            AppendTrace(r.Success ? "[OK] Token renovado." : "[ERROR] " + r.Error);
+            await ReloadAccounts();
+        }
+        catch (Exception ex) { AppendTrace("[ERROR] " + ex.Message); }
+        finally { _busy = false; }
+    }
+
+    private void AppendTrace(string msg)
+    {
+        var line = "[" + DateTimeOffset.Now.ToString("HH:mm:ss") + "] " + msg;
+        _trace = string.IsNullOrEmpty(_trace) ? line : _trace + "\n" + line;
+    }
+
+    private static string StatusText(SocialAccountStatus s) => s switch
+    {
+        SocialAccountStatus.Connected => "Conectada",
+        SocialAccountStatus.Expired => "Expirada",
+        SocialAccountStatus.Revoked => "Revocada",
+        _ => "Desconectada"
+    };
+
+    private static string StatusColor(SocialAccountStatus s) => s switch
+    {
+        SocialAccountStatus.Connected => "success",
+        SocialAccountStatus.Expired or SocialAccountStatus.Revoked => "danger",
+        _ => "secondary"
+    };
+}

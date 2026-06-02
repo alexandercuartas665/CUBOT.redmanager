@@ -1,5 +1,293 @@
 @page "/plantillas"
 @attribute [Microsoft.AspNetCore.Authorization.Authorize(Policy = AppPolicies.TenantMember)]
+@rendermode @(new InteractiveServerRenderMode(prerender: false))
+@using System.Security.Claims
+@using CubotRedManager.Application.Tenancy
+@using CubotRedManager.Web.Authorization
+@using Microsoft.AspNetCore.Components.Authorization
+@inject IMessageTemplateService TemplatesSvc
+@inject AuthenticationStateProvider AuthProvider
+@inject IJSRuntime JS
 
-<ModulePlaceholder Eyebrow="Configuracion" Title="Plantillas" Phase="Fase 2"
-                   Description="Mensajes pregrabados para respuestas en bandeja." />
+<PageTitle>Plantillas - CUBOT.redmanager</PageTitle>
+
+<div class="module-head">
+    <div>
+        <div class="module-eyebrow">
+            <div class="module-icon">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5z"/><path d="M14 2v6h6"/><path d="M8 13h8"/><path d="M8 17h8"/></svg>
+            </div>
+            <span>Configuracion</span>
+        </div>
+        <h1 class="page-title" style="margin-top:12px;">Plantillas</h1>
+        <p class="page-sub" style="margin-bottom:0;">Mensajes reutilizables para publicaciones, respuestas y autorespuesta.</p>
+    </div>
+    <div style="display:flex;gap:10px;align-items:center;">
+        <input class="form-control" style="max-width:260px;" placeholder="Buscar por nombre o texto..." @bind="_search" @bind:event="oninput" />
+        <button class="btn btn-primary" @onclick="OpenCreate">+ Nueva plantilla</button>
+    </div>
+</div>
+
+@if (_loading)
+{
+    <p><em>Cargando...</em></p>
+}
+else if (Filtered.Count == 0)
+{
+    <div class="card" style="padding:32px;text-align:center;">
+        <div class="text-muted" style="font-size:0.95rem;">
+            @if (string.IsNullOrWhiteSpace(_search))
+            {
+                <span>Aun no tienes plantillas. Crea la primera con "+ Nueva plantilla".</span>
+            }
+            else
+            {
+                <span>Ninguna plantilla coincide con "@_search".</span>
+            }
+        </div>
+    </div>
+}
+else
+{
+    <div class="tpl-grid">
+        @foreach (var t in Filtered)
+        {
+            <div class="card tpl-card">
+                <div class="tpl-card-head">
+                    <div class="tpl-card-name">@t.Name</div>
+                    <div class="text-muted" style="font-size:11px;">@((t.UpdatedAt).LocalDateTime.ToString("dd MMM yyyy HH:mm"))</div>
+                </div>
+                @if (!string.IsNullOrWhiteSpace(t.Tags))
+                {
+                    <div class="tpl-tags">
+                        @foreach (var tag in (t.Tags ?? "").Split(',', StringSplitOptions.RemoveEmptyEntries))
+                        {
+                            <span class="tpl-tag">@tag.Trim()</span>
+                        }
+                    </div>
+                }
+                <div class="tpl-body-preview">@Truncate(t.Body, 220)</div>
+                <div class="tpl-card-actions">
+                    <button class="btn btn-outline-secondary btn-sm" @onclick="() => CopyAsync(t.Body)">Copiar</button>
+                    <button class="btn btn-outline-secondary btn-sm" @onclick="() => OpenEdit(t)">Editar</button>
+                    <button class="btn btn-outline-secondary btn-sm tpl-danger" @onclick="() => DeleteAsync(t.Id)" disabled="@_busy">Eliminar</button>
+                </div>
+            </div>
+        }
+    </div>
+}
+
+@if (_modalOpen)
+{
+    <div class="modal-overlay">
+        <div class="modal-dialog" style="max-width:640px;">
+            <div class="modal-head">
+                <h3>@(_editId is null ? "Nueva plantilla" : "Editar plantilla")</h3>
+                <button class="modal-close" @onclick="CloseModal">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div class="field">
+                    <label class="form-label">Nombre</label>
+                    <input class="form-control" @bind="_fName" placeholder="Ej. Bienvenida nuevo seguidor" maxlength="120" />
+                </div>
+                <div class="field">
+                    <label class="form-label">Texto del mensaje</label>
+                    <textarea class="form-control" rows="8" @bind="_fBody" placeholder="Escribe aqui el copy reutilizable..." spellcheck="true"></textarea>
+                    <div class="text-muted" style="font-size:11px;margin-top:4px;">Maximo recomendado: 2200 caracteres (limite Instagram). Actual: @(_fBody?.Length ?? 0).</div>
+                </div>
+                <div class="field">
+                    <label class="form-label">Etiquetas <span class="text-muted" style="font-weight:400;">(separadas por coma)</span></label>
+                    <input class="form-control" @bind="_fTags" placeholder="bienvenida, dm, instagram" maxlength="200" />
+                </div>
+                @if (_modalError is not null)
+                {
+                    <div class="text-danger small">@_modalError</div>
+                }
+            </div>
+            <div class="modal-foot">
+                <button class="btn btn-outline-secondary" @onclick="CloseModal">Cancelar</button>
+                <button class="btn btn-primary" @onclick="SaveAsync" disabled="@(_busy || string.IsNullOrWhiteSpace(_fName) || string.IsNullOrWhiteSpace(_fBody))">@(_busy ? "Guardando..." : "Guardar")</button>
+            </div>
+        </div>
+    </div>
+}
+
+@code {
+    private bool _loading = true;
+    private bool _busy;
+    private List<MessageTemplateDto> _templates = new();
+    private string _search = "";
+
+    private bool _modalOpen;
+    private Guid? _editId;
+    private string _fName = "";
+    private string _fBody = "";
+    private string _fTags = "";
+    private string? _modalError;
+    private Guid _actor;
+
+    private IReadOnlyList<MessageTemplateDto> Filtered
+    {
+        get
+        {
+            if (string.IsNullOrWhiteSpace(_search)) { return _templates; }
+            var s = _search.Trim().ToLowerInvariant();
+            return _templates
+                .Where(t => t.Name.ToLowerInvariant().Contains(s)
+                            || t.Body.ToLowerInvariant().Contains(s)
+                            || (t.Tags ?? "").ToLowerInvariant().Contains(s))
+                .ToList();
+        }
+    }
+
+    protected override async Task OnInitializedAsync()
+    {
+        var state = await AuthProvider.GetAuthenticationStateAsync();
+        _actor = Guid.TryParse(state.User.FindFirst(ClaimTypes.NameIdentifier)?.Value, out var id) ? id : Guid.Empty;
+        await ReloadAsync();
+    }
+
+    private async Task ReloadAsync()
+    {
+        _loading = true;
+        _templates = (await TemplatesSvc.ListAsync()).ToList();
+        _loading = false;
+    }
+
+    private void OpenCreate()
+    {
+        _editId = null;
+        _fName = "";
+        _fBody = "";
+        _fTags = "";
+        _modalError = null;
+        _modalOpen = true;
+    }
+
+    private void OpenEdit(MessageTemplateDto t)
+    {
+        _editId = t.Id;
+        _fName = t.Name;
+        _fBody = t.Body;
+        _fTags = t.Tags ?? "";
+        _modalError = null;
+        _modalOpen = true;
+    }
+
+    private void CloseModal() => _modalOpen = false;
+
+    private async Task SaveAsync()
+    {
+        _modalError = null;
+        _busy = true;
+        try
+        {
+            var request = new SaveMessageTemplateRequest(_editId, _fName, _fBody, string.IsNullOrWhiteSpace(_fTags) ? null : _fTags);
+            var saved = await TemplatesSvc.SaveAsync(request, _actor);
+            if (saved is null)
+            {
+                _modalError = "No se pudo guardar la plantilla. Verifica el nombre y el texto.";
+                return;
+            }
+            _modalOpen = false;
+            await ReloadAsync();
+        }
+        catch (Exception ex)
+        {
+            _modalError = ex.Message;
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private async Task DeleteAsync(Guid id)
+    {
+        var confirm = await JS.InvokeAsync<bool>("confirm", "Eliminar esta plantilla?");
+        if (!confirm) { return; }
+        _busy = true;
+        try
+        {
+            await TemplatesSvc.DeleteAsync(id, _actor);
+            await ReloadAsync();
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private async Task CopyAsync(string body)
+    {
+        try { await JS.InvokeVoidAsync("navigator.clipboard.writeText", body); } catch { }
+    }
+
+    private static string Truncate(string? text, int max)
+    {
+        if (string.IsNullOrWhiteSpace(text)) { return ""; }
+        text = text.Trim();
+        return text.Length <= max ? text : text[..max] + "...";
+    }
+}
+
+<style>
+    .tpl-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+        gap: 14px;
+    }
+    .tpl-card {
+        padding: 16px 18px;
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+        min-height: 180px;
+    }
+    .tpl-card-head {
+        display: flex;
+        align-items: flex-start;
+        justify-content: space-between;
+        gap: 10px;
+    }
+    .tpl-card-name {
+        font-weight: 700;
+        font-size: 0.98rem;
+        line-height: 1.25;
+    }
+    .tpl-tags {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px;
+    }
+    .tpl-tag {
+        background: var(--primary-soft);
+        color: var(--primary);
+        font-size: 10.5px;
+        font-weight: 600;
+        padding: 2px 8px;
+        border-radius: 999px;
+        text-transform: lowercase;
+    }
+    .tpl-body-preview {
+        color: var(--muted-foreground);
+        font-size: 0.85rem;
+        line-height: 1.45;
+        flex: 1;
+        white-space: pre-wrap;
+        word-break: break-word;
+    }
+    .tpl-card-actions {
+        display: flex;
+        gap: 6px;
+        flex-wrap: wrap;
+        margin-top: auto;
+    }
+    .tpl-card-actions .btn-sm {
+        font-size: 12px;
+        padding: 4px 10px;
+    }
+    .tpl-danger {
+        color: var(--destructive, #c1373a);
+    }
+</style>

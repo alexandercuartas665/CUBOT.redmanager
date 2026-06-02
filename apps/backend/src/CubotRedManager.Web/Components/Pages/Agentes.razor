@@ -1,5 +1,1429 @@
 @page "/agentes"
-@attribute [Microsoft.AspNetCore.Authorization.Authorize(Policy = AppPolicies.TenantMember)]
+@attribute [Authorize(Policy = AppPolicies.TenantMember)]
+@rendermode @(new InteractiveServerRenderMode(prerender: false))
+@using CubotRedManager.Application.Tenancy
+@using CubotRedManager.Application.Admin
+@using CubotRedManager.Domain.Enums
+@using CubotRedManager.Web.Authorization
+@inject IAiAgentService AgentsSvc
+@inject IAiAgentCacheService CacheSvc
+@inject IAiServerConfigService AiServersSvc
+@inject IAiInferenceService InferenceSvc
+@inject IAiUsageService UsageSvc
+@inject IWhatsAppLineService LinesSvc
+@inject IWhatsAppConnectorService Connector
+@inject IWebHostEnvironment Env
+@inject IJSRuntime JS
 
-<ModulePlaceholder Eyebrow="Comunicacion e IA" Title="Agentes de IA" Phase="Fase 4"
-                   Description="Copywriter, Bandeja IA, Resumen, Analista, Detector de crisis." />
+<PageTitle>Agentes IA - CUBOT.redmanager</PageTitle>
+
+<div class="module-head">
+    <div>
+        <div class="module-eyebrow">
+            <div class="module-icon">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 8V4H8"/><rect width="16" height="12" x="4" y="8" rx="2"/><path d="M2 14h2"/><path d="M20 14h2"/><path d="M15 13v2"/><path d="M9 13v2"/></svg>
+            </div>
+            <span>Infraestructura & IA</span>
+        </div>
+        <h1 class="page-title" style="margin-top:12px;">Agentes <span>IA</span></h1>
+        <p class="page-sub" style="margin-bottom:0;">Configura cada agente: elige el servicio de IA disponible, define su comportamiento, agrega recursos y ponlo en produccion o apagalo.</p>
+    </div>
+    <button class="btn btn-primary" @onclick="OpenNew">+ Nuevo agente</button>
+</div>
+
+@if (!_loading && _usage is not null)
+{
+    <div class="kpi-grid" style="margin-bottom:22px;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));max-width:760px;">
+        <div class="kpi-card">
+            <div class="kpi-label">Consumo de tokens</div>
+            <div class="kpi-value">@Tokens(_usage.TotalTokens)</div>
+            <div class="kpi-hint">@_usage.InputTokens entrada - @_usage.OutputTokens salida</div>
+        </div>
+        <div class="kpi-card">
+            <div class="kpi-label">Llamadas de IA</div>
+            <div class="kpi-value">@_usage.TotalCalls</div>
+            <div class="kpi-hint">en todos los agentes</div>
+        </div>
+        <div class="kpi-card">
+            <div class="kpi-label">Costo estimado</div>
+            <div class="kpi-value">$@_usage.EstimatedCostUsd.ToString("0.####")</div>
+            <div class="kpi-hint">USD (tarifa aproximada)</div>
+        </div>
+        @if (_quota is { HasLimit: true })
+        {
+            <div class="kpi-card">
+                <div class="kpi-label">Cupo mensual del plan</div>
+                <div class="kpi-value">@Tokens(_quota.MonthlyUsedTokens) / @Tokens(_quota.MonthlyLimitTokens)</div>
+                <div class="ag-quota-bar"><div class="ag-quota-fill @(_quota.Exceeded ? "over" : "")" style="width:@(_quota.UsedPct)%;"></div></div>
+                <div class="kpi-hint">@Tokens(_quota.Remaining) tokens disponibles este mes</div>
+            </div>
+        }
+    </div>
+    @if (_quota is { Exceeded: true })
+    {
+        <div class="cv-warn" style="border-color:var(--destructive);color:var(--destructive);max-width:760px;margin-bottom:18px;">
+            Alcanzaste el limite de tokens de IA de tu plan este mes (@Tokens(_quota.MonthlyLimitTokens)).
+            @(_quota.Hard ? "Los agentes no podran responder hasta el proximo ciclo o hasta que actualices tu plan." : "Puedes seguir usando los agentes, pero estas por encima del cupo de tu plan.")
+        </div>
+    }
+}
+
+@if (_loading)
+{
+    <p><em>Cargando...</em></p>
+}
+else if (_agents.Count == 0)
+{
+    <div class="card" style="padding:28px;max-width:680px;text-align:center;color:var(--muted-foreground);">
+        Aun no hay agentes. Crea el primero con "+ Nuevo agente".
+    </div>
+}
+else
+{
+    <div class="ag-grid">
+        @foreach (var a in _agents)
+        {
+            <div class="ag-card">
+                <div class="ag-card-top">
+                    <span class="ag-provider @ProviderClass(a.Provider)">@ProviderLabel(a.Provider)</span>
+                    <span class="badge @(a.IsActive ? "bg-success" : "bg-secondary")">@(a.IsActive ? "En produccion" : "Apagado")</span>
+                    <button class="ag-card-del" title="Eliminar agente" @onclick="() => OpenDeleteAgent(a)" disabled="@_busy">&times;</button>
+                </div>
+                <div class="ag-name">@a.Name</div>
+                @if (!string.IsNullOrWhiteSpace(a.Role))
+                {
+                    <div class="ag-role">@a.Role</div>
+                }
+                <div class="ag-prompt">@(string.IsNullOrWhiteSpace(a.SystemPrompt) ? "Sin prompt configurado" : Trim(a.SystemPrompt, 110))</div>
+                <div class="ag-foot">
+                    <span class="ag-res">@a.ResourceCount recurso@(a.ResourceCount == 1 ? "" : "s") - @Tokens(AgentTokens(a.Id)) tokens</span>
+                    <div style="display:flex;gap:6px;">
+                        <button class="btn btn-sm btn-outline-secondary" @onclick="() => OpenEditAsync(a.Id)" disabled="@_busy">Configurar</button>
+                        <label class="ag-switch" title="@(a.IsActive ? "Apagar" : "Poner en produccion")">
+                            <input type="checkbox" checked="@a.IsActive" @onchange="@(e => ToggleActiveAsync(a, (bool)e.Value!))" disabled="@_busy" />
+                            <span class="ag-slider"></span>
+                        </label>
+                    </div>
+                </div>
+            </div>
+        }
+    </div>
+}
+
+@* ===== Modal: configurar agente ===== *@
+@if (_editorOpen)
+{
+    <div class="modal-overlay">
+        <div class="modal-dialog" style="max-width:@(_editId is null ? "640px" : "1180px");">
+            <div class="modal-head">
+                <h3>@(_editId is null ? "Nuevo agente" : "Configurar agente")</h3>
+                <button class="modal-close" @onclick="CloseEditor">&times;</button>
+            </div>
+            <div class="modal-body">
+              <div class="ag-editor-cols">
+               <div class="ag-editor-left">
+                <div class="field-row">
+                    <div class="field">
+                        <label class="form-label">Nombre *</label>
+                        <input class="form-control" @bind="_fName" autocomplete="off" />
+                    </div>
+                    <div class="field">
+                        <label class="form-label">Rol / funcion</label>
+                        <input class="form-control" @bind="_fRole" placeholder="Copiloto, clasificador, seguimiento..." autocomplete="off" />
+                    </div>
+                </div>
+                @if (_providerOptions.Count == 0)
+                {
+                    <div class="text-danger small" style="margin:4px 0 10px;">
+                        No hay servicios de IA disponibles. Pide al administrador de la plataforma que habilite un proveedor en "Servidores de IA".
+                    </div>
+                }
+                <div class="field-row">
+                    <div class="field">
+                        <label class="form-label">Servicio de IA *</label>
+                        <select class="form-control" @bind="_fProvider" disabled="@(_providerOptions.Count == 0)">
+                            @foreach (var opt in EditorProviderOptions())
+                            {
+                                <option value="@opt.Provider">@opt.DisplayName</option>
+                            }
+                        </select>
+                    </div>
+                    <div class="field">
+                        <label class="form-label">Modelo</label>
+                        <input class="form-control" value="@EffectiveModel(_fProvider)" disabled />
+                        <div class="text-muted" style="font-size:11px;margin-top:4px;">Lo define el administrador de la plataforma.</div>
+                    </div>
+                </div>
+                @if (_editId is not null)
+                {
+                    <div class="field">
+                        <label class="form-label">Prompt base (comportamiento principal)</label>
+                        @RichToolbar("basePrompt", () => _baseEmojiOpen, v => _baseEmojiOpen = v)
+                        <textarea id="basePrompt" class="form-control" rows="4" @bind="_fPrompt" @bind:event="oninput" placeholder="Instrucciones generales que definen el comportamiento del agente..."></textarea>
+                    </div>
+                }
+                @* ===== MCP: acceso a Contenedores de Datos ===== *@
+                <div style="display:flex;align-items:center;gap:10px;margin:6px 0 10px;padding:8px 12px;border:1px solid var(--border);border-radius:8px;background:rgba(160,61,201,0.04);">
+                    <label class="ag-switch" title="Habilitar acceso del agente a los Contenedores de Datos del tenant">
+                        <input type="checkbox" checked="@_fEnableMcp" @onchange="@(e => _fEnableMcp = (bool)e.Value!)" disabled="@_busy" />
+                        <span class="ag-slider"></span>
+                    </label>
+                    <div style="flex:1;">
+                        <div style="font-weight:600;font-size:13px;">Acceso a Contenedores de Datos (MCP)</div>
+                        <div class="text-muted" style="font-size:12px;">
+                            Si lo activas, el agente puede leer los Contenedores del tenant usando los marcadores
+                            <code>&#123;&#123;LIST.CONTAINERS&#125;&#125;</code> y
+                            <code>&#123;&#123;CONTAINER:nombre&#125;&#125;</code> en su prompt. Si lo dejas apagado,
+                            los marcadores se sustituyen por una nota y no se exponen datos.
+                        </div>
+                    </div>
+                    <span class="badge @(_fEnableMcp ? "bg-success" : "bg-secondary")">@(_fEnableMcp ? "MCP activo" : "MCP apagado")</span>
+                </div>
+                @if (_editorError is not null)
+                {
+                    <div class="text-danger small">@_editorError</div>
+                }
+                <div style="display:flex;gap:8px;align-items:center;margin:4px 0 8px;">
+                    <button class="btn btn-primary" @onclick="SaveAgentAsync" disabled="@(_busy || (_editId is null && _providerOptions.Count == 0))">@(_editId is null ? "Crear agente" : "Guardar cambios")</button>
+                    @if (_editId is not null)
+                    {
+                        <label class="ag-switch">
+                            <input type="checkbox" checked="@_fActive" @onchange="@(e => ToggleActiveInEditorAsync((bool)e.Value!))" disabled="@_busy" />
+                            <span class="ag-slider"></span>
+                        </label>
+                        <span class="small text-muted">@(_fActive ? "En produccion" : "Apagado")</span>
+                    }
+                </div>
+
+                @if (_editId is not null)
+                {
+                    @* ===== Prompts enrutados ===== *@
+                    <hr style="border-color:var(--border);margin:14px 0;" />
+                    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;">
+                        <div class="pl-stagegroup-title">Prompts enrutados</div>
+                        <button class="btn btn-sm btn-outline-secondary" @onclick="() => OpenPrompt(null)" disabled="@_busy">+ Agregar prompt</button>
+                    </div>
+                    <div class="text-muted" style="font-size:12px;margin-bottom:10px;">El enrutador evalua el mensaje del cliente y aplica el prompt cuya regla coincide (ej. "cuando pregunte por Panama") antes del comportamiento base.</div>
+                    @if (_prompts.Count == 0)
+                    {
+                        <div class="text-muted small">Sin prompts enrutados. El agente usara solo el prompt base.</div>
+                    }
+                    else
+                    {
+                        <div class="ag-list">
+                            @foreach (var p in _prompts)
+                            {
+                                <div class="ag-item">
+                                    <div class="ag-item-main">
+                                        <div class="ag-item-name">@p.Name</div>
+                                        <div class="ag-item-sub">@(string.IsNullOrWhiteSpace(p.Rule) ? "Sin regla" : p.Rule)</div>
+                                    </div>
+                                    <button class="btn btn-sm btn-outline-secondary" @onclick="() => OpenPrompt(p)" disabled="@_busy">Editar</button>
+                                    <button class="btn btn-sm btn-outline-danger" @onclick="() => DeletePromptAsync(p.Id)" disabled="@_busy">&times;</button>
+                                </div>
+                            }
+                        </div>
+                    }
+
+                    @* ===== Datos cache (objetivos del agente) - acordeon ===== *@
+                    <hr style="border-color:var(--border);margin:14px 0;" />
+                    <div class="ag-accordion">
+                        <div class="ag-accordion-head" role="button" tabindex="0" @onclick="() => _cacheOpen = !_cacheOpen">
+                            <span class="ag-accordion-chev @(_cacheOpen ? "open" : "")">&#9656;</span>
+                            <span class="pl-stagegroup-title" style="margin:0;">Datos cache (objetivo)</span>
+                            <span class="ag-accordion-count">@_cacheFields.Count</span>
+                            <span class="ag-accordion-spacer"></span>
+                            <button type="button" class="btn btn-sm btn-outline-secondary" @onclick:stopPropagation="true" @onclick="() => OpenCacheField(null)" disabled="@_busy">+ Agregar dato</button>
+                            <button type="button" class="btn btn-sm btn-outline-secondary" @onclick:stopPropagation="true" @onclick="BulkToggleStickyAsync" disabled="@(_busy || _cacheFields.Count == 0)" title="Marca todos los campos como sticky (no se actualizan tras captura) o, si ya estan todos sticky, los pone actualizables.">@(AllSticky() ? "Marcar todos actualizables" : "Marcar todos sticky")</button>
+                            <button type="button" class="btn btn-sm btn-outline-secondary" @onclick:stopPropagation="true" @onclick="OpenPerceivedModal" disabled="@_busy">Ver datos percibidos</button>
+                        </div>
+                        @if (_cacheOpen)
+                        {
+                            <div class="ag-accordion-body">
+                                <div class="text-muted" style="font-size:12px;margin-bottom:10px;">Define que datos debe ir capturando el agente durante la conversacion (ej. "pais", "nombre", "destino"). Cuando un telefono se enlace al sistema se creara una sesion de cache por conversacion; aqui usamos el agente como sesion de prueba.</div>
+                                @if (_cacheFields.Count == 0)
+                                {
+                                    <div class="text-muted small">Sin datos definidos. Agrega el primero para que el agente empiece a capturarlos.</div>
+                                }
+                                else
+                                {
+                                    <div class="ag-list ag-list-scroll">
+                                        @foreach (var f in _cacheFields)
+                                        {
+                                            <div class="ag-item">
+                                                <span class="ag-rtype">DATO</span>
+                                                <div class="ag-item-main">
+                                                    <div class="ag-item-name">
+                                                        @f.Label <span class="text-muted" style="font-size:11px;">(@f.FieldKey)</span>
+                                                        @if (!f.IsUpdatable)
+                                                        {
+                                                            <span class="ag-pill-sticky" title="Una vez capturado, este dato queda fijo y no se actualiza.">sticky</span>
+                                                        }
+                                                    </div>
+                                                    <div class="ag-item-sub">@(string.IsNullOrWhiteSpace(f.Description) ? "Sin descripcion" : Trim(f.Description!, 90))</div>
+                                                </div>
+                                                <button class="btn btn-sm btn-outline-secondary" @onclick="() => OpenCacheField(f)" disabled="@_busy">Editar</button>
+                                                <button class="btn btn-sm btn-outline-danger" @onclick="() => DeleteCacheFieldAsync(f.Id)" disabled="@_busy">&times;</button>
+                                            </div>
+                                        }
+                                    </div>
+                                }
+                            </div>
+                        }
+                    </div>
+
+                    @* ===== Recursos del agente - acordeon ===== *@
+                    <hr style="border-color:var(--border);margin:14px 0;" />
+                    <div class="ag-accordion">
+                        <div class="ag-accordion-head" role="button" tabindex="0" @onclick="() => _resourcesOpen = !_resourcesOpen">
+                            <span class="ag-accordion-chev @(_resourcesOpen ? "open" : "")">&#9656;</span>
+                            <span class="pl-stagegroup-title" style="margin:0;">Recursos del agente</span>
+                            <span class="ag-accordion-count">@_resources.Count</span>
+                            <span class="ag-accordion-spacer"></span>
+                            <button type="button" class="btn btn-sm btn-outline-secondary" @onclick:stopPropagation="true" @onclick="() => OpenResource(null)" disabled="@_busy">+ Agregar recurso</button>
+                        </div>
+                        @if (_resourcesOpen)
+                        {
+                            <div class="ag-accordion-body">
+                                <div class="text-muted" style="font-size:12px;margin-bottom:10px;">Archivos y datos que el agente puede usar para responder a los clientes.</div>
+                                @if (_resources.Count == 0)
+                                {
+                                    <div class="text-muted small">Sin recursos. Agrega imagenes, videos, audios, PDF, ubicaciones o textos.</div>
+                                }
+                                else
+                                {
+                                    <div class="ag-list ag-list-scroll">
+                                        @foreach (var r in _resources)
+                                        {
+                                            <div class="ag-item">
+                                                <span class="ag-rtype">@ResourceLabel(r.ResourceType)</span>
+                                                <div class="ag-item-main">
+                                                    <div class="ag-item-name">@r.Name</div>
+                                                    <div class="ag-item-sub">@(string.IsNullOrWhiteSpace(r.Detail) ? (r.FileName ?? "Sin detalle") : Trim(r.Detail!, 70))</div>
+                                                </div>
+                                                <button class="btn btn-sm btn-outline-secondary" @onclick="() => OpenResource(r)" disabled="@_busy">Editar</button>
+                                                <button class="btn btn-sm btn-outline-danger" @onclick="() => DeleteResourceAsync(r.Id)" disabled="@_busy">&times;</button>
+                                            </div>
+                                        }
+                                    </div>
+                                }
+                            </div>
+                        }
+                    </div>
+                }
+               </div>@* /ag-editor-left *@
+
+               @if (_editId is not null)
+               {
+                <div class="ag-editor-right">
+                    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">
+                        <div class="pl-stagegroup-title">Probar agente</div>
+                        @if (_testMsgs.Count > 0)
+                        {
+                            <button class="btn btn-sm btn-outline-secondary" @onclick="() => { _testMsgs.Clear(); _testError = null; }" disabled="@_testBusy">Limpiar</button>
+                        }
+                    </div>
+                    <div class="text-muted" style="font-size:11.5px;margin-bottom:10px;">Conversa como si fueras el cliente. Usa el prompt y los recursos de la izquierda (aunque no los hayas guardado).</div>
+
+                    @if (_phoneLines.Count > 0)
+                    {
+                        <div class="ag-phone">
+                            <label class="ag-phone-toggle">
+                                <input type="checkbox" checked="@_phoneSend" @onchange="e => _phoneSend = (bool)e.Value!" />
+                                <span>Enviar respuestas a un telefono</span>
+                            </label>
+                            @if (_phoneSend)
+                            {
+                                <div class="ag-phone-row">
+                                    @if (_phoneLines.Count > 1)
+                                    {
+                                        <select class="form-control form-control-sm" @bind="_phoneLineId">
+                                            @foreach (var ln in _phoneLines)
+                                            {
+                                                <option value="@ln.Id">@(string.IsNullOrWhiteSpace(ln.PhoneNumber) ? ln.InstanceName : ln.PhoneNumber)</option>
+                                            }
+                                        </select>
+                                    }
+                                    <input class="form-control form-control-sm" @bind="_phoneNumber" placeholder="Numero con codigo pais (ej. 573001234567)" autocomplete="off" />
+                                </div>
+                                @if (_phoneInfo is not null)
+                                {
+                                    <div class="text-muted" style="font-size:11px;margin-top:4px;">@_phoneInfo</div>
+                                }
+                            }
+                        </div>
+                    }
+
+                    <div class="ag-test">
+                        <div class="ag-test-body">
+                            @if (_testMsgs.Count == 0)
+                            {
+                                <div class="ag-test-empty">Escribe un mensaje para probar la respuesta del agente.</div>
+                            }
+                            else
+                            {
+                                @foreach (var t in _testMsgs)
+                                {
+                                    <div class="ag-bubble @(t.Role == "model" ? "bot" : "me")">
+                                        @if (!string.IsNullOrWhiteSpace(t.Text)) { <div>@t.Text</div> }
+                                        @if (t.Attachments is { Count: > 0 })
+                                        {
+                                            @foreach (var a in t.Attachments)
+                                            {
+                                                <div class="ag-attach">
+                                                    @switch (a.ResourceType)
+                                                    {
+                                                        case AgentResourceType.Text:
+                                                            <div class="ag-attach-text">@a.Detail</div>
+                                                            break;
+                                                        case AgentResourceType.Image:
+                                                            <img src="@a.FileUrl" alt="@a.Name" />
+                                                            @if (!string.IsNullOrWhiteSpace(a.Detail)) { <div class="ag-attach-cap">@a.Detail</div> }
+                                                            break;
+                                                        case AgentResourceType.Video:
+                                                            <video src="@a.FileUrl" controls></video>
+                                                            @if (!string.IsNullOrWhiteSpace(a.Detail)) { <div class="ag-attach-cap">@a.Detail</div> }
+                                                            break;
+                                                        case AgentResourceType.Audio:
+                                                            <audio src="@a.FileUrl" controls></audio>
+                                                            break;
+                                                        case AgentResourceType.Location:
+                                                            <a href="@MapsLink(a.Detail)" target="_blank">[mapa] @a.Name</a>
+                                                            break;
+                                                        default:
+                                                            <a href="@a.FileUrl" target="_blank" download>[archivo] @(a.FileName ?? a.Name)</a>
+                                                            @if (!string.IsNullOrWhiteSpace(a.Detail)) { <div class="ag-attach-cap">@a.Detail</div> }
+                                                            break;
+                                                    }
+                                                </div>
+                                            }
+                                        }
+                                    </div>
+                                }
+                            }
+                            @if (_testBusy)
+                            {
+                                <div class="ag-bubble bot ag-typing">Escribiendo...</div>
+                            }
+                        </div>
+                        @if (_testError is not null)
+                        {
+                            <div class="text-danger small" style="padding:0 4px 6px;">@_testError</div>
+                        }
+                        <div class="ag-test-input">
+                            <input class="form-control" placeholder="Mensaje del cliente..." @bind="_testInput" @bind:event="oninput" @onkeydown="TestKeyDown" disabled="@_testBusy" />
+                            <button class="btn btn-primary btn-sm" @onclick="SendTestAsync" disabled="@(_testBusy || string.IsNullOrWhiteSpace(_testInput))">Enviar</button>
+                        </div>
+                    </div>
+
+                    @* Acordeon de depuracion: log cronologico de los prompts enviados a la IA (mas reciente arriba). *@
+                    <div class="ag-accordion" style="margin-top:10px;">
+                        <div class="ag-accordion-head" role="button" tabindex="0" @onclick="() => _debugPromptOpen = !_debugPromptOpen">
+                            <span class="ag-accordion-chev @(_debugPromptOpen ? "open" : "")">&#9656;</span>
+                            <span class="pl-stagegroup-title" style="margin:0;">Prompts enviados a la IA</span>
+                            @if (_debugLog.Count > 0)
+                            {
+                                <span class="ag-accordion-count" title="Llamadas registradas">@_debugLog.Count</span>
+                            }
+                            <span class="ag-accordion-spacer"></span>
+                            @if (_debugLog.Count > 0)
+                            {
+                                <button type="button" class="btn btn-sm btn-outline-secondary" @onclick:stopPropagation="true" @onclick="ClearDebugLog">Limpiar</button>
+                            }
+                        </div>
+                        @if (_debugPromptOpen)
+                        {
+                            <div class="ag-accordion-body">
+                                @if (_debugLog.Count == 0)
+                                {
+                                    <div class="text-muted small">Envia un mensaje al agente para ver aqui los prompts (principal del agente + extractor de cache) que se enviaron a la IA, con su fecha y hora.</div>
+                                }
+                                else
+                                {
+                                    <div style="display:flex;flex-direction:column;gap:10px;max-height:520px;overflow-y:auto;padding-right:4px;">
+                                        @for (int i = _debugLog.Count - 1; i >= 0; i--)
+                                        {
+                                            var entry = _debugLog[i];
+                                            <div class="ag-prompt-entry">
+                                                <div class="ag-prompt-entry-head">
+                                                    <span class="ag-prompt-entry-time">fecha hora: @entry.SentAt.ToLocalTime().ToString("dd-MM-yyyy HH:mm:ss")</span>
+                                                    <span class="ag-prompt-entry-title">@entry.Title</span>
+                                                </div>
+                                                <div class="ag-prompt-entry-label">Prompt enviado</div>
+                                                <textarea class="form-control" rows="10" readonly style="font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11px;line-height:1.45;white-space:pre;">@entry.Content</textarea>
+                                                @if (entry.Response is not null)
+                                                {
+                                                    <div class="ag-prompt-entry-label" style="margin-top:8px;">Respuesta del LLM</div>
+                                                    <textarea class="form-control" rows="4" readonly style="font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11px;line-height:1.45;white-space:pre;">@entry.Response</textarea>
+                                                }
+                                            </div>
+                                        }
+                                    </div>
+                                }
+                            </div>
+                        }
+                    </div>
+                </div>@* /ag-editor-right *@
+               }
+              </div>@* /ag-editor-cols *@
+            </div>
+            <div class="modal-foot">
+                <button class="btn btn-outline-secondary" @onclick="CloseEditor">Cerrar</button>
+            </div>
+        </div>
+    </div>
+}
+
+@* ===== Modal: prompt enrutado ===== *@
+@if (_promptModalOpen)
+{
+    <div class="modal-overlay" style="z-index:1200;">
+        <div class="modal-dialog" style="max-width:1040px;">
+            <div class="modal-head">
+                <h3>@(_promptEditId is null ? "Nuevo prompt" : "Editar prompt")</h3>
+                <button class="modal-close" @onclick="() => _promptModalOpen = false">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div class="field">
+                    <label class="form-label">Nombre *</label>
+                    <input class="form-control" @bind="_pName" placeholder="Ej. Cotizacion Panama" autocomplete="off" />
+                </div>
+                <div class="field">
+                    <label class="form-label">Regla (cuando usarlo)</label>
+                    <input class="form-control" @bind="_pRule" placeholder="Ej. cuando el cliente pregunte por el destino Panama" autocomplete="off" />
+                </div>
+                <div class="field">
+                    <label class="form-label">Prompt *</label>
+                    @RichToolbar("promptBody", () => _promptEmojiOpen, v => _promptEmojiOpen = v)
+                    <textarea id="promptBody" class="form-control" rows="9" @bind="_pBody" @bind:event="oninput" placeholder="Instrucciones que el agente debe seguir cuando aplica esta regla..."></textarea>
+                </div>
+                @if (_promptError is not null)
+                {
+                    <div class="text-danger small">@_promptError</div>
+                }
+            </div>
+            <div class="modal-foot">
+                <button class="btn btn-outline-secondary" @onclick="() => _promptModalOpen = false">Cancelar</button>
+                <button class="btn btn-primary" @onclick="SavePromptAsync" disabled="@_busy">@(_promptEditId is null ? "Agregar" : "Guardar")</button>
+            </div>
+        </div>
+    </div>
+}
+
+@* ===== Modal: dato cache ===== *@
+@if (_cacheModalOpen)
+{
+    <div class="modal-overlay" style="z-index:1200;">
+        <div class="modal-dialog" style="max-width:560px;">
+            <div class="modal-head">
+                <h3>@(_cacheEditId is null ? "Nuevo dato cache" : "Editar dato cache")</h3>
+                <button class="modal-close" @onclick="() => _cacheModalOpen = false">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div class="field">
+                    <label class="form-label">Nombre del dato *</label>
+                    <input class="form-control" @bind="_cName" placeholder="Ej. Pais, Nombre, Destino" autocomplete="off" />
+                </div>
+                <div class="field">
+                    <label class="form-label">De que trata el dato</label>
+                    <textarea class="form-control" rows="3" @bind="_cDescription" placeholder="Pista para el motor: que dato debe extraer del mensaje del cliente"></textarea>
+                </div>
+                <div class="field">
+                    <label class="form-label" style="display:flex;align-items:center;gap:10px;">
+                        <label class="ag-switch" style="margin:0;">
+                            <input type="checkbox" checked="@_cIsUpdatable" @onchange="e => _cIsUpdatable = (bool)e.Value!" />
+                            <span class="ag-slider"></span>
+                        </label>
+                        Actualizable durante la conversacion
+                    </label>
+                    <div class="text-muted" style="font-size:11.5px;margin-top:4px;">
+                        @if (_cIsUpdatable)
+                        {
+                            <span>El agente puede sobrescribir el valor si el cliente cambia de opinion (ej. cambio de destino, de fecha).</span>
+                        }
+                        else
+                        {
+                            <span>Una vez capturado, el valor queda fijo y el motor no lo sobrescribe (ideal para tipo_cliente, idContacto, etc).</span>
+                        }
+                    </div>
+                </div>
+                @if (_cacheError is not null)
+                {
+                    <div class="text-danger small">@_cacheError</div>
+                }
+            </div>
+            <div class="modal-foot">
+                <button class="btn btn-outline-secondary" @onclick="() => _cacheModalOpen = false">Cancelar</button>
+                <button class="btn btn-primary" @onclick="SaveCacheFieldAsync" disabled="@_busy">@(_cacheEditId is null ? "Agregar" : "Guardar")</button>
+            </div>
+        </div>
+    </div>
+}
+
+@* ===== Modal: datos percibidos (sesion de prueba) ===== *@
+@if (_perceivedModalOpen)
+{
+    <div class="modal-overlay" style="z-index:1200;">
+        <div class="modal-dialog" style="max-width:720px;">
+            <div class="modal-head">
+                <h3>Datos percibidos (sesion de prueba)</h3>
+                <button class="modal-close" @onclick="() => _perceivedModalOpen = false">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div class="text-muted" style="font-size:12px;margin-bottom:10px;">Lo que el motor de inferencia ha logrado extraer hasta ahora. Para esta sesion de prueba la clave es el id del agente; en un chat real sera el id de la conversacion.</div>
+                @if (_cacheValues.Count == 0)
+                {
+                    <div class="text-muted small">Aun no hay campos definidos. Agrega primero un dato cache.</div>
+                }
+                else
+                {
+                    <div class="ag-list ag-list-scroll">
+                        @foreach (var v in _cacheValues)
+                        {
+                            <div class="ag-item">
+                                <div class="ag-item-main">
+                                    <div class="ag-item-name">@v.Label</div>
+                                    <div class="ag-item-sub">
+                                        @if (string.IsNullOrWhiteSpace(v.Value))
+                                        {
+                                            <em class="text-muted">Sin capturar todavia</em>
+                                        }
+                                        else
+                                        {
+                                            @v.Value
+                                        }
+                                        @if (!string.IsNullOrWhiteSpace(v.Source) || v.UpdatedAt is not null)
+                                        {
+                                            <span class="text-muted" style="font-size:11px;margin-left:6px;">
+                                                @(string.IsNullOrWhiteSpace(v.Source) ? "" : $"({v.Source}) ")@(v.UpdatedAt?.ToLocalTime().ToString("dd MMM HH:mm") ?? "")
+                                            </span>
+                                        }
+                                    </div>
+                                </div>
+                            </div>
+                        }
+                    </div>
+                }
+            </div>
+            <div class="modal-foot">
+                <button class="btn btn-outline-danger" @onclick="ClearCacheValuesAsync" disabled="@(_busy || _cacheValues.All(v => string.IsNullOrWhiteSpace(v.Value)))">Vaciar datos percibidos</button>
+                <button class="btn btn-outline-secondary" @onclick="() => _perceivedModalOpen = false">Cerrar</button>
+            </div>
+        </div>
+    </div>
+}
+
+@* ===== Modal: recurso ===== *@
+@if (_resModalOpen)
+{
+    <div class="modal-overlay" style="z-index:1200;">
+        <div class="modal-dialog" style="max-width:1040px;">
+            <div class="modal-head">
+                <h3>@(_resEditId is null ? "Nuevo recurso" : "Editar recurso")</h3>
+                <button class="modal-close" @onclick="() => _resModalOpen = false">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div class="field-row">
+                    <div class="field">
+                        <label class="form-label">Nombre *</label>
+                        <input class="form-control" @bind="_rName" placeholder="Ej. Brochure Cartagena" autocomplete="off" />
+                    </div>
+                    <div class="field">
+                        <label class="form-label">Tipo</label>
+                        <select class="form-control" @bind="_rType">
+                            <option value="@AgentResourceType.Text">Texto</option>
+                            <option value="@AgentResourceType.Image">Imagen</option>
+                            <option value="@AgentResourceType.Video">Video</option>
+                            <option value="@AgentResourceType.Audio">Audio</option>
+                            <option value="@AgentResourceType.Pdf">PDF</option>
+                            <option value="@AgentResourceType.Location">Ubicacion</option>
+                        </select>
+                    </div>
+                </div>
+                <div class="field">
+                    <label class="form-label">Detalle</label>
+                    @RichToolbar("resourceDetail", () => _resEmojiOpen, v => _resEmojiOpen = v)
+                    <textarea id="resourceDetail" class="form-control" rows="6" @bind="_rDetail" @bind:event="oninput" placeholder="@DetailHint(_rType)"></textarea>
+                </div>
+                @if (_rType is not (AgentResourceType.Text or AgentResourceType.Location))
+                {
+                    <div class="field">
+                        <label class="form-label">Archivo</label>
+                        @if (!string.IsNullOrWhiteSpace(_rFileUrl))
+                        {
+                            <div class="ag-file" style="margin-bottom:6px;">
+                                <a href="@_rFileUrl" target="_blank">@(_rFileName ?? "ver archivo")</a>
+                            </div>
+                        }
+                        <InputFile OnChange="OnResourceModalFileAsync" />
+                    </div>
+                }
+                @if (_resError is not null)
+                {
+                    <div class="text-danger small">@_resError</div>
+                }
+            </div>
+            <div class="modal-foot">
+                <button class="btn btn-outline-secondary" @onclick="() => _resModalOpen = false">Cancelar</button>
+                <button class="btn btn-primary" @onclick="SaveResourceAsync" disabled="@_busy">@(_resEditId is null ? "Agregar" : "Guardar")</button>
+            </div>
+        </div>
+    </div>
+}
+
+@* ===== Modal: eliminar agente (doble confirmacion) ===== *@
+@if (_deleteAgent is not null)
+{
+    <div class="modal-overlay" style="z-index:1300;">
+        <div class="modal-dialog" style="max-width:560px;">
+            <div class="modal-head">
+                <h3>@(_deleteStep == 1 ? "Eliminar agente" : "Confirmacion final")</h3>
+                <button class="modal-close" @onclick="CloseDeleteAgent">&times;</button>
+            </div>
+            <div class="modal-body">
+                @if (_deleteStep == 1)
+                {
+                    <div style="font-size:14px;margin-bottom:12px;">
+                        Vas a eliminar el agente <strong>@_deleteAgent.Name</strong>. Esta accion no se puede deshacer.
+                    </div>
+                    <div class="text-muted" style="font-size:12.5px;">
+                        Si continuas, en el siguiente paso te mostraremos exactamente que se borrara y te pediremos una confirmacion final.
+                    </div>
+                }
+                else
+                {
+                    <div style="font-size:13.5px;margin-bottom:10px;">
+                        Esto eliminara <strong>permanentemente</strong>:
+                    </div>
+                    <ul style="font-size:13px;line-height:1.7;margin-bottom:14px;">
+                        <li>El agente <strong>@_deleteAgent.Name</strong> y su prompt base.</li>
+                        <li><strong>@_delResourcesCount</strong> recurso@(_delResourcesCount == 1 ? "" : "s") (saludos, fichas, PDFs, etc).</li>
+                        <li><strong>@_delPromptsCount</strong> prompt@(_delPromptsCount == 1 ? "" : "s") enrutado@(_delPromptsCount == 1 ? "" : "s").</li>
+                        <li><strong>@_delCacheFieldsCount</strong> campo@(_delCacheFieldsCount == 1 ? "" : "s") de cache y sus valores capturados.</li>
+                    </ul>
+                    <div class="field">
+                        <label class="form-label" style="font-size:12.5px;">Para confirmar, escribe el nombre exacto del agente:</label>
+                        <input class="form-control" placeholder="@_deleteAgent.Name" @bind="_delConfirmName" @bind:event="oninput" autocomplete="off" />
+                    </div>
+                    @if (_delError is not null)
+                    {
+                        <div class="text-danger small" style="margin-top:6px;">@_delError</div>
+                    }
+                }
+            </div>
+            <div class="modal-foot">
+                <button class="btn btn-outline-secondary" @onclick="CloseDeleteAgent" disabled="@_busy">Cancelar</button>
+                @if (_deleteStep == 1)
+                {
+                    <button class="btn btn-outline-danger" @onclick="GoToDeleteStep2">Continuar</button>
+                }
+                else
+                {
+                    <button class="btn btn-danger" @onclick="ConfirmDeleteAgentAsync" disabled="@(_busy || !string.Equals(_delConfirmName, _deleteAgent.Name, StringComparison.Ordinal))">Eliminar definitivamente</button>
+                }
+            </div>
+        </div>
+    </div>
+}
+
+@code {
+    [CascadingParameter] private Task<AuthenticationState>? AuthState { get; set; }
+
+    private bool _loading = true;
+    private bool _busy;
+    private List<AiAgentDto> _agents = new();
+    private List<AiProviderOptionDto> _providerOptions = new();
+    private AiUsageSummaryDto? _usage;
+    private AiQuotaDto? _quota;
+
+    private bool _editorOpen;
+    private Guid? _editId;
+    private string? _editorError;
+    private string _fName = "";
+    private string? _fRole;
+    private AiProvider _fProvider = AiProvider.Claude;
+    private string? _fModel;
+    private string _fPrompt = "";
+    private bool _fActive;
+    private bool _fEnableMcp;
+    private List<AiAgentResourceDto> _resources = new();
+    private List<AiAgentPromptDto> _prompts = new();
+
+    // Modal de prompt enrutado
+    private bool _promptModalOpen;
+    private Guid? _promptEditId;
+    private string _pName = "";
+    private string? _pRule;
+    private string _pBody = "";
+    private string? _promptError;
+
+    // Modal de recurso
+    private bool _resModalOpen;
+    private Guid? _resEditId;
+    private string _rName = "";
+    private AgentResourceType _rType = AgentResourceType.Text;
+    private string? _rDetail;
+    private string? _rFileUrl;
+    private string? _rFileName;
+    private string? _resError;
+
+    // Datos cache (capa 3: el agente captura datos durante la conversacion)
+    private List<AiAgentCacheFieldDto> _cacheFields = new();
+    private List<AiAgentCacheValueDto> _cacheValues = new();
+    private bool _cacheModalOpen;
+    private Guid? _cacheEditId;
+    private string _cName = "";
+    private string? _cDescription;
+    private bool _cIsUpdatable = true;
+    private string? _cacheError;
+
+    // Acordeones del editor (colapsados por defecto para no llenar la columna).
+    private bool _cacheOpen;
+    private bool _resourcesOpen;
+    // Modal aparte para los datos percibidos en la sesion de prueba.
+    private bool _perceivedModalOpen;
+
+    // Eliminacion de agente (doble confirmacion).
+    private AiAgentDto? _deleteAgent;
+    private int _deleteStep = 1;
+    private int _delResourcesCount;
+    private int _delPromptsCount;
+    private int _delCacheFieldsCount;
+    private string _delConfirmName = "";
+    private string? _delError;
+
+    // Editor de texto (formato WhatsApp + emojis)
+    private bool _baseEmojiOpen;
+    private bool _promptEmojiOpen;
+    private bool _resEmojiOpen;
+    private static readonly string[] Emojis =
+    {
+        "\U0001F600","\U0001F605","\U0001F44D","\U0001F64F","\U0001F389","✈️","\U0001F3D6️","\U0001F334","\U0001F9F3","\U0001F4CD","\U0001F4C5","\U0001F4B2",
+        "\U0001F525","✅","❤️","\U0001F60D","\U0001F91D","\U0001F4DE","\U0001F4AC","⭐","\U0001F30E","☀️","\U0001F3E8","\U0001F6EB"
+    };
+
+    // Chat de prueba del agente
+    private readonly List<TestMsg> _testMsgs = new();
+    private string? _testInput;
+    private bool _testBusy;
+    private string? _testError;
+
+    // Depuracion: log cronologico de prompts enviados a la IA (uno por cada llamada al LLM).
+    private readonly List<AiDebugPrompt> _debugLog = new();
+    private bool _debugPromptOpen;
+
+    private sealed record TestMsg(string Role, string Text, IReadOnlyList<AiChatAttachment>? Attachments = null);
+
+    // Enviar la prueba a un telefono real por una linea conectada
+    private List<WhatsAppLineDto> _phoneLines = new();
+    private bool _phoneSend;
+    private Guid _phoneLineId;
+    private string? _phoneNumber;
+    private string? _phoneInfo;
+
+    protected override async Task OnInitializedAsync()
+    {
+        _providerOptions = (await AiServersSvc.ListEnabledAsync()).ToList();
+        _phoneLines = (await LinesSvc.ListAsync()).Where(l => l.Status == WhatsAppLineStatus.Connected).ToList();
+        _phoneLineId = _phoneLines.FirstOrDefault()?.Id ?? Guid.Empty;
+        await ReloadAsync();
+        _loading = false;
+    }
+
+    // Opciones del selector: los proveedores habilitados; en edicion se incluye el actual aunque
+    // ya no este habilitado, para no perder la seleccion guardada.
+    private List<AiProviderOptionDto> EditorProviderOptions()
+    {
+        var opts = _providerOptions.ToList();
+        if (_editId is not null && opts.All(o => o.Provider != _fProvider))
+        {
+            opts.Insert(0, new AiProviderOptionDto(_fProvider, ProviderLabel(_fProvider), string.IsNullOrWhiteSpace(_fModel) ? ModelHint(_fProvider) : _fModel!));
+        }
+        return opts;
+    }
+
+    // Modelo que usara el agente: el que fijo el Super Admin para ese proveedor (o el guardado si el
+    // proveedor ya no esta habilitado). El cliente no lo elige.
+    private string? EffectiveModel(AiProvider p)
+    {
+        var opt = _providerOptions.FirstOrDefault(o => o.Provider == p);
+        return opt is not null ? opt.DefaultModel : _fModel;
+    }
+
+    private async Task ReloadAsync()
+    {
+        _agents = (await AgentsSvc.ListAsync()).ToList();
+        _usage = await UsageSvc.GetSummaryAsync();
+        _quota = await UsageSvc.GetQuotaAsync();
+    }
+
+    private long AgentTokens(Guid agentId)
+        => _usage?.ByAgent.FirstOrDefault(a => a.AgentId == agentId)?.TotalTokens ?? 0;
+
+    private static string Tokens(long n) => n >= 1000 ? $"{n / 1000.0:0.#}k" : n.ToString();
+
+    private void OpenNew()
+    {
+        _editId = null;
+        _editorError = null;
+        _fName = "";
+        _fRole = null;
+        _fProvider = _providerOptions.Count > 0 ? _providerOptions[0].Provider : AiProvider.Claude;
+        _fModel = null;
+        _fPrompt = "";
+        _fActive = false;
+        _fEnableMcp = false;
+        _resources = new();
+        _cacheFields = new();
+        _cacheValues = new();
+        _cacheOpen = false;
+        _resourcesOpen = false;
+        _perceivedModalOpen = false;
+        ResetTest();
+        _editorOpen = true;
+    }
+
+    private void ResetTest()
+    {
+        _testMsgs.Clear();
+        _testInput = null;
+        _testError = null;
+        _testBusy = false;
+        _debugLog.Clear();
+        _debugPromptOpen = false;
+    }
+
+    private static string MapsLink(string? coords) => $"https://www.google.com/maps?q={coords}";
+
+    private async Task OpenEditAsync(Guid id)
+    {
+        var detail = await AgentsSvc.GetAsync(id);
+        if (detail is null) { return; }
+        _editId = id;
+        _editorError = null;
+        _fName = detail.Agent.Name;
+        _fRole = detail.Agent.Role;
+        _fProvider = detail.Agent.Provider;
+        _fModel = detail.Agent.Model;
+        _fPrompt = detail.Agent.SystemPrompt;
+        _fActive = detail.Agent.IsActive;
+        _fEnableMcp = detail.Agent.EnableDataContainerMcp;
+        _resources = detail.Resources.ToList();
+        _prompts = detail.Prompts.ToList();
+        await ReloadCacheAsync(id);
+        _cacheOpen = false;
+        _resourcesOpen = false;
+        _perceivedModalOpen = false;
+        ResetTest();
+        _editorOpen = true;
+    }
+
+    // ===== Datos cache =====
+    // Para esta pantalla de pruebas usamos el AgentId como SessionId (una sesion por agente).
+    // Cuando un telefono real se enlace, la sesion sera el ConversationId.
+    private async Task ReloadCacheAsync(Guid agentId)
+    {
+        _cacheFields = (await CacheSvc.ListFieldsAsync(agentId)).ToList();
+        _cacheValues = (await CacheSvc.GetValuesAsync(agentId, agentId)).ToList();
+    }
+
+    private void OpenCacheField(AiAgentCacheFieldDto? f)
+    {
+        _cacheError = null;
+        _cacheEditId = f?.Id;
+        _cName = f?.Label ?? "";
+        _cDescription = f?.Description;
+        _cIsUpdatable = f?.IsUpdatable ?? true;
+        _cacheModalOpen = true;
+    }
+
+    private async Task SaveCacheFieldAsync()
+    {
+        _cacheError = null;
+        if (_editId is null) { return; }
+        if (string.IsNullOrWhiteSpace(_cName)) { _cacheError = "El nombre es obligatorio."; return; }
+        _busy = true;
+        try
+        {
+            var actor = await ActorAsync();
+            if (_cacheEditId is null)
+            {
+                var created = await CacheSvc.CreateFieldAsync(new CreateAgentCacheFieldRequest(_editId.Value, _cName, _cDescription, _cIsUpdatable), actor);
+                if (created is null) { _cacheError = "No se pudo crear el dato."; return; }
+            }
+            else
+            {
+                var updated = await CacheSvc.UpdateFieldAsync(_cacheEditId.Value, new UpdateAgentCacheFieldRequest(_cName, _cDescription, _cIsUpdatable), actor);
+                if (updated is null) { _cacheError = "No se pudo actualizar el dato."; return; }
+            }
+            await ReloadCacheAsync(_editId.Value);
+            _cacheModalOpen = false;
+        }
+        finally { _busy = false; }
+    }
+
+    private async Task DeleteCacheFieldAsync(Guid id)
+    {
+        if (_editId is null) { return; }
+        _busy = true;
+        try
+        {
+            var actor = await ActorAsync();
+            await CacheSvc.DeleteFieldAsync(id, actor);
+            await ReloadCacheAsync(_editId.Value);
+        }
+        finally { _busy = false; }
+    }
+
+    private async Task ClearCacheValuesAsync()
+    {
+        if (_editId is null) { return; }
+        _busy = true;
+        try
+        {
+            var actor = await ActorAsync();
+            await CacheSvc.ClearValuesAsync(_editId.Value, _editId.Value, actor);
+            await ReloadCacheAsync(_editId.Value);
+        }
+        finally { _busy = false; }
+    }
+
+    private bool AllSticky() => _cacheFields.Count > 0 && _cacheFields.All(f => !f.IsUpdatable);
+
+    private async Task BulkToggleStickyAsync()
+    {
+        if (_editId is null || _cacheFields.Count == 0) { return; }
+        _busy = true;
+        try
+        {
+            var actor = await ActorAsync();
+            var target = !AllSticky();   // si NO todos son sticky -> los pone sticky (IsUpdatable=false); si todos son sticky, los pone actualizables.
+            await CacheSvc.BulkSetFieldsUpdatableAsync(_editId.Value, !target, actor);
+            await ReloadCacheAsync(_editId.Value);
+        }
+        finally { _busy = false; }
+    }
+
+    private async Task OpenPerceivedModal()
+    {
+        // Recargamos los valores antes de mostrar el modal para que la vista sea la mas reciente.
+        if (_editId is not null) { await ReloadCacheAsync(_editId.Value); }
+        _perceivedModalOpen = true;
+    }
+
+    // ===== Prompts enrutados =====
+    private void OpenPrompt(AiAgentPromptDto? p)
+    {
+        _promptError = null;
+        _promptEditId = p?.Id;
+        _pName = p?.Name ?? "";
+        _pRule = p?.Rule;
+        _pBody = p?.Body ?? "";
+        _promptModalOpen = true;
+    }
+
+    private async Task SavePromptAsync()
+    {
+        _promptError = null;
+        if (_editId is null) { return; }
+        if (string.IsNullOrWhiteSpace(_pName) || string.IsNullOrWhiteSpace(_pBody)) { _promptError = "Nombre y prompt son obligatorios."; return; }
+        _busy = true;
+        try
+        {
+            var actor = await ActorAsync();
+            if (_promptEditId is null)
+            {
+                var created = await AgentsSvc.AddPromptAsync(new CreateAgentPromptRequest(_editId.Value, _pName, _pRule, _pBody), actor);
+                if (created is not null) { _prompts.Add(created); }
+            }
+            else
+            {
+                var updated = await AgentsSvc.UpdatePromptAsync(_promptEditId.Value, new UpdateAgentPromptRequest(_pName, _pRule, _pBody), actor);
+                if (updated is not null)
+                {
+                    var idx = _prompts.FindIndex(x => x.Id == updated.Id);
+                    if (idx >= 0) { _prompts[idx] = updated; }
+                }
+            }
+            _promptModalOpen = false;
+        }
+        finally { _busy = false; }
+    }
+
+    private async Task DeletePromptAsync(Guid id)
+    {
+        _busy = true;
+        try
+        {
+            var actor = await ActorAsync();
+            await AgentsSvc.DeletePromptAsync(id, actor);
+            _prompts.RemoveAll(p => p.Id == id);
+        }
+        finally { _busy = false; }
+    }
+
+    // ===== Recursos (modal) =====
+    private void OpenResource(AiAgentResourceDto? r)
+    {
+        _resError = null;
+        _resEditId = r?.Id;
+        _rName = r?.Name ?? "";
+        _rType = r?.ResourceType ?? AgentResourceType.Text;
+        _rDetail = r?.Detail;
+        _rFileUrl = r?.FileUrl;
+        _rFileName = r?.FileName;
+        _resEmojiOpen = false;
+        _resModalOpen = true;
+    }
+
+    private async Task OnResourceModalFileAsync(InputFileChangeEventArgs e)
+    {
+        var saved = await SaveAgentFileAsync(e.File);
+        if (saved is null) { _resError = "No se pudo subir el archivo."; return; }
+        _rFileUrl = saved.Value.Url;
+        _rFileName = saved.Value.Name;
+    }
+
+    private async Task SaveResourceAsync()
+    {
+        _resError = null;
+        if (_editId is null) { return; }
+        if (string.IsNullOrWhiteSpace(_rName)) { _resError = "El nombre es obligatorio."; return; }
+        _busy = true;
+        try
+        {
+            var actor = await ActorAsync();
+            if (_resEditId is null)
+            {
+                var created = await AgentsSvc.AddResourceAsync(new CreateAgentResourceRequest(_editId.Value, _rName, _rType, _rDetail, _rFileUrl, _rFileName), actor);
+                if (created is not null) { _resources.Add(created); }
+            }
+            else
+            {
+                var updated = await AgentsSvc.UpdateResourceAsync(_resEditId.Value, new UpdateAgentResourceRequest(_rName, _rType, _rDetail, _rFileUrl, _rFileName), actor);
+                if (updated is not null)
+                {
+                    var idx = _resources.FindIndex(x => x.Id == updated.Id);
+                    if (idx >= 0) { _resources[idx] = updated; }
+                }
+            }
+            _resModalOpen = false;
+        }
+        finally { _busy = false; }
+    }
+
+    private static string ResourceLabel(AgentResourceType t) => t switch
+    {
+        AgentResourceType.Image => "IMG",
+        AgentResourceType.Video => "VID",
+        AgentResourceType.Audio => "AUD",
+        AgentResourceType.Pdf => "PDF",
+        AgentResourceType.Location => "GEO",
+        _ => "TXT"
+    };
+
+    // ===== Editor de texto enriquecido (formato WhatsApp + emojis) =====
+    private RenderFragment RichToolbar(string targetId, Func<bool> emojiOpen, Action<bool> setEmojiOpen) =>@<div class="rt-toolbar">
+        <button type="button" class="rt-btn" title="Negrita (*texto*)" @onclick="() => Bold(targetId)"><b>B</b></button>
+        <button type="button" class="rt-btn" title="Cursiva (_texto_)" @onclick="() => Italic(targetId)"><i>i</i></button>
+        <button type="button" class="rt-btn" title="Tachado (~texto~)" @onclick="() => Strike(targetId)"><s>S</s></button>
+        <button type="button" class="rt-btn" title="Monoespaciado" @onclick="() => Mono(targetId)">&lt;/&gt;</button>
+        <button type="button" class="rt-btn" title="Vineta" @onclick="() => Bullet(targetId)">&bull;</button>
+        <button type="button" class="rt-btn @(emojiOpen() ? "on" : "")" title="Emojis" @onclick="() => setEmojiOpen(!emojiOpen())">E</button>
+        @if (emojiOpen())
+        {
+            <div class="rt-emojis">
+                @foreach (var em in Emojis)
+                {
+                    <button type="button" class="rt-emoji" @onclick="() => Emoji(targetId, em)">@em</button>
+                }
+            </div>
+        }
+    </div>;
+
+    private Task Bold(string id) => Fmt(id, "*", "*");
+    private Task Italic(string id) => Fmt(id, "_", "_");
+    private Task Strike(string id) => Fmt(id, "~", "~");
+    private Task Mono(string id) => Fmt(id, "```", "```");
+    private Task Bullet(string id) => JS.InvokeVoidAsync("cubotAgentEditor.insert", id, "\n- ").AsTask();
+    private async Task Fmt(string id, string before, string after) => await JS.InvokeVoidAsync("cubotAgentEditor.wrap", id, before, after);
+    private async Task Emoji(string id, string e) => await JS.InvokeVoidAsync("cubotAgentEditor.insert", id, e);
+
+    private async Task TestKeyDown(KeyboardEventArgs e)
+    {
+        if (e.Key == "Enter" && !e.ShiftKey) { await SendTestAsync(); }
+    }
+
+    private async Task SendTestAsync()
+    {
+        if (_editId is null || string.IsNullOrWhiteSpace(_testInput)) { return; }
+        _testError = null;
+        _testMsgs.Add(new TestMsg("user", _testInput!.Trim()));
+        _testInput = null;
+        _testBusy = true;
+        try
+        {
+            // Pasamos tambien los adjuntos de cada turno; el extractor de cache los usa para construir
+            // una transcripcion legible (sino veria texto vacio cuando el agente solo respondio con un recurso).
+            var turns = _testMsgs.Select(m => new AiChatTurn(m.Role, m.Text, m.Attachments)).ToList();
+            var result = await InferenceSvc.TestChatAsync(_editId.Value, turns, _fPrompt);
+            // Acumulamos las entradas del log de prompts (principal + extractor) en orden cronologico.
+            if (result.DebugPrompts is not null) { _debugLog.AddRange(result.DebugPrompts); }
+            if (result.Ok && (!string.IsNullOrWhiteSpace(result.Text) || result.Attachments is { Count: > 0 }))
+            {
+                _testMsgs.Add(new TestMsg("model", result.Text ?? "", result.Attachments));
+                _usage = await UsageSvc.GetSummaryAsync();
+                _quota = await UsageSvc.GetQuotaAsync();
+                if (_phoneSend) { await SendToPhoneAsync(result.Text, result.Attachments); }
+            }
+            else
+            {
+                _testError = result.Error ?? "El agente no devolvio respuesta.";
+            }
+        }
+        finally { _testBusy = false; }
+    }
+
+    private void ClearDebugLog() => _debugLog.Clear();
+
+    // Reenvia la respuesta del agente (texto + adjuntos) a un telefono real por una linea conectada.
+    private async Task SendToPhoneAsync(string? text, IReadOnlyList<AiChatAttachment>? attachments)
+    {
+        _phoneInfo = null;
+        if (_phoneLineId == Guid.Empty || string.IsNullOrWhiteSpace(_phoneNumber)) { _phoneInfo = "Elige una linea y un numero."; return; }
+        var phone = new string(_phoneNumber.Where(char.IsDigit).ToArray());
+        var actor = await ActorAsync();
+        try
+        {
+            if (!string.IsNullOrWhiteSpace(text))
+            {
+                await Connector.SendTestAsync(_phoneLineId, phone, text!, actor);
+            }
+            if (attachments is { Count: > 0 })
+            {
+                foreach (var a in attachments)
+                {
+                    if (a.ResourceType == AgentResourceType.Text)
+                    {
+                        if (!string.IsNullOrWhiteSpace(a.Detail)) { await Connector.SendTestAsync(_phoneLineId, phone, a.Detail!, actor); }
+                    }
+                    else if (a.ResourceType == AgentResourceType.Location)
+                    {
+                        var parts = (a.Detail ?? "").Split(',');
+                        if (parts.Length == 2 && double.TryParse(parts[0], System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out var lat)
+                            && double.TryParse(parts[1], System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out var lng))
+                        {
+                            await Connector.SendLocationAsync(_phoneLineId, phone, lat, lng, a.Name, actor);
+                        }
+                    }
+                    else
+                    {
+                        var b64 = await ReadLocalBase64Async(a.FileUrl);
+                        if (b64 is not null)
+                        {
+                            var mt = a.ResourceType switch
+                            {
+                                AgentResourceType.Image => MessageMediaType.Image,
+                                AgentResourceType.Video => MessageMediaType.Video,
+                                AgentResourceType.Audio => MessageMediaType.Audio,
+                                _ => MessageMediaType.Document
+                            };
+                            await Connector.SendMediaAsync(_phoneLineId, phone, mt, b64, null, a.FileName, a.Detail, actor);
+                        }
+                    }
+                }
+            }
+            _phoneInfo = $"Enviado a {phone}.";
+        }
+        catch (Exception ex) { _phoneInfo = "No se pudo enviar al telefono: " + ex.Message; }
+    }
+
+    private async Task<string?> ReadLocalBase64Async(string? localUrl)
+    {
+        if (string.IsNullOrWhiteSpace(localUrl)) { return null; }
+        var rel = localUrl.TrimStart('/').Replace('/', System.IO.Path.DirectorySeparatorChar);
+        var path = System.IO.Path.Combine(Env.WebRootPath, rel);
+        if (!System.IO.File.Exists(path)) { return null; }
+        return Convert.ToBase64String(await System.IO.File.ReadAllBytesAsync(path));
+    }
+
+    private void CloseEditor() => _editorOpen = false;
+
+    private async Task SaveAgentAsync()
+    {
+        _editorError = null;
+        if (string.IsNullOrWhiteSpace(_fName)) { _editorError = "El nombre es obligatorio."; return; }
+        _busy = true;
+        try
+        {
+            var actor = await ActorAsync();
+            var model = EffectiveModel(_fProvider);
+            if (_editId is null)
+            {
+                var created = await AgentsSvc.CreateAsync(new CreateAiAgentRequest(_fName, _fRole, _fProvider, model, _fPrompt, _fEnableMcp), actor);
+                if (created is null) { _editorError = "No se pudo crear el agente."; return; }
+                _editId = created.Id;
+                await ReloadCacheAsync(_editId.Value);
+            }
+            else
+            {
+                await AgentsSvc.UpdateAsync(_editId.Value, new UpdateAiAgentRequest(_fName, _fRole, _fProvider, model, _fPrompt, _fEnableMcp), actor);
+            }
+            await ReloadAsync();
+        }
+        finally { _busy = false; }
+    }
+
+    private async Task ToggleActiveAsync(AiAgentDto a, bool active)
+    {
+        _busy = true;
+        try
+        {
+            var actor = await ActorAsync();
+            await AgentsSvc.SetActiveAsync(a.Id, active, actor);
+            await ReloadAsync();
+        }
+        finally { _busy = false; }
+    }
+
+    private async Task ToggleActiveInEditorAsync(bool active)
+    {
+        if (_editId is null) { return; }
+        _busy = true;
+        try
+        {
+            var actor = await ActorAsync();
+            await AgentsSvc.SetActiveAsync(_editId.Value, active, actor);
+            _fActive = active;
+            await ReloadAsync();
+        }
+        finally { _busy = false; }
+    }
+
+    // ===== Eliminar agente (doble confirmacion) =====
+    private void OpenDeleteAgent(AiAgentDto a)
+    {
+        _deleteAgent = a;
+        _deleteStep = 1;
+        _delResourcesCount = a.ResourceCount;
+        _delPromptsCount = 0;
+        _delCacheFieldsCount = 0;
+        _delConfirmName = "";
+        _delError = null;
+    }
+
+    private void CloseDeleteAgent()
+    {
+        _deleteAgent = null;
+        _deleteStep = 1;
+        _delConfirmName = "";
+        _delError = null;
+    }
+
+    private async Task GoToDeleteStep2()
+    {
+        if (_deleteAgent is null) { return; }
+        // Cargamos las cuentas exactas justo antes del paso 2 para que el usuario vea que se borrara.
+        try
+        {
+            var detail = await AgentsSvc.GetAsync(_deleteAgent.Id);
+            if (detail is not null)
+            {
+                _delResourcesCount = detail.Resources.Count;
+                _delPromptsCount = detail.Prompts.Count;
+            }
+            _delCacheFieldsCount = (await CacheSvc.ListFieldsAsync(_deleteAgent.Id)).Count;
+        }
+        catch { /* si fallan las cuentas seguimos con los valores por defecto */ }
+        _deleteStep = 2;
+    }
+
+    private async Task ConfirmDeleteAgentAsync()
+    {
+        if (_deleteAgent is null) { return; }
+        if (!string.Equals(_delConfirmName, _deleteAgent.Name, StringComparison.Ordinal))
+        {
+            _delError = "El nombre no coincide.";
+            return;
+        }
+        _busy = true;
+        try
+        {
+            var actor = await ActorAsync();
+            var ok = await AgentsSvc.DeleteAsync(_deleteAgent.Id, actor);
+            if (!ok) { _delError = "No se pudo eliminar el agente."; return; }
+            CloseDeleteAgent();
+            await ReloadAsync();
+        }
+        catch (Exception ex)
+        {
+            _delError = ex.Message;
+        }
+        finally { _busy = false; }
+    }
+
+    private async Task DeleteResourceAsync(Guid id)
+    {
+        _busy = true;
+        try
+        {
+            var actor = await ActorAsync();
+            await AgentsSvc.DeleteResourceAsync(id, actor);
+            _resources.RemoveAll(x => x.Id == id);
+        }
+        finally { _busy = false; }
+    }
+
+    private async Task<(string Url, string Name)?> SaveAgentFileAsync(IBrowserFile file)
+    {
+        const long max = 25L * 1024 * 1024;
+        if (file.Size <= 0 || file.Size > max) { return null; }
+        using var ms = new MemoryStream();
+        await file.OpenReadStream(max).CopyToAsync(ms);
+        var ext = System.IO.Path.GetExtension(file.Name);
+        var dir = System.IO.Path.Combine(Env.WebRootPath, "uploads", "agents");
+        System.IO.Directory.CreateDirectory(dir);
+        var name = $"agent-{Guid.NewGuid():N}{ext}";
+        await System.IO.File.WriteAllBytesAsync(System.IO.Path.Combine(dir, name), ms.ToArray());
+        return ($"/uploads/agents/{name}", file.Name);
+    }
+
+    private async Task<Guid> ActorAsync()
+    {
+        if (AuthState is null) { return Guid.Empty; }
+        var st = await AuthState;
+        return Guid.TryParse(st.User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value, out var id) ? id : Guid.Empty;
+    }
+
+    private static string ProviderLabel(AiProvider p) => p switch
+    {
+        AiProvider.Claude => "Claude",
+        AiProvider.Gemini => "Gemini",
+        AiProvider.ChatGpt => "ChatGPT",
+        AiProvider.DeepSeek => "DeepSeek",
+        _ => p.ToString()
+    };
+    private static string ProviderClass(AiProvider p) => p switch
+    {
+        AiProvider.Claude => "p-claude",
+        AiProvider.Gemini => "p-gemini",
+        AiProvider.ChatGpt => "p-gpt",
+        AiProvider.DeepSeek => "p-deepseek",
+        _ => ""
+    };
+    private static string ModelHint(AiProvider p) => p switch
+    {
+        AiProvider.Claude => "claude-opus-4-7",
+        AiProvider.Gemini => "gemini-2.5-pro",
+        AiProvider.ChatGpt => "gpt-4o",
+        AiProvider.DeepSeek => "deepseek-chat",
+        _ => ""
+    };
+    private static string DetailHint(AgentResourceType t) => t switch
+    {
+        AgentResourceType.Text => "Texto que el agente puede enviar",
+        AgentResourceType.Location => "lat,lng (ej: 10.39,-75.51)",
+        _ => "Descripcion / cuando usarlo"
+    };
+    private static string Trim(string s, int n) => s.Length > n ? s[..n] + "..." : s;
+}

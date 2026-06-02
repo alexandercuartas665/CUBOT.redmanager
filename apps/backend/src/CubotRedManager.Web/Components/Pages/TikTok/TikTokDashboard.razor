@@ -1,0 +1,123 @@
+@page "/tiktok"
+@attribute [Authorize(Policy = AppPolicies.TenantMember)]
+@rendermode InteractiveServer
+@using CubotRedManager.Application.Tenancy
+@using CubotRedManager.Domain.Enums
+@inject ISocialAccountService AccountsSvc
+@inject IInboxService InboxSvc
+@inject NavigationManager Nav
+
+<PageTitle>TikTok Manager - CUBOT.redmanager</PageTitle>
+
+<div class="module-head">
+    <div>
+        <div class="module-eyebrow">
+            <div class="module-icon">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 12a4 4 0 1 0 4 4V4a5 5 0 0 0 5 5"/></svg>
+            </div>
+            <span>TikTok Manager</span>
+        </div>
+        <h1 class="page-title" style="margin-top:12px;">Resumen General</h1>
+        <p class="page-sub" style="margin-bottom:0;">Estado de cuentas TikTok conectadas, comentarios entrantes y conversion a leads.</p>
+    </div>
+    <div style="display:flex; gap:8px;">
+        <a class="btn btn-outline-secondary" href="/tiktok/cuentas">Cuentas</a>
+        <a class="btn btn-primary" href="/tiktok/pipeline">Pipeline</a>
+    </div>
+</div>
+
+@if (_loading) { <p class="text-muted">Cargando...</p> }
+else
+{
+<div class="tk-stats">
+    <div class="tk-stat">
+        <div class="tk-stat-ic" style="background:#dbeafe;color:#1d4ed8;">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/></svg>
+        </div>
+        <div><div class="tk-stat-lbl">Cuentas Activas</div><div class="tk-stat-val">@_activeAccounts/@_totalAccounts</div></div>
+    </div>
+    <div class="tk-stat">
+        <div class="tk-stat-ic" style="background:#f3e8ff;color:#7c3aed;">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+        </div>
+        <div><div class="tk-stat-lbl">Comentarios</div><div class="tk-stat-val">@_totalComments</div></div>
+    </div>
+    <div class="tk-stat">
+        <div class="tk-stat-ic" style="background:#fef3c7;color:#a16207;">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12a9 9 0 1 0 9-9"/><path d="M3 4v5h5"/></svg>
+        </div>
+        <div><div class="tk-stat-lbl">Pendientes</div><div class="tk-stat-val">@_pending</div></div>
+    </div>
+    <div class="tk-stat">
+        <div class="tk-stat-ic" style="background:#dcfce7;color:#15803d;">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M19 8v6"/><path d="M22 11h-6"/></svg>
+        </div>
+        <div><div class="tk-stat-lbl">Leads</div><div class="tk-stat-val">@_leads</div></div>
+    </div>
+</div>
+
+<div class="card" style="padding:22px 24px; margin-top:18px;">
+    <h3 style="font-size:15px;font-weight:700;margin:0 0 14px;">Actividad reciente</h3>
+    @if (_recent.Count == 0) { <p class="text-muted" style="margin:0;">Aun no hay comentarios. Conecta una cuenta para empezar.</p> }
+    else
+    {
+        @foreach (var c in _recent)
+        {
+            <div class="tk-activity">
+                <div class="tk-activity-avatar">@(string.IsNullOrWhiteSpace(c.AuthorName) ? "?" : c.AuthorName![..1].ToUpperInvariant())</div>
+                <div style="flex:1;">
+                    <p style="margin:0;font-size:13px;color:#1f2937;"><b>@c.AuthorName</b> comento en <b style="color:#1d4ed8;">@c.ClientName</b></p>
+                    <p style="margin:4px 0 0;font-size:12px;color:#6b7280;">@c.Body</p>
+                </div>
+                <span class="tk-pipeline-pill tk-pl-@c.PipelineStage.ToString().ToLower()">@StageLabel(c.PipelineStage)</span>
+            </div>
+        }
+    }
+</div>
+}
+
+<style>
+    .tk-stats { display:grid; grid-template-columns: repeat(4, 1fr); gap:16px; }
+    @@media (max-width: 900px){ .tk-stats { grid-template-columns: repeat(2, 1fr); } }
+    .tk-stat { background:#fff; border:1px solid var(--border); border-radius:14px; padding:18px 20px; display:flex; gap:14px; align-items:center; }
+    .tk-stat-ic { width:42px; height:42px; border-radius:10px; display:flex; align-items:center; justify-content:center; }
+    .tk-stat-ic svg { width:22px; height:22px; }
+    .tk-stat-lbl { font-size:12px; color:var(--muted-foreground); font-weight:600; }
+    .tk-stat-val { font-size:22px; font-weight:700; color:#111827; }
+    .tk-activity { display:flex; gap:12px; align-items:flex-start; padding:12px 4px; border-bottom:1px solid #f3f4f6; }
+    .tk-activity:last-child { border-bottom:none; }
+    .tk-activity-avatar { width:36px; height:36px; border-radius:50%; background:linear-gradient(135deg,#A03DC9,#C7398B); color:#fff; display:flex; align-items:center; justify-content:center; font-weight:700; font-size:13px; }
+    .tk-pipeline-pill { font-size:10px; font-weight:700; padding:3px 9px; border-radius:6px; }
+    .tk-pl-new { background:#dbeafe; color:#1d4ed8; }
+    .tk-pl-contacted { background:#fef3c7; color:#a16207; }
+    .tk-pl-qualified { background:#f3e8ff; color:#7c3aed; }
+    .tk-pl-converted { background:#dcfce7; color:#15803d; }
+</style>
+
+@code {
+    private bool _loading = true;
+    private int _activeAccounts, _totalAccounts, _totalComments, _pending, _leads;
+    private List<InboxMessageDto> _recent = new();
+
+    protected override async Task OnInitializedAsync()
+    {
+        var accounts = (await AccountsSvc.ListAsync()).Where(a => a.NetworkCode == "tiktok").ToList();
+        var comments = await InboxSvc.ListCommentsAsync(networkCode: "tiktok");
+        _totalAccounts = accounts.Count;
+        _activeAccounts = accounts.Count(a => a.Status == SocialAccountStatus.Connected);
+        _totalComments = comments.Count;
+        _pending = comments.Count(c => c.PipelineStage == CommentPipelineStage.New);
+        _leads = comments.Count(c => c.PipelineStage == CommentPipelineStage.Qualified || c.PipelineStage == CommentPipelineStage.Converted);
+        _recent = comments.OrderByDescending(c => c.ReceivedAt).Take(4).ToList();
+        _loading = false;
+    }
+
+    private static string StageLabel(CommentPipelineStage s) => s switch
+    {
+        CommentPipelineStage.New => "Nuevo",
+        CommentPipelineStage.Contacted => "Contactado",
+        CommentPipelineStage.Qualified => "Calificado",
+        CommentPipelineStage.Converted => "Convertido",
+        _ => s.ToString()
+    };
+}

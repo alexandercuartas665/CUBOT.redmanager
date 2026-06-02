@@ -136,3 +136,74 @@ public enum InboxMessageType { DirectMessage, Comment, Mention }
 
 /// <summary>Estado de un mensaje de la bandeja unificada.</summary>
 public enum InboxStatus { Unread, Read, Replied, Archived, EscalateToHuman }
+
+/// <summary>
+/// Etapa de embudo comercial sobre comentarios entrantes (Pipeline TikTok Manager).
+/// Funnel: New -> Contacted -> Qualified -> Converted. Aplica solo a comentarios (Type=Comment).
+/// </summary>
+public enum CommentPipelineStage { New, Contacted, Qualified, Converted }
+
+/// <summary>Tipo de media a enviar via WhatsApp Connector (Modulo Agentes).</summary>
+public enum MessageMediaType { Image, Video, Audio, Document }
+
+/// <summary>Modo de respuesta del motor de autorespuesta (Modulo 2.11).</summary>
+public enum AutoReplyMode
+{
+    /// <summary>Solo plantillas por palabra clave. Si nada matchea no responde (o usa plantilla por defecto).</summary>
+    Template,
+    /// <summary>Solo IA (Bandeja IA). Mas costoso pero entiende contexto.</summary>
+    Ai,
+    /// <summary>Plantilla si matchea, IA si no. Recomendado: barato + cobertura.</summary>
+    Mixed
+}
+
+/// <summary>Frecuencia de ejecucion del job de autorespuesta por cuenta.</summary>
+public enum AutoReplyFrequency
+{
+    Every15m,
+    Every30m,
+    Every1h,
+    Every2h,
+    Every4h,
+    Daily,
+    /// <summary>Usar la expresion cron de CronCustom.</summary>
+    Custom
+}
+
+/// <summary>Estado de una ejecucion del job de autorespuesta.</summary>
+public enum AutoReplyJobStatus
+{
+    Ok,
+    Warning,
+    Error
+}
+
+/// <summary>Trigger que dispara una regla de automatizacion (Modulo Automatizaciones).</summary>
+public enum AutomationTrigger
+{
+    NoReply,
+    CommentReceived,
+    PublicationFailed,
+    TokenExpired,
+    DailySchedule
+}
+
+/// <summary>Accion que ejecuta una regla de automatizacion.</summary>
+public enum AutomationAction
+{
+    CreateTask,
+    NotifyOperator,
+    EscalateToHuman,
+    AssignToTeam,
+    SendWhatsAppSummary
+}
+
+/// <summary>Tipo de dato de una columna en un DataContainer (tablas dinamicas).</summary>
+public enum DataColumnType
+{
+    Text,
+    Number,
+    Decimal,
+    Date,
+    Boolean
+}

@@ -17,6 +17,12 @@ public interface IApplicationDbContext
     DbSet<UserClientLink> UserClientLinks { get; }
     DbSet<SocialNetwork> SocialNetworks { get; }
     DbSet<SocialAccount> SocialAccounts { get; }
+    DbSet<TikTokAppConfig> TikTokAppConfigs { get; }
+    DbSet<TikTokVideo> TikTokVideos { get; }
+    DbSet<AutoReplyConfig> AutoReplyConfigs { get; }
+    DbSet<AutoReplyTemplate> AutoReplyTemplates { get; }
+    DbSet<AutoReplyJobLog> AutoReplyJobLogs { get; }
+    DbSet<AutomationRule> AutomationRules { get; }
     DbSet<TaskBoard> TaskBoards { get; }
     DbSet<TaskColumn> TaskColumns { get; }
     DbSet<TaskCard> TaskCards { get; }
@@ -24,6 +30,13 @@ public interface IApplicationDbContext
     DbSet<PublicationTarget> PublicationTargets { get; }
     DbSet<InboxMessage> InboxMessages { get; }
     DbSet<InboxReply> InboxReplies { get; }
+    DbSet<MessageTemplate> MessageTemplates { get; }
+
+    // Contenedor de Datos (modelos dinamicos EAV)
+    DbSet<DataContainer> DataContainers { get; }
+    DbSet<DataContainerColumn> DataContainerColumns { get; }
+    DbSet<DataContainerRow> DataContainerRows { get; }
+    DbSet<DataContainerCell> DataContainerCells { get; }
 
     // Planes SaaS
     DbSet<SaasPlan> SaasPlans { get; }

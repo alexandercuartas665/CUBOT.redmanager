@@ -20,6 +20,15 @@ appsettings.*.local.json
 *.env
 secrets.json
 
+## DataProtection keys (cifran cookies y API keys de IA - NUNCA versionar)
+**/.dp-keys/
+
+## Archivos subidos por usuarios (uploads locales del Calendario, etc.)
+**/wwwroot/uploads/
+
+## PIDs locales del script run.ps1
+tools/.pids
+
 ## Docker data (volumenes locales)
 deploy/docker/*-data/
 deploy/docker/.env

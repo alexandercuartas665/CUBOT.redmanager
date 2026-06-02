@@ -64,8 +64,21 @@ public sealed class SocialAccountService : ISocialAccountService
             networks.TryGetValue(x.a.NetworkCode, out var net);
             return new SocialAccountDto(x.a.Id, x.a.ClientId, x.ClientName, x.a.NetworkCode,
                 net?.DisplayName ?? x.a.NetworkCode, net?.ColorHex ?? "#A03DC9",
-                x.a.Handle, x.a.DisplayName, x.a.Status, x.a.ExpiresAt, x.a.LastSyncAt);
+                x.a.Handle, x.a.DisplayName, x.a.Status, x.a.ExpiresAt, x.a.LastSyncAt,
+                x.a.FollowersCount, x.a.AvatarUrl, x.a.Bio);
         }).ToList();
+    }
+
+    public async Task<bool> DeleteAsync(Guid id, Guid actorUserId, CancellationToken cancellationToken = default)
+    {
+        var account = await _db.SocialAccounts.FirstOrDefaultAsync(a => a.Id == id, cancellationToken);
+        if (account is null) { return false; }
+        var tenantId = account.TenantId;
+        _db.SocialAccounts.Remove(account);
+        _audit.Write(actorUserId, "social-account.delete", nameof(SocialAccount), id,
+            previousValue: new { account.NetworkCode, account.ClientId, account.Handle }, newValue: null, tenantId: tenantId);
+        await _db.SaveChangesAsync(cancellationToken);
+        return true;
     }
 
     public async Task<SocialAccountDto?> ConnectDemoAsync(ConnectSocialAccountRequest request, Guid actorUserId, CancellationToken cancellationToken = default)

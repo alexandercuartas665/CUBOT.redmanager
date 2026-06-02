@@ -30,6 +30,25 @@ public sealed record SaveWompiConfigRequest(
 
 public sealed record WompiValidationResult(bool Ok, string Message);
 
+/// <summary>Resultado de generar un checkout: la URL de pago de Wompi y la referencia creada.</summary>
+public sealed record WompiCheckoutResult(bool Ok, string? CheckoutUrl, string? Reference, string? Error);
+
+// --- Wompi API client (debito automatico) ---
+public sealed record WompiAcceptance(bool Ok, string? AcceptanceToken, string? Error);
+public sealed record WompiPaymentSourceResult(bool Ok, long? Id, string? Label, string? Error);
+public sealed record WompiChargeResult(bool Ok, string? TransactionId, string? Status, string? Error);
+
+/// <summary>
+/// Cliente HTTP de la API de Wompi (sandbox/produccion segun la config maestra). Lo usa el debito
+/// automatico para tokenizar tarjetas y cobrar contra fuentes de pago guardadas.
+/// </summary>
+public interface IWompiApiClient
+{
+    Task<WompiAcceptance> GetAcceptanceTokenAsync(CancellationToken cancellationToken = default);
+    Task<WompiPaymentSourceResult> CreateCardPaymentSourceAsync(string cardToken, string customerEmail, string acceptanceToken, CancellationToken cancellationToken = default);
+    Task<WompiChargeResult> ChargePaymentSourceAsync(long paymentSourceId, long amountInCents, string currency, string reference, string customerEmail, CancellationToken cancellationToken = default);
+}
+
 public interface IWompiConfigService
 {
     Task<WompiConfigDto?> GetAsync(CancellationToken cancellationToken = default);

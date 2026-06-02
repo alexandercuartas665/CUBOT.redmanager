@@ -25,5 +25,12 @@ public class AiAgent : TenantEntity
     /// <summary>En produccion (encendido) o apagado.</summary>
     public bool IsActive { get; set; }
 
+    /// <summary>
+    /// MCP de Contenedores de Datos: si esta habilitado, el agente puede leer los DataContainers
+    /// del tenant via placeholders {{LIST.CONTAINERS}} y {{CONTAINER:nombre}} en su prompt. Por
+    /// defecto FALSO (opt-in explicito por agente para no exponer datos sin querer).
+    /// </summary>
+    public bool EnableDataContainerMcp { get; set; }
+
     public int SortOrder { get; set; }
 }

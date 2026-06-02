@@ -1,5 +1,199 @@
 @page "/metricas"
-@attribute [Microsoft.AspNetCore.Authorization.Authorize(Policy = AppPolicies.TenantMember)]
+@attribute [Authorize(Policy = AppPolicies.TenantMember)]
+@rendermode InteractiveServer
+@using CubotRedManager.Application.Tenancy
+@inject ITenantMetricsService MetricsSvc
 
-<ModulePlaceholder Eyebrow="Reportes" Title="Metricas" Phase="Fase 2"
-                   Description="Crecimiento, engagement, mejores horarios y top publicaciones." />
+<PageTitle>Metricas operacionales - CUBOT.redmanager</PageTitle>
+
+<div class="module-head">
+    <div>
+        <div class="module-eyebrow">
+            <div class="module-icon">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v18h18"/><path d="m19 9-5 5-4-4-3 3"/></svg>
+            </div>
+            <span>Reportes</span>
+        </div>
+        <h1 class="page-title" style="margin-top:12px;">Metricas operacionales</h1>
+        <p class="page-sub" style="margin-bottom:0;">Snapshot agregado de cuentas conectadas, publicaciones y conversaciones del tenant.</p>
+    </div>
+    <button class="btn btn-outline-secondary" @onclick="Refresh" disabled="@_busy">@(_busy ? "Actualizando..." : "Refrescar")</button>
+</div>
+
+@if (_data is null)
+{
+    <p class="text-muted">Cargando...</p>
+}
+else
+{
+    <div class="kpi-grid" style="margin-bottom:24px;">
+        <div class="kpi-card">
+            <div class="kpi-label">Cuentas conectadas</div>
+            <div class="kpi-value">@_data.ActiveAccounts</div>
+            <div class="kpi-hint">de @_data.TotalAccounts totales</div>
+        </div>
+        <div class="kpi-card">
+            <div class="kpi-label">Publicaciones publicadas</div>
+            <div class="kpi-value">@_data.PublishedPublications</div>
+            <div class="kpi-hint">de @_data.TotalPublications creadas</div>
+        </div>
+        <div class="kpi-card">
+            <div class="kpi-label">Comentarios respondidos</div>
+            <div class="kpi-value">@_data.RepliedComments</div>
+            <div class="kpi-hint">de @_data.TotalComments totales</div>
+        </div>
+        <div class="kpi-card">
+            <div class="kpi-label">Pendientes</div>
+            <div class="kpi-value">@_data.PendingComments</div>
+            <div class="kpi-hint">comentarios sin responder</div>
+        </div>
+    </div>
+
+    <section style="margin-bottom:28px;">
+        <h3 class="met-h">Actividad por cuenta</h3>
+        @if (_data.AccountActivity.Count == 0)
+        {
+            <div class="card" style="padding:18px;color:var(--muted-foreground);">Sin cuentas conectadas todavia.</div>
+        }
+        else
+        {
+            <div class="card" style="padding:6px 16px;">
+                <table class="table table-hover" style="margin:0;">
+                    <thead>
+                        <tr>
+                            <th style="padding-left:14px;">Red</th>
+                            <th>Cuenta</th>
+                            <th>Cliente</th>
+                            <th style="text-align:right;">Videos</th>
+                            <th style="text-align:right;">Comentarios</th>
+                            <th style="text-align:right;">Respondidos</th>
+                            <th style="text-align:right;">Pendientes</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var a in _data.AccountActivity)
+                        {
+                            <tr>
+                                <td style="padding-left:14px;text-transform:uppercase;font-size:11px;font-weight:700;letter-spacing:0.06em;color:var(--muted-foreground);">@a.Network</td>
+                                <td>@(string.IsNullOrWhiteSpace(a.Handle) ? "—" : "@" + a.Handle)</td>
+                                <td>@a.ClientName</td>
+                                <td style="text-align:right;font-variant-numeric:tabular-nums;">@a.Videos</td>
+                                <td style="text-align:right;font-variant-numeric:tabular-nums;">@a.Comments</td>
+                                <td style="text-align:right;font-variant-numeric:tabular-nums;">@a.RepliedComments</td>
+                                <td style="text-align:right;font-variant-numeric:tabular-nums;">@a.PendingComments</td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+        }
+    </section>
+
+    <section style="margin-bottom:28px;">
+        <h3 class="met-h">Publicaciones por estado</h3>
+        <div class="card" style="padding:18px 22px;">
+            @{
+                var maxPub = _data.PublicationsByStatus.Count == 0 ? 0 : _data.PublicationsByStatus.Max(p => p.Count);
+            }
+            @if (maxPub == 0)
+            {
+                <div style="color:var(--muted-foreground);">Sin publicaciones aun.</div>
+            }
+            else
+            {
+                @foreach (var p in _data.PublicationsByStatus)
+                {
+                    var pct = maxPub == 0 ? 0 : (int)Math.Round(p.Count * 100.0 / maxPub);
+                    <div style="display:grid;grid-template-columns:140px 1fr 60px;align-items:center;gap:12px;margin-bottom:10px;">
+                        <div style="font-size:13px;font-weight:600;">@p.Status</div>
+                        <div style="background:oklch(0.95 0.02 280);border-radius:8px;height:14px;overflow:hidden;">
+                            <div style="height:100%;width:@(pct)%;background:linear-gradient(90deg,#A03DC9,#C7398B);"></div>
+                        </div>
+                        <div style="text-align:right;font-variant-numeric:tabular-nums;font-weight:700;">@p.Count</div>
+                    </div>
+                }
+            }
+        </div>
+    </section>
+
+    <section style="margin-bottom:28px;">
+        <h3 class="met-h">Top 10 videos</h3>
+        @if (_data.TopVideos.Count == 0)
+        {
+            <div class="card" style="padding:18px;color:var(--muted-foreground);">Sin videos sincronizados.</div>
+        }
+        else
+        {
+            <div class="card" style="padding:6px 16px;">
+                <table class="table table-hover" style="margin:0;">
+                    <thead>
+                        <tr>
+                            <th style="padding-left:14px;">Caption</th>
+                            <th style="text-align:right;">Comentarios</th>
+                            <th style="text-align:right;">Likes</th>
+                            <th style="text-align:right;">Vistas</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var v in _data.TopVideos)
+                        {
+                            <tr>
+                                <td style="padding-left:14px;max-width:520px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">@(string.IsNullOrWhiteSpace(v.Caption) ? v.ExternalId : v.Caption)</td>
+                                <td style="text-align:right;font-variant-numeric:tabular-nums;">@v.CommentCount</td>
+                                <td style="text-align:right;font-variant-numeric:tabular-nums;">@v.LikeCount</td>
+                                <td style="text-align:right;font-variant-numeric:tabular-nums;">@v.ViewCount</td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+        }
+    </section>
+
+    <section style="margin-bottom:28px;">
+        <h3 class="met-h">Comentarios mensuales (ultimos 6 meses)</h3>
+        <div class="card" style="padding:22px;">
+            @{
+                var maxC = _data.CommentsLast6Months.Count == 0 ? 0 : _data.CommentsLast6Months.Max(m => m.Count);
+            }
+            <div style="display:flex;align-items:flex-end;gap:18px;height:180px;">
+                @foreach (var m in _data.CommentsLast6Months)
+                {
+                    var h = maxC == 0 ? 4 : Math.Max(4, (int)Math.Round(m.Count * 150.0 / maxC));
+                    <div style="flex:1;display:flex;flex-direction:column;align-items:center;gap:6px;">
+                        <div style="font-size:11px;font-variant-numeric:tabular-nums;color:var(--muted-foreground);">@m.Count</div>
+                        <div style="width:100%;max-width:60px;height:@(h)px;background:linear-gradient(180deg,#A03DC9,#C7398B);border-radius:6px 6px 0 0;"></div>
+                        <div style="font-size:11px;text-transform:uppercase;letter-spacing:0.04em;font-weight:600;color:var(--muted-foreground);">@MonthName(m.Month) @($"{m.Year % 100:00}")</div>
+                    </div>
+                }
+            </div>
+        </div>
+    </section>
+}
+
+<style>
+    .met-h { font-size: 14px; font-weight: 700; margin: 0 0 10px; color: #1f2937; }
+</style>
+
+@code {
+    private TenantMetricsDto? _data;
+    private bool _busy;
+
+    protected override async Task OnInitializedAsync() => await Load();
+
+    private async Task Load()
+    {
+        _busy = true;
+        try { _data = await MetricsSvc.GetMetricsAsync(); }
+        finally { _busy = false; }
+    }
+
+    private async Task Refresh() => await Load();
+
+    private static string MonthName(int m) => m switch
+    {
+        1 => "Ene", 2 => "Feb", 3 => "Mar", 4 => "Abr", 5 => "May", 6 => "Jun",
+        7 => "Jul", 8 => "Ago", 9 => "Sep", 10 => "Oct", 11 => "Nov", 12 => "Dic",
+        _ => m.ToString()
+    };
+}

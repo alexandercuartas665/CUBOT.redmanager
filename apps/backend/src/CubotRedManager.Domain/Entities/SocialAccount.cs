@@ -27,4 +27,9 @@ public class SocialAccount : TenantEntity
     public SocialAccountStatus Status { get; set; } = SocialAccountStatus.Disconnected;
     public DateTimeOffset? LastSyncAt { get; set; }
     public string? LastSyncError { get; set; }
+
+    /// <summary>Numero de seguidores conocido (snapshot del ultimo sync). Para KPIs.</summary>
+    public long? FollowersCount { get; set; }
+    /// <summary>Bio o descripcion publica de la cuenta.</summary>
+    public string? Bio { get; set; }
 }

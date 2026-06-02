@@ -37,6 +37,10 @@ namespace CubotRedManager.Infrastructure.Persistence.Migrations
                         .HasColumnType("uuid")
                         .HasColumnName("created_by");
 
+                    b.Property<bool>("EnableDataContainerMcp")
+                        .HasColumnType("boolean")
+                        .HasColumnName("enable_data_container_mcp");
+
                     b.Property<bool>("IsActive")
                         .HasColumnType("boolean")
                         .HasColumnName("is_active");
@@ -460,6 +464,291 @@ namespace CubotRedManager.Infrastructure.Persistence.Migrations
                     b.ToTable("ai_usage_logs", (string)null);
                 });
 
+            modelBuilder.Entity("CubotRedManager.Domain.Entities.AutoReplyConfig", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<byte>("ActiveDaysOfWeekMask")
+                        .HasColumnType("smallint")
+                        .HasColumnName("active_days_of_week_mask");
+
+                    b.Property<int>("ActiveHoursMask")
+                        .HasColumnType("integer")
+                        .HasColumnName("active_hours_mask");
+
+                    b.Property<string>("BlacklistKeywords")
+                        .HasColumnType("text")
+                        .HasColumnName("blacklist_keywords");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at");
+
+                    b.Property<Guid?>("CreatedBy")
+                        .HasColumnType("uuid")
+                        .HasColumnName("created_by");
+
+                    b.Property<string>("CronCustom")
+                        .HasColumnType("text")
+                        .HasColumnName("cron_custom");
+
+                    b.Property<string>("DefaultTemplate")
+                        .HasColumnType("text")
+                        .HasColumnName("default_template");
+
+                    b.Property<int>("DelayMaxSeconds")
+                        .HasColumnType("integer")
+                        .HasColumnName("delay_max_seconds");
+
+                    b.Property<int>("DelayMinSeconds")
+                        .HasColumnType("integer")
+                        .HasColumnName("delay_min_seconds");
+
+                    b.Property<string>("Frequency")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("frequency");
+
+                    b.Property<bool>("IsActive")
+                        .HasColumnType("boolean")
+                        .HasColumnName("is_active");
+
+                    b.Property<int>("MaxRepliesPerRun")
+                        .HasColumnType("integer")
+                        .HasColumnName("max_replies_per_run");
+
+                    b.Property<string>("Mode")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("mode");
+
+                    b.Property<Guid>("SocialAccountId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("social_account_id");
+
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("tenant_id");
+
+                    b.Property<DateTimeOffset?>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("updated_at");
+
+                    b.Property<Guid?>("UpdatedBy")
+                        .HasColumnType("uuid")
+                        .HasColumnName("updated_by");
+
+                    b.HasKey("Id")
+                        .HasName("pk_auto_reply_configs");
+
+                    b.HasIndex("SocialAccountId")
+                        .IsUnique()
+                        .HasDatabaseName("ix_auto_reply_configs_social_account_id");
+
+                    b.ToTable("auto_reply_configs", (string)null);
+                });
+
+            modelBuilder.Entity("CubotRedManager.Domain.Entities.AutoReplyJobLog", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at");
+
+                    b.Property<Guid?>("CreatedBy")
+                        .HasColumnType("uuid")
+                        .HasColumnName("created_by");
+
+                    b.Property<int>("DurationMs")
+                        .HasColumnType("integer")
+                        .HasColumnName("duration_ms");
+
+                    b.Property<int>("Errors")
+                        .HasColumnType("integer")
+                        .HasColumnName("errors");
+
+                    b.Property<int>("Omitted")
+                        .HasColumnType("integer")
+                        .HasColumnName("omitted");
+
+                    b.Property<int>("Processed")
+                        .HasColumnType("integer")
+                        .HasColumnName("processed");
+
+                    b.Property<int>("Replied")
+                        .HasColumnType("integer")
+                        .HasColumnName("replied");
+
+                    b.Property<Guid>("SocialAccountId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("social_account_id");
+
+                    b.Property<DateTimeOffset>("StartedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("started_at");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("status");
+
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("tenant_id");
+
+                    b.Property<string>("Trace")
+                        .HasColumnType("text")
+                        .HasColumnName("trace");
+
+                    b.Property<DateTimeOffset?>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("updated_at");
+
+                    b.Property<Guid?>("UpdatedBy")
+                        .HasColumnType("uuid")
+                        .HasColumnName("updated_by");
+
+                    b.HasKey("Id")
+                        .HasName("pk_auto_reply_job_logs");
+
+                    b.HasIndex("SocialAccountId", "StartedAt")
+                        .HasDatabaseName("ix_auto_reply_job_logs_social_account_id_started_at");
+
+                    b.ToTable("auto_reply_job_logs", (string)null);
+                });
+
+            modelBuilder.Entity("CubotRedManager.Domain.Entities.AutoReplyTemplate", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<string>("Body")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("body");
+
+                    b.Property<Guid>("ConfigId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("config_id");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at");
+
+                    b.Property<Guid?>("CreatedBy")
+                        .HasColumnType("uuid")
+                        .HasColumnName("created_by");
+
+                    b.Property<string>("Keywords")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("keywords");
+
+                    b.Property<int>("SortOrder")
+                        .HasColumnType("integer")
+                        .HasColumnName("sort_order");
+
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("tenant_id");
+
+                    b.Property<DateTimeOffset?>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("updated_at");
+
+                    b.Property<Guid?>("UpdatedBy")
+                        .HasColumnType("uuid")
+                        .HasColumnName("updated_by");
+
+                    b.HasKey("Id")
+                        .HasName("pk_auto_reply_templates");
+
+                    b.HasIndex("ConfigId", "SortOrder")
+                        .HasDatabaseName("ix_auto_reply_templates_config_id_sort_order");
+
+                    b.ToTable("auto_reply_templates", (string)null);
+                });
+
+            modelBuilder.Entity("CubotRedManager.Domain.Entities.AutomationRule", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<string>("Action")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("action");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at");
+
+                    b.Property<Guid?>("CreatedBy")
+                        .HasColumnType("uuid")
+                        .HasColumnName("created_by");
+
+                    b.Property<int>("ExecutionCount")
+                        .HasColumnType("integer")
+                        .HasColumnName("execution_count");
+
+                    b.Property<bool>("IsActive")
+                        .HasColumnType("boolean")
+                        .HasColumnName("is_active");
+
+                    b.Property<DateTimeOffset?>("LastExecutedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("last_executed_at");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("name");
+
+                    b.Property<int?>("NoReplyMinutes")
+                        .HasColumnType("integer")
+                        .HasColumnName("no_reply_minutes");
+
+                    b.Property<string>("ParametersJson")
+                        .HasColumnType("text")
+                        .HasColumnName("parameters_json");
+
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("tenant_id");
+
+                    b.Property<string>("Trigger")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("trigger");
+
+                    b.Property<DateTimeOffset?>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("updated_at");
+
+                    b.Property<Guid?>("UpdatedBy")
+                        .HasColumnType("uuid")
+                        .HasColumnName("updated_by");
+
+                    b.HasKey("Id")
+                        .HasName("pk_automation_rules");
+
+                    b.HasIndex("TenantId", "IsActive")
+                        .HasDatabaseName("ix_automation_rules_tenant_id_is_active");
+
+                    b.ToTable("automation_rules", (string)null);
+                });
+
             modelBuilder.Entity("CubotRedManager.Domain.Entities.Client", b =>
                 {
                     b.Property<Guid>("Id")
@@ -539,6 +828,207 @@ namespace CubotRedManager.Infrastructure.Persistence.Migrations
                         .HasDatabaseName("ix_clients_tenant_id");
 
                     b.ToTable("clients", (string)null);
+                });
+
+            modelBuilder.Entity("CubotRedManager.Domain.Entities.DataContainer", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at");
+
+                    b.Property<Guid?>("CreatedBy")
+                        .HasColumnType("uuid")
+                        .HasColumnName("created_by");
+
+                    b.Property<string>("Description")
+                        .HasColumnType("text")
+                        .HasColumnName("description");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("name");
+
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("tenant_id");
+
+                    b.Property<DateTimeOffset?>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("updated_at");
+
+                    b.Property<Guid?>("UpdatedBy")
+                        .HasColumnType("uuid")
+                        .HasColumnName("updated_by");
+
+                    b.HasKey("Id")
+                        .HasName("pk_data_containers");
+
+                    b.HasIndex("TenantId", "Name")
+                        .IsUnique()
+                        .HasDatabaseName("ix_data_containers_tenant_id_name");
+
+                    b.ToTable("data_containers", (string)null);
+                });
+
+            modelBuilder.Entity("CubotRedManager.Domain.Entities.DataContainerCell", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<Guid>("ColumnId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("column_id");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at");
+
+                    b.Property<Guid?>("CreatedBy")
+                        .HasColumnType("uuid")
+                        .HasColumnName("created_by");
+
+                    b.Property<Guid>("RowId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("row_id");
+
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("tenant_id");
+
+                    b.Property<DateTimeOffset?>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("updated_at");
+
+                    b.Property<Guid?>("UpdatedBy")
+                        .HasColumnType("uuid")
+                        .HasColumnName("updated_by");
+
+                    b.Property<string>("Value")
+                        .HasColumnType("text")
+                        .HasColumnName("value");
+
+                    b.HasKey("Id")
+                        .HasName("pk_data_container_cells");
+
+                    b.HasIndex("ColumnId")
+                        .HasDatabaseName("ix_data_container_cells_column_id");
+
+                    b.HasIndex("RowId", "ColumnId")
+                        .IsUnique()
+                        .HasDatabaseName("ix_data_container_cells_row_id_column_id");
+
+                    b.ToTable("data_container_cells", (string)null);
+                });
+
+            modelBuilder.Entity("CubotRedManager.Domain.Entities.DataContainerColumn", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<Guid>("ContainerId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("container_id");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at");
+
+                    b.Property<Guid?>("CreatedBy")
+                        .HasColumnType("uuid")
+                        .HasColumnName("created_by");
+
+                    b.Property<string>("Description")
+                        .HasColumnType("text")
+                        .HasColumnName("description");
+
+                    b.Property<bool>("IsRequired")
+                        .HasColumnType("boolean")
+                        .HasColumnName("is_required");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("name");
+
+                    b.Property<int>("SortOrder")
+                        .HasColumnType("integer")
+                        .HasColumnName("sort_order");
+
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("tenant_id");
+
+                    b.Property<string>("Type")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("type");
+
+                    b.Property<DateTimeOffset?>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("updated_at");
+
+                    b.Property<Guid?>("UpdatedBy")
+                        .HasColumnType("uuid")
+                        .HasColumnName("updated_by");
+
+                    b.HasKey("Id")
+                        .HasName("pk_data_container_columns");
+
+                    b.HasIndex("ContainerId", "Name")
+                        .IsUnique()
+                        .HasDatabaseName("ix_data_container_columns_container_id_name");
+
+                    b.ToTable("data_container_columns", (string)null);
+                });
+
+            modelBuilder.Entity("CubotRedManager.Domain.Entities.DataContainerRow", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<Guid>("ContainerId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("container_id");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at");
+
+                    b.Property<Guid?>("CreatedBy")
+                        .HasColumnType("uuid")
+                        .HasColumnName("created_by");
+
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("tenant_id");
+
+                    b.Property<DateTimeOffset?>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("updated_at");
+
+                    b.Property<Guid?>("UpdatedBy")
+                        .HasColumnType("uuid")
+                        .HasColumnName("updated_by");
+
+                    b.HasKey("Id")
+                        .HasName("pk_data_container_rows");
+
+                    b.HasIndex("ContainerId", "CreatedAt")
+                        .HasDatabaseName("ix_data_container_rows_container_id_created_at");
+
+                    b.ToTable("data_container_rows", (string)null);
                 });
 
             modelBuilder.Entity("CubotRedManager.Domain.Entities.EvolutionMasterConfig", b =>
@@ -662,6 +1152,11 @@ namespace CubotRedManager.Infrastructure.Persistence.Migrations
                         .HasColumnType("uuid")
                         .HasColumnName("parent_message_id");
 
+                    b.Property<string>("PipelineStage")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("pipeline_stage");
+
                     b.Property<DateTimeOffset>("ReceivedAt")
                         .HasColumnType("timestamp with time zone")
                         .HasColumnName("received_at");
@@ -669,6 +1164,18 @@ namespace CubotRedManager.Infrastructure.Persistence.Migrations
                     b.Property<Guid?>("RelatedPublicationId")
                         .HasColumnType("uuid")
                         .HasColumnName("related_publication_id");
+
+                    b.Property<string>("RelatedVideoExternalId")
+                        .HasColumnType("text")
+                        .HasColumnName("related_video_external_id");
+
+                    b.Property<string>("RelatedVideoThumbUrl")
+                        .HasColumnType("text")
+                        .HasColumnName("related_video_thumb_url");
+
+                    b.Property<string>("RelatedVideoTitle")
+                        .HasColumnType("text")
+                        .HasColumnName("related_video_title");
 
                     b.Property<Guid?>("SocialAccountId")
                         .HasColumnType("uuid")
@@ -702,6 +1209,9 @@ namespace CubotRedManager.Infrastructure.Persistence.Migrations
                     b.HasIndex("NetworkCode", "ExternalId")
                         .IsUnique()
                         .HasDatabaseName("ix_inbox_messages_network_code_external_id");
+
+                    b.HasIndex("TenantId", "PipelineStage")
+                        .HasDatabaseName("ix_inbox_messages_tenant_id_pipeline_stage");
 
                     b.ToTable("inbox_messages", (string)null);
                 });
@@ -766,6 +1276,60 @@ namespace CubotRedManager.Infrastructure.Persistence.Migrations
                         .HasDatabaseName("ix_inbox_replies_inbox_message_id");
 
                     b.ToTable("inbox_replies", (string)null);
+                });
+
+            modelBuilder.Entity("CubotRedManager.Domain.Entities.MessageTemplate", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<Guid?>("AuthorTenantUserId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("author_tenant_user_id");
+
+                    b.Property<string>("Body")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("body");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at");
+
+                    b.Property<Guid?>("CreatedBy")
+                        .HasColumnType("uuid")
+                        .HasColumnName("created_by");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("name");
+
+                    b.Property<string>("Tags")
+                        .HasColumnType("text")
+                        .HasColumnName("tags");
+
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("tenant_id");
+
+                    b.Property<DateTimeOffset?>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("updated_at");
+
+                    b.Property<Guid?>("UpdatedBy")
+                        .HasColumnType("uuid")
+                        .HasColumnName("updated_by");
+
+                    b.HasKey("Id")
+                        .HasName("pk_message_templates");
+
+                    b.HasIndex("TenantId", "Name")
+                        .HasDatabaseName("ix_message_templates_tenant_id_name");
+
+                    b.ToTable("message_templates", (string)null);
                 });
 
             modelBuilder.Entity("CubotRedManager.Domain.Entities.PlatformUser", b =>
@@ -1097,6 +1661,10 @@ namespace CubotRedManager.Infrastructure.Persistence.Migrations
                         .HasColumnType("text")
                         .HasColumnName("avatar_url");
 
+                    b.Property<string>("Bio")
+                        .HasColumnType("text")
+                        .HasColumnName("bio");
+
                     b.Property<Guid>("ClientId")
                         .HasColumnType("uuid")
                         .HasColumnName("client_id");
@@ -1121,6 +1689,10 @@ namespace CubotRedManager.Infrastructure.Persistence.Migrations
                         .IsRequired()
                         .HasColumnType("text")
                         .HasColumnName("external_id");
+
+                    b.Property<long?>("FollowersCount")
+                        .HasColumnType("bigint")
+                        .HasColumnName("followers_count");
 
                     b.Property<string>("Handle")
                         .HasColumnType("text")
@@ -1857,6 +2429,159 @@ namespace CubotRedManager.Infrastructure.Persistence.Migrations
                     b.ToTable("tenant_users", (string)null);
                 });
 
+            modelBuilder.Entity("CubotRedManager.Domain.Entities.TikTokAppConfig", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<string>("ClientKey")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("client_key");
+
+                    b.Property<string>("ClientSecretEncrypted")
+                        .HasColumnType("text")
+                        .HasColumnName("client_secret_encrypted");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at");
+
+                    b.Property<Guid?>("CreatedBy")
+                        .HasColumnType("uuid")
+                        .HasColumnName("created_by");
+
+                    b.Property<string>("RedirectUri")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("redirect_uri");
+
+                    b.Property<string>("Scope")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("scope");
+
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("tenant_id");
+
+                    b.Property<DateTimeOffset?>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("updated_at");
+
+                    b.Property<Guid?>("UpdatedBy")
+                        .HasColumnType("uuid")
+                        .HasColumnName("updated_by");
+
+                    b.HasKey("Id")
+                        .HasName("pk_tik_tok_app_configs");
+
+                    b.HasIndex("TenantId")
+                        .IsUnique()
+                        .HasDatabaseName("ix_tik_tok_app_configs_tenant_id");
+
+                    b.ToTable("tik_tok_app_configs", (string)null);
+                });
+
+            modelBuilder.Entity("CubotRedManager.Domain.Entities.TikTokVideo", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<string>("Caption")
+                        .HasColumnType("text")
+                        .HasColumnName("caption");
+
+                    b.Property<Guid>("ClientId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("client_id");
+
+                    b.Property<int>("CommentCount")
+                        .HasColumnType("integer")
+                        .HasColumnName("comment_count");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at");
+
+                    b.Property<Guid?>("CreatedBy")
+                        .HasColumnType("uuid")
+                        .HasColumnName("created_by");
+
+                    b.Property<string>("Description")
+                        .HasColumnType("text")
+                        .HasColumnName("description");
+
+                    b.Property<string>("EmbedUrl")
+                        .HasColumnType("text")
+                        .HasColumnName("embed_url");
+
+                    b.Property<string>("ExternalId")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("external_id");
+
+                    b.Property<DateTimeOffset>("LastSyncAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("last_sync_at");
+
+                    b.Property<int>("LikeCount")
+                        .HasColumnType("integer")
+                        .HasColumnName("like_count");
+
+                    b.Property<DateTimeOffset?>("PublishedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("published_at");
+
+                    b.Property<int>("ShareCount")
+                        .HasColumnType("integer")
+                        .HasColumnName("share_count");
+
+                    b.Property<string>("ShareUrl")
+                        .HasColumnType("text")
+                        .HasColumnName("share_url");
+
+                    b.Property<Guid>("SocialAccountId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("social_account_id");
+
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("tenant_id");
+
+                    b.Property<string>("ThumbnailUrl")
+                        .HasColumnType("text")
+                        .HasColumnName("thumbnail_url");
+
+                    b.Property<DateTimeOffset?>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("updated_at");
+
+                    b.Property<Guid?>("UpdatedBy")
+                        .HasColumnType("uuid")
+                        .HasColumnName("updated_by");
+
+                    b.Property<int>("ViewCount")
+                        .HasColumnType("integer")
+                        .HasColumnName("view_count");
+
+                    b.HasKey("Id")
+                        .HasName("pk_tik_tok_videos");
+
+                    b.HasIndex("SocialAccountId", "PublishedAt")
+                        .HasDatabaseName("ix_tik_tok_videos_social_account_id_published_at");
+
+                    b.HasIndex("TenantId", "SocialAccountId", "ExternalId")
+                        .IsUnique()
+                        .HasDatabaseName("ix_tik_tok_videos_tenant_id_social_account_id_external_id");
+
+                    b.ToTable("tik_tok_videos", (string)null);
+                });
+
             modelBuilder.Entity("CubotRedManager.Domain.Entities.UserClientLink", b =>
                 {
                     b.Property<Guid>("Id")
@@ -2164,6 +2889,42 @@ namespace CubotRedManager.Infrastructure.Persistence.Migrations
                     b.Navigation("Agent");
                 });
 
+            modelBuilder.Entity("CubotRedManager.Domain.Entities.AutoReplyConfig", b =>
+                {
+                    b.HasOne("CubotRedManager.Domain.Entities.SocialAccount", "SocialAccount")
+                        .WithMany()
+                        .HasForeignKey("SocialAccountId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired()
+                        .HasConstraintName("fk_auto_reply_configs_social_accounts_social_account_id");
+
+                    b.Navigation("SocialAccount");
+                });
+
+            modelBuilder.Entity("CubotRedManager.Domain.Entities.AutoReplyJobLog", b =>
+                {
+                    b.HasOne("CubotRedManager.Domain.Entities.SocialAccount", "SocialAccount")
+                        .WithMany()
+                        .HasForeignKey("SocialAccountId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired()
+                        .HasConstraintName("fk_auto_reply_job_logs_social_accounts_social_account_id");
+
+                    b.Navigation("SocialAccount");
+                });
+
+            modelBuilder.Entity("CubotRedManager.Domain.Entities.AutoReplyTemplate", b =>
+                {
+                    b.HasOne("CubotRedManager.Domain.Entities.AutoReplyConfig", "Config")
+                        .WithMany("Templates")
+                        .HasForeignKey("ConfigId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired()
+                        .HasConstraintName("fk_auto_reply_templates_auto_reply_configs_config_id");
+
+                    b.Navigation("Config");
+                });
+
             modelBuilder.Entity("CubotRedManager.Domain.Entities.Client", b =>
                 {
                     b.HasOne("CubotRedManager.Domain.Entities.Tenant", null)
@@ -2172,6 +2933,51 @@ namespace CubotRedManager.Infrastructure.Persistence.Migrations
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired()
                         .HasConstraintName("fk_clients_tenants_tenant_id");
+                });
+
+            modelBuilder.Entity("CubotRedManager.Domain.Entities.DataContainerCell", b =>
+                {
+                    b.HasOne("CubotRedManager.Domain.Entities.DataContainerColumn", "Column")
+                        .WithMany()
+                        .HasForeignKey("ColumnId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired()
+                        .HasConstraintName("fk_data_container_cells_data_container_columns_column_id");
+
+                    b.HasOne("CubotRedManager.Domain.Entities.DataContainerRow", "Row")
+                        .WithMany("Cells")
+                        .HasForeignKey("RowId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired()
+                        .HasConstraintName("fk_data_container_cells_data_container_rows_row_id");
+
+                    b.Navigation("Column");
+
+                    b.Navigation("Row");
+                });
+
+            modelBuilder.Entity("CubotRedManager.Domain.Entities.DataContainerColumn", b =>
+                {
+                    b.HasOne("CubotRedManager.Domain.Entities.DataContainer", "Container")
+                        .WithMany("Columns")
+                        .HasForeignKey("ContainerId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired()
+                        .HasConstraintName("fk_data_container_columns_data_containers_container_id");
+
+                    b.Navigation("Container");
+                });
+
+            modelBuilder.Entity("CubotRedManager.Domain.Entities.DataContainerRow", b =>
+                {
+                    b.HasOne("CubotRedManager.Domain.Entities.DataContainer", "Container")
+                        .WithMany("Rows")
+                        .HasForeignKey("ContainerId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired()
+                        .HasConstraintName("fk_data_container_rows_data_containers_container_id");
+
+                    b.Navigation("Container");
                 });
 
             modelBuilder.Entity("CubotRedManager.Domain.Entities.InboxReply", b =>
@@ -2317,9 +3123,26 @@ namespace CubotRedManager.Infrastructure.Persistence.Migrations
                     b.Navigation("TenantUser");
                 });
 
+            modelBuilder.Entity("CubotRedManager.Domain.Entities.AutoReplyConfig", b =>
+                {
+                    b.Navigation("Templates");
+                });
+
             modelBuilder.Entity("CubotRedManager.Domain.Entities.Client", b =>
                 {
                     b.Navigation("AssignedOperators");
+                });
+
+            modelBuilder.Entity("CubotRedManager.Domain.Entities.DataContainer", b =>
+                {
+                    b.Navigation("Columns");
+
+                    b.Navigation("Rows");
+                });
+
+            modelBuilder.Entity("CubotRedManager.Domain.Entities.DataContainerRow", b =>
+                {
+                    b.Navigation("Cells");
                 });
 
             modelBuilder.Entity("CubotRedManager.Domain.Entities.InboxMessage", b =>

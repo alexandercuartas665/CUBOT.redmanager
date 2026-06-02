@@ -1,0 +1,266 @@
+@page "/tiktok/pipeline"
+@attribute [Authorize(Policy = AppPolicies.TenantMember)]
+@rendermode InteractiveServer
+@using System.Security.Claims
+@using CubotRedManager.Application.Tenancy
+@using CubotRedManager.Domain.Enums
+@inject IInboxService InboxSvc
+@inject ISocialAccountService AccountsSvc
+@inject AuthenticationStateProvider AuthProvider
+@inject IJSRuntime JS
+@implements IAsyncDisposable
+
+<PageTitle>Pipeline de Conversion TikTok - CUBOT.redmanager</PageTitle>
+
+<div class="module-head">
+    <div>
+        <div class="module-eyebrow">
+            <div class="module-icon">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 12a4 4 0 1 0 4 4V4a5 5 0 0 0 5 5"/></svg>
+            </div>
+            <span>TikTok Manager</span>
+        </div>
+        <h1 class="page-title" style="margin-top:12px;">Pipeline de Conversion</h1>
+        <p class="page-sub" style="margin-bottom:0;">Comentarios entrantes como funnel comercial. Arrastra entre columnas para mover etapa.</p>
+    </div>
+    <div style="display:flex; gap:8px; align-items:center;">
+        <select class="form-control" style="width:200px;" @bind="_accountFilter" @bind:after="Reload">
+            <option value="">Todas las cuentas</option>
+            @foreach (var a in _accounts) { <option value="@a.Id">@(string.IsNullOrEmpty(a.Handle) ? a.ClientName : "@" + a.Handle)</option> }
+        </select>
+        <button class="btn btn-outline-secondary" @onclick="ToggleFilters">@(_showFilters ? "Ocultar filtros" : "Filtros avanzados")</button>
+        <button class="btn btn-primary" @onclick="SeedDemo" disabled="@_busy" title="Insertar comentarios de prueba">+ Demo</button>
+    </div>
+</div>
+
+@if (_showFilters)
+{
+<div class="card tk-filters" style="margin-bottom:18px; padding:16px 18px;">
+    <div class="tk-filters-grid">
+        <div class="field"><label class="form-label">Texto</label><input class="form-control" @bind="_fText" @bind:after="StateHasChanged" placeholder="Buscar palabra..." /></div>
+        <div class="field"><label class="form-label">Contacto</label><input class="form-control" @bind="_fAuthor" @bind:after="StateHasChanged" placeholder="@@usuario" /></div>
+        <div class="field"><label class="form-label">Video</label><input class="form-control" @bind="_fVideo" @bind:after="StateHasChanged" placeholder="Buscar video..." /></div>
+        <div class="field"><label class="form-label">Fecha</label><input type="date" class="form-control" @bind="_fDate" @bind:after="StateHasChanged" /></div>
+    </div>
+    <div style="text-align:right;">
+        <button class="btn btn-sm" style="color:#dc2626;" @onclick="ClearFilters">Limpiar filtros</button>
+    </div>
+</div>
+}
+
+<div class="tk-kanban-wrap">
+    <div class="tk-kanban">
+        @foreach (var col in _columns)
+        {
+            var items = FilteredFor(col.Stage);
+            <div class="tk-kanban-col" data-stage="@col.Stage">
+                <div class="tk-kanban-head">
+                    <div style="display:flex; align-items:center; gap:8px;">
+                        <span class="tk-col-dot" style="background:@col.Color;"></span>
+                        <h3>@col.Title</h3>
+                    </div>
+                    <span class="tk-col-count">@items.Count</span>
+                </div>
+                <div class="tk-kanban-body">
+                    @if (items.Count == 0)
+                    {
+                        <div class="tk-empty">Arrastra aqui</div>
+                    }
+                    else
+                    {
+                        @foreach (var c in items)
+                        {
+                            <div class="tk-kanban-item" data-id="@c.Id">
+                                <div class="tk-item-head">
+                                    <div style="display:flex; gap:8px; align-items:center;">
+                                        <div class="tk-item-avatar">@(string.IsNullOrEmpty(c.AuthorName) ? "?" : c.AuthorName![..1].ToUpperInvariant())</div>
+                                        <div>
+                                            <div class="tk-item-author">@c.AuthorName</div>
+                                            <div class="tk-item-date">@c.ReceivedAt.LocalDateTime.ToString("dd MMM HH:mm")</div>
+                                        </div>
+                                    </div>
+                                    <svg viewBox="0 0 24 24" fill="none" stroke="#d1d5db" stroke-width="2" style="width:16px; height:16px;"><circle cx="9" cy="6" r="1"/><circle cx="9" cy="12" r="1"/><circle cx="9" cy="18" r="1"/><circle cx="15" cy="6" r="1"/><circle cx="15" cy="12" r="1"/><circle cx="15" cy="18" r="1"/></svg>
+                                </div>
+                                @if (!string.IsNullOrEmpty(c.RelatedVideoTitle))
+                                {
+                                    <div class="tk-item-video">
+                                        <div class="tk-item-video-thumb"></div>
+                                        <div style="flex:1; min-width:0;">
+                                            <div class="tk-item-video-title">@c.RelatedVideoTitle</div>
+                                            <div class="tk-item-video-acc">@c.ClientName</div>
+                                        </div>
+                                    </div>
+                                }
+                                <p class="tk-item-text">"@c.Body"</p>
+                                @if (_replyingTo == c.Id)
+                                {
+                                    <textarea class="form-control" style="font-size:12px; margin-bottom:8px;" rows="3" @bind="_replyText" placeholder="Respuesta..."></textarea>
+                                    <div style="display:flex; gap:6px; justify-content:flex-end;">
+                                        <button class="btn btn-sm" @onclick="() => _replyingTo = null">Cancelar</button>
+                                        <button class="btn btn-sm btn-primary" @onclick="() => SendReply(c.Id)">Enviar</button>
+                                    </div>
+                                }
+                                else
+                                {
+                                    <button class="tk-reply-btn" @onclick="() => StartReply(c.Id)">Responder</button>
+                                }
+                            </div>
+                        }
+                    }
+                </div>
+            </div>
+        }
+    </div>
+</div>
+
+<style>
+    .tk-filters-grid { display:grid; grid-template-columns: repeat(4, 1fr); gap:14px; margin-bottom:8px; }
+    @@media (max-width: 900px){ .tk-filters-grid { grid-template-columns: 1fr 1fr; } }
+    .tk-kanban-wrap { overflow-x:auto; padding-bottom:16px; }
+    .tk-kanban { display:flex; gap:18px; min-width:max-content; }
+    .tk-kanban-col { width:320px; background:rgba(243,244,246,.6); border:1px solid var(--border); border-radius:14px; display:flex; flex-direction:column; min-height:200px; transition: background .15s; }
+    .tk-kanban-col.tk-col-hover { background:rgba(124,58,237,.08); border-color:#A03DC9; }
+    .tk-kanban-head { padding:14px 16px; border-bottom:1px solid var(--border); background:#f9fafb; border-radius:14px 14px 0 0; display:flex; justify-content:space-between; align-items:center; }
+    .tk-kanban-head h3 { margin:0; font-size:14px; font-weight:700; color:#1f2937; }
+    .tk-col-dot { width:10px; height:10px; border-radius:50%; }
+    .tk-col-count { background:#e5e7eb; color:#374151; font-size:11px; font-weight:700; padding:3px 9px; border-radius:10px; }
+    .tk-kanban-body { padding:12px; flex:1; }
+    .tk-empty { padding:30px 0; text-align:center; color:#9ca3af; font-size:13px; border:2px dashed #e5e7eb; border-radius:10px; }
+    .tk-kanban-item { background:#fff; border:1px solid var(--border); border-radius:12px; padding:14px; margin-bottom:10px; cursor:grab; transition: border-color .15s, opacity .15s; }
+    .tk-kanban-item:hover { border-color:#A03DC9; }
+    .tk-kanban-item.tk-dragging { opacity:.4; }
+    .tk-item-head { display:flex; justify-content:space-between; align-items:flex-start; margin-bottom:10px; }
+    .tk-item-avatar { width:32px; height:32px; border-radius:50%; background:linear-gradient(135deg,#A03DC9,#C7398B); color:#fff; display:flex; align-items:center; justify-content:center; font-weight:700; font-size:12px; }
+    .tk-item-author { font-weight:700; font-size:13px; color:#1f2937; line-height:1; }
+    .tk-item-date { font-size:10px; color:#9ca3af; margin-top:3px; }
+    .tk-item-video { display:flex; gap:8px; align-items:center; background:#f9fafb; border:1px solid #f3f4f6; border-radius:8px; padding:6px; margin-bottom:10px; }
+    .tk-item-video-thumb { width:36px; height:36px; border-radius:6px; background:linear-gradient(135deg,#111827,#374151); flex-shrink:0; }
+    .tk-item-video-title { font-size:11px; font-weight:600; color:#374151; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+    .tk-item-video-acc { font-size:10px; color:#9ca3af; }
+    .tk-item-text { font-size:13px; color:#374151; margin:0 0 10px; line-clamp:3; display:-webkit-box; -webkit-line-clamp:3; -webkit-box-orient:vertical; overflow:hidden; }
+    .tk-reply-btn { width:100%; padding:7px; background:#f9fafb; border:1px solid var(--border); color:#374151; border-radius:8px; font-size:12px; font-weight:500; cursor:pointer; }
+    .tk-reply-btn:hover { background:#f3f4f6; }
+</style>
+
+@code {
+    private record Column(CommentPipelineStage Stage, string Title, string Color);
+    private static readonly Column[] _columns =
+    {
+        new(CommentPipelineStage.New, "Nuevos", "#3b82f6"),
+        new(CommentPipelineStage.Contacted, "En Contacto", "#eab308"),
+        new(CommentPipelineStage.Qualified, "Calificados", "#a855f7"),
+        new(CommentPipelineStage.Converted, "Convertidos", "#22c55e")
+    };
+
+    private List<InboxMessageDto> _comments = new();
+    private List<SocialAccountDto> _accounts = new();
+    private Guid _actor;
+    private bool _showFilters, _busy;
+    private string _accountFilter = "", _fText = "", _fAuthor = "", _fVideo = "";
+    private DateTime? _fDate;
+    private Guid? _replyingTo;
+    private string _replyText = "";
+    private DotNetObjectReference<TikTokPipeline>? _dnRef;
+    private bool _dndInited;
+
+    protected override async Task OnInitializedAsync()
+    {
+        var st = await AuthProvider.GetAuthenticationStateAsync();
+        Guid.TryParse(st.User.FindFirst(ClaimTypes.NameIdentifier)?.Value, out _actor);
+        _accounts = (await AccountsSvc.ListAsync()).Where(a => a.NetworkCode == "tiktok").ToList();
+        await Reload();
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender)
+        {
+            _dnRef = DotNetObjectReference.Create(this);
+            await JS.InvokeVoidAsync("tiktokPipelineDnd.init", _dnRef);
+            _dndInited = true;
+        }
+        else if (_dndInited)
+        {
+            // Re-bindear DnD tras cada render (los elementos se recrean al filtrar/mover)
+            await JS.InvokeVoidAsync("tiktokPipelineDnd.rebind");
+        }
+    }
+
+    private async Task Reload()
+    {
+        Guid? accId = Guid.TryParse(_accountFilter, out var g) ? g : null;
+        _comments = (await InboxSvc.ListCommentsAsync(networkCode: "tiktok", socialAccountId: accId)).ToList();
+        StateHasChanged();
+    }
+
+    private List<InboxMessageDto> FilteredFor(CommentPipelineStage stage)
+    {
+        IEnumerable<InboxMessageDto> q = _comments.Where(c => c.PipelineStage == stage);
+        if (!string.IsNullOrWhiteSpace(_fText)) { q = q.Where(c => c.Body.Contains(_fText, StringComparison.OrdinalIgnoreCase)); }
+        if (!string.IsNullOrWhiteSpace(_fAuthor)) { q = q.Where(c => (c.AuthorName ?? "").Contains(_fAuthor.TrimStart('@'), StringComparison.OrdinalIgnoreCase)); }
+        if (!string.IsNullOrWhiteSpace(_fVideo)) { q = q.Where(c => (c.RelatedVideoTitle ?? "").Contains(_fVideo, StringComparison.OrdinalIgnoreCase)); }
+        if (_fDate is { } d) { q = q.Where(c => c.ReceivedAt.LocalDateTime.Date == d.Date); }
+        return q.OrderByDescending(c => c.ReceivedAt).ToList();
+    }
+
+    private void ToggleFilters() { _showFilters = !_showFilters; }
+    private void ClearFilters() { _fText = _fAuthor = _fVideo = ""; _fDate = null; }
+    private void StartReply(Guid id) { _replyingTo = id; _replyText = ""; }
+
+    private async Task SendReply(Guid id)
+    {
+        if (string.IsNullOrWhiteSpace(_replyText)) { return; }
+        var r = await InboxSvc.ReplyWithDetailsAsync(id, _replyText, _actor);
+        if (!r.Success)
+        {
+            await JS.InvokeVoidAsync("alert", "No se pudo publicar la respuesta en TikTok:\n\n" + (r.Error ?? "Error desconocido"));
+            return;
+        }
+        _replyingTo = null; _replyText = "";
+        await Reload();
+    }
+
+    [JSInvokable]
+    public async Task OnStageChanged(string id, string stage)
+    {
+        if (!Guid.TryParse(id, out var gid)) { return; }
+        if (!Enum.TryParse<CommentPipelineStage>(stage, ignoreCase: true, out var st)) { return; }
+        await InboxSvc.SetPipelineStageAsync(gid, st, _actor);
+        await Reload();
+    }
+
+    private async Task SeedDemo()
+    {
+        _busy = true;
+        try
+        {
+            var clientId = (await AccountsSvc.ListAsync()).FirstOrDefault(a => a.NetworkCode == "tiktok")?.ClientId;
+            if (clientId is null)
+            {
+                await JS.InvokeVoidAsync("alert", "Primero conecta una cuenta TikTok.");
+                return;
+            }
+            var seeds = new (string Author, string Body, string Video)[]
+            {
+                ("maria_g", "Tienen envios a Colombia? Me encanta el vestido.", "Nueva Coleccion Verano"),
+                ("juan_perez", "Precio por favor.", "Vestidos de Gala"),
+                ("tech_lover99", "Ese celular tiene mala bateria.", "Review iPhone 18 Pro"),
+                ("gym_bro", "Das asesorias personalizadas?", "Rutina de Piernas")
+            };
+            foreach (var (a, b, v) in seeds)
+            {
+                await InboxSvc.SimulateIncomingAsync(new SimulateInboxRequest(
+                    ClientId: clientId.Value, NetworkCode: "tiktok", Type: InboxMessageType.Comment,
+                    AuthorName: a, Body: b, RelatedVideoTitle: v));
+            }
+            await Reload();
+        }
+        finally { _busy = false; }
+    }
+
+    public ValueTask DisposeAsync()
+    {
+        _dnRef?.Dispose();
+        return ValueTask.CompletedTask;
+    }
+}

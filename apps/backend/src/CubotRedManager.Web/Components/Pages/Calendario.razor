@@ -2,12 +2,17 @@
 @attribute [Authorize(Policy = AppPolicies.TenantMember)]
 @rendermode InteractiveServer
 @using System.Security.Claims
+@using CubotRedManager.Application.Abstractions
 @using CubotRedManager.Application.Tenancy
 @using CubotRedManager.Domain.Enums
+@using Microsoft.AspNetCore.Components.Forms
 @inject IPublicationService PubsSvc
 @inject IClientService ClientsSvc
 @inject ISocialAccountService AccountsSvc
+@inject IPublicationExecutorService ExecSvc
 @inject AuthenticationStateProvider AuthProvider
+@inject IWebHostEnvironment Env
+@inject ITenantContext TenantContext
 
 <PageTitle>Calendario editorial - CUBOT.redmanager</PageTitle>
 
@@ -20,7 +25,7 @@
             <span>Operacion diaria</span>
         </div>
         <h1 class="page-title" style="margin-top:12px;">Calendario editorial</h1>
-        <p class="page-sub" style="margin-bottom:0;">Publicaciones por cliente y estado. Multi-red, con publicacion programada.</p>
+        <p class="page-sub" style="margin-bottom:0;">Publicaciones por cliente y estado. Multi-red, con publicacion programada y adjuntos.</p>
     </div>
     <button class="btn btn-primary" @onclick="OpenCreate" disabled="@(_clients is null || _clients.Count == 0)">+ Nueva publicacion</button>
 </div>
@@ -49,19 +54,50 @@ else
     }
     else
     {
-        <div class="card" style="max-width:1100px;padding:6px 16px;">
+        <div class="card" style="padding:6px 16px;">
             <table class="table table-hover" style="margin:0;">
-                <thead><tr><th style="padding-left:14px;">Cliente</th><th>Copy</th><th>Programada</th><th>Redes</th><th>Estado</th><th></th></tr></thead>
+                <thead><tr><th style="padding-left:14px;">Cliente</th><th>Media</th><th>Copy</th><th>Programada</th><th>Redes</th><th>Estado</th><th></th></tr></thead>
                 <tbody>
                     @foreach (var p in _pubs)
                     {
                         <tr>
                             <td style="padding-left:14px;font-weight:600;">@p.ClientName</td>
+                            <td>
+                                @if (p.MediaUrls.Count == 0) { <span class="text-muted" style="font-size:11px;">—</span> }
+                                else
+                                {
+                                    <div class="cal-thumbs">
+                                        @foreach (var url in p.MediaUrls.Take(3))
+                                        {
+                                            @if (IsVideo(url))
+                                            {
+                                                <div class="cal-thumb cal-thumb-video" title="@url">
+                                                    <svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>
+                                                </div>
+                                            }
+                                            else
+                                            {
+                                                <img class="cal-thumb" src="@url" alt="" title="@url" />
+                                            }
+                                        }
+                                        @if (p.MediaUrls.Count > 3)
+                                        {
+                                            <span class="cal-thumb cal-thumb-more">+@(p.MediaUrls.Count - 3)</span>
+                                        }
+                                    </div>
+                                }
+                            </td>
                             <td style="max-width:340px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">@p.Caption</td>
                             <td style="font-size:12px;color:var(--muted-foreground);">@(p.ScheduledAt is { } d ? d.LocalDateTime.ToString("dd MMM HH:mm") : "—")</td>
                             <td>@p.TargetCount</td>
                             <td><span class="cal-chip s-@p.Status.ToString().ToLowerInvariant()">@StatusLabel(p.Status)</span></td>
-                            <td style="text-align:right;padding-right:14px;">
+                            <td style="text-align:right;padding-right:14px; white-space:nowrap;">
+                                @if (p.Status != PublicationStatus.Published)
+                                {
+                                    <button class="btn btn-sm btn-primary" style="margin-right:6px;" @onclick="() => ExecuteNow(p)" disabled="@(_publishingId == p.Id)">
+                                        @(_publishingId == p.Id ? "Publicando..." : "▶ Publicar")
+                                    </button>
+                                }
                                 <select class="form-control-sm" style="width:auto;display:inline-block;" @onchange="e => SetStatus(p, e.Value?.ToString())">
                                     @foreach (var s in _allStatuses) { <option value="@s" selected="@(s == p.Status)">@StatusLabel(s)</option> }
                                 </select>
@@ -74,11 +110,37 @@ else
     }
 }
 
+@if (_lastExec is not null)
+{
+<div class="card cx-card" style="margin-top:18px; padding:16px 20px;">
+    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
+        <h3 style="margin:0; font-size:14px; font-weight:700;">Resultado de la ultima publicacion</h3>
+        <span class="cal-chip s-@_lastExec.FinalStatus.ToString().ToLowerInvariant()">@StatusLabel(_lastExec.FinalStatus)</span>
+    </div>
+    @foreach (var t in _lastExec.Targets)
+    {
+        <div style="display:flex; align-items:center; gap:10px; padding:6px 0; font-size:13px; border-bottom:1px solid #f3f4f6;">
+            <span style="width:8px; height:8px; border-radius:50%; background:@(t.Success ? "#22c55e" : "#ef4444"); flex-shrink:0;"></span>
+            <span style="font-weight:600; min-width:140px;">@@@(t.Handle ?? "?") <span class="text-muted" style="font-weight:400;">(@t.NetworkCode)</span></span>
+            @if (t.Success)
+            {
+                <span class="text-muted" style="font-size:11px;">publish_id: @t.PublishId</span>
+            }
+            else
+            {
+                <span class="text-danger" style="font-size:12px;">@t.Error</span>
+            }
+        </div>
+    }
+    <pre class="cx-trace" style="margin-top:12px; max-height:180px;">@_lastExec.Trace</pre>
+</div>
+}
+
 @if (_createOpen)
 {
     <div class="modal-overlay">
-        <div class="modal-dialog">
-            <div class="modal-head"><h3>Nueva publicacion</h3><button class="modal-close" @onclick="() => _createOpen = false">&times;</button></div>
+        <div class="modal-dialog" style="max-width:560px;">
+            <div class="modal-head"><h3>Nueva publicacion</h3><button class="modal-close" @onclick="CloseCreate">&times;</button></div>
             <div class="modal-body">
                 <div class="field">
                     <label class="form-label">Cliente</label>
@@ -88,9 +150,48 @@ else
                     </select>
                 </div>
                 <div class="field"><label class="form-label">Copy</label><textarea class="form-control" rows="3" @bind="_fCaption"></textarea></div>
+
+                @* === Media (imagenes / videos) === *@
+                <div class="field">
+                    <label class="form-label">Media (imagenes o videos, max @MaxFiles, @(MaxBytes / 1024 / 1024)MB c/u)</label>
+                    <InputFile OnChange="OnFilesSelected" multiple accept="image/*,video/*" class="form-control" disabled="@(_uploading || _media.Count >= MaxFiles)" />
+                    @if (_uploading) { <div class="text-muted" style="font-size:12px; margin-top:6px;">Subiendo @_uploadCurrent/@_uploadTotal...</div> }
+                    @if (_uploadErrors.Count > 0)
+                    {
+                        <div class="text-danger small" style="margin-top:6px;">
+                            @foreach (var err in _uploadErrors) { <div>@err</div> }
+                        </div>
+                    }
+                    @if (_media.Count > 0)
+                    {
+                        <div class="cal-media-list">
+                            @foreach (var m in _media)
+                            {
+                                <div class="cal-media-item">
+                                    @if (IsVideo(m.Url))
+                                    {
+                                        <div class="cal-media-prev cal-media-video">
+                                            <svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>
+                                        </div>
+                                    }
+                                    else
+                                    {
+                                        <img class="cal-media-prev" src="@m.Url" alt="" />
+                                    }
+                                    <div style="flex:1; min-width:0;">
+                                        <div class="cal-media-name">@m.FileName</div>
+                                        <div class="cal-media-meta">@FormatBytes(m.Size)</div>
+                                    </div>
+                                    <button class="btn btn-sm" style="color:#dc2626;" @onclick="() => RemoveMedia(m)" title="Quitar">×</button>
+                                </div>
+                            }
+                        </div>
+                    }
+                </div>
+
                 <div class="field"><label class="form-label">Programar (opcional)</label><input class="form-control" type="datetime-local" @bind="_fSchedule" /></div>
                 <div class="field">
-                    <label class="form-label">Cuentas destino</label>
+                    <label class="form-label">Cuentas destino @if (_clientAccounts.Count > 0 && _selected.Count == 0){<span style="color:#dc2626; font-weight:700;"> (selecciona al menos 1)</span>}</label>
                     @if (_clientAccounts.Count == 0)
                     {
                         <div class="text-muted" style="font-size:12px;">Este cliente no tiene cuentas conectadas. Puedes crear la publicacion como borrador.</div>
@@ -99,15 +200,47 @@ else
                     {
                         @foreach (var a in _clientAccounts)
                         {
-                            <label class="cal-acc"><input type="checkbox" checked="@_selected.Contains(a.Id)" @onchange="e => Toggle(a.Id, (bool)e.Value!)" /> <span>@a.NetworkDisplay @(string.IsNullOrWhiteSpace(a.Handle) ? "" : "@" + a.Handle)</span></label>
+                            <label class="cal-acc">
+                                <input type="checkbox" checked="@_selected.Contains(a.Id)" @onchange="e => Toggle(a.Id, (bool)e.Value!)" />
+                                <span>
+                                    <b>@a.NetworkDisplay</b>
+                                    @if (!string.IsNullOrWhiteSpace(a.Handle))
+                                    {
+                                        <span> · @@@a.Handle</span>
+                                    }
+                                    else if (!string.IsNullOrWhiteSpace(a.DisplayName))
+                                    {
+                                        <span> · @a.DisplayName</span>
+                                    }
+                                    else
+                                    {
+                                        <span class="text-muted"> · cuenta de @a.ClientName (sin handle)</span>
+                                    }
+                                </span>
+                            </label>
                         }
                     }
                 </div>
+
+                @* Validaciones pre-creacion: muestra al usuario que falta antes de habilitar Crear *@
+                @{
+                    var requirements = GetMissing();
+                }
+                @if (requirements.Count > 0)
+                {
+                    <div class="alert alert-warning" style="padding:10px 14px; font-size:12px;">
+                        <b>Antes de crear:</b>
+                        <ul style="margin:6px 0 0 18px;">
+                            @foreach (var r in requirements) { <li>@r</li> }
+                        </ul>
+                    </div>
+                }
+
                 @if (_error is not null) { <div class="text-danger small">@_error</div> }
             </div>
             <div class="modal-foot">
-                <button class="btn btn-outline-secondary" @onclick="() => _createOpen = false">Cancelar</button>
-                <button class="btn btn-primary" @onclick="CreateAsync" disabled="@(_busy || string.IsNullOrWhiteSpace(_fClient) || string.IsNullOrWhiteSpace(_fCaption))">Crear</button>
+                <button class="btn btn-outline-secondary" @onclick="CloseCreate">Cancelar</button>
+                <button class="btn btn-primary" @onclick="CreateAsync" disabled="@(_busy || _uploading || GetMissing().Count > 0)">Crear</button>
             </div>
         </div>
     </div>
@@ -123,19 +256,50 @@ else
     .cal-chip.s-failed { background: oklch(0.6 0.22 22 / 0.12); color: var(--destructive); }
     .cal-acc { display: flex; align-items: center; gap: 8px; font-size: 13px; padding: 4px 0; }
     .field { margin-bottom: 14px; }
+    .cal-thumbs { display: flex; gap: 4px; align-items: center; }
+    .cal-thumb { width: 36px; height: 36px; border-radius: 6px; object-fit: cover; border: 1px solid var(--border); }
+    .cal-thumb-video { background: #111827; color: #fff; display: flex; align-items: center; justify-content: center; }
+    .cal-thumb-video svg { width: 16px; height: 16px; }
+    .cal-thumb-more { width: 36px; height: 36px; border-radius: 6px; background: #f3f4f6; color: #6b7280; display: flex; align-items: center; justify-content: center; font-weight: 700; font-size: 11px; border: 1px solid var(--border); }
+    .cal-media-list { display: flex; flex-direction: column; gap: 8px; margin-top: 10px; }
+    .cal-media-item { display: flex; gap: 10px; align-items: center; padding: 8px; background: #f9fafb; border: 1px solid var(--border); border-radius: 8px; }
+    .cal-media-prev { width: 44px; height: 44px; border-radius: 6px; object-fit: cover; flex-shrink: 0; }
+    .cal-media-video { background: #111827; color: #fff; display: flex; align-items: center; justify-content: center; }
+    .cal-media-video svg { width: 22px; height: 22px; }
+    .cal-media-name { font-size: 12px; font-weight: 600; color: #1f2937; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .cal-media-meta { font-size: 11px; color: #6b7280; }
 </style>
 
 @code {
+    private const int MaxFiles = 10;
+    private const long MaxBytes = 60L * 1024 * 1024; // 60MB
+    private static readonly HashSet<string> AllowedExt = new(StringComparer.OrdinalIgnoreCase)
+    { ".jpg", ".jpeg", ".png", ".webp", ".gif", ".mp4", ".mov", ".webm", ".m4v" };
+    private static readonly HashSet<string> VideoExt = new(StringComparer.OrdinalIgnoreCase)
+    { ".mp4", ".mov", ".webm", ".m4v" };
+
     private List<PublicationDto>? _pubs;
     private List<ClientDto>? _clients;
     private List<SocialAccountDto> _clientAccounts = new();
     private readonly HashSet<Guid> _selected = new();
-    private bool _createOpen, _busy;
+    private readonly List<MediaItem> _media = new();
+    private bool _createOpen, _busy, _uploading;
+    private int _uploadCurrent, _uploadTotal;
+    private readonly List<string> _uploadErrors = new();
     private string? _error;
     private string _fClient = "", _fCaption = "";
     private DateTime? _fSchedule;
     private Guid _actor;
     private readonly PublicationStatus[] _allStatuses = Enum.GetValues<PublicationStatus>();
+    private Guid? _publishingId;
+    private PublicationExecResult? _lastExec;
+
+    private sealed class MediaItem
+    {
+        public required string Url { get; init; }
+        public required string FileName { get; init; }
+        public required long Size { get; init; }
+    }
 
     protected override async Task OnInitializedAsync()
     {
@@ -147,7 +311,15 @@ else
 
     private async Task Reload() => _pubs = (await PubsSvc.ListAsync()).ToList();
 
-    private void OpenCreate() { _error = null; _fClient = ""; _fCaption = ""; _fSchedule = null; _selected.Clear(); _clientAccounts = new(); _createOpen = true; }
+    private void OpenCreate()
+    {
+        _error = null; _fClient = ""; _fCaption = ""; _fSchedule = null;
+        _selected.Clear(); _clientAccounts = new();
+        _media.Clear(); _uploadErrors.Clear();
+        _createOpen = true;
+    }
+
+    private void CloseCreate() { _createOpen = false; }
 
     private async Task OnClientChanged()
     {
@@ -161,6 +333,77 @@ else
 
     private void Toggle(Guid id, bool on) { if (on) { _selected.Add(id); } else { _selected.Remove(id); } }
 
+    private async Task OnFilesSelected(InputFileChangeEventArgs e)
+    {
+        _uploadErrors.Clear();
+        if (TenantContext.TenantId is not Guid tenantId)
+        {
+            _uploadErrors.Add("Sin agencia activa.");
+            return;
+        }
+
+        var files = e.GetMultipleFiles(MaxFiles);
+        _uploadTotal = files.Count;
+        _uploadCurrent = 0;
+        _uploading = true;
+        try
+        {
+            foreach (var file in files)
+            {
+                _uploadCurrent++;
+                if (_media.Count >= MaxFiles) { _uploadErrors.Add($"Maximo {MaxFiles} archivos. '{file.Name}' descartado."); continue; }
+                if (file.Size > MaxBytes) { _uploadErrors.Add($"'{file.Name}' excede {MaxBytes / 1024 / 1024}MB."); continue; }
+
+                var ext = Path.GetExtension(file.Name);
+                if (string.IsNullOrEmpty(ext) || !AllowedExt.Contains(ext))
+                {
+                    _uploadErrors.Add($"'{file.Name}' tipo no permitido ({ext}).");
+                    continue;
+                }
+
+                var safeName = Guid.CreateVersion7().ToString("N") + ext.ToLowerInvariant();
+                var dir = Path.Combine(Env.WebRootPath, "uploads", tenantId.ToString("N"));
+                Directory.CreateDirectory(dir);
+                var fullPath = Path.Combine(dir, safeName);
+
+                try
+                {
+                    await using var input = file.OpenReadStream(MaxBytes);
+                    await using var output = File.Create(fullPath);
+                    await input.CopyToAsync(output);
+                }
+                catch (Exception ex)
+                {
+                    _uploadErrors.Add($"'{file.Name}': {ex.Message}");
+                    try { if (File.Exists(fullPath)) { File.Delete(fullPath); } } catch { }
+                    continue;
+                }
+
+                _media.Add(new MediaItem
+                {
+                    Url = $"/uploads/{tenantId:N}/{safeName}",
+                    FileName = file.Name,
+                    Size = file.Size
+                });
+                StateHasChanged();
+            }
+        }
+        finally { _uploading = false; _uploadCurrent = 0; _uploadTotal = 0; }
+    }
+
+    private void RemoveMedia(MediaItem m)
+    {
+        _media.Remove(m);
+        // Borrar tambien del disco (la publicacion aun no se ha creado).
+        try
+        {
+            var rel = m.Url.TrimStart('/').Replace('/', Path.DirectorySeparatorChar);
+            var full = Path.Combine(Env.WebRootPath, rel);
+            if (File.Exists(full)) { File.Delete(full); }
+        }
+        catch { /* tolerante */ }
+    }
+
     private async Task CreateAsync()
     {
         _error = null; _busy = true;
@@ -168,9 +411,11 @@ else
         {
             if (!Guid.TryParse(_fClient, out var cid)) { return; }
             DateTimeOffset? sched = _fSchedule is { } s ? new DateTimeOffset(s, TimeSpan.Zero) : null;
-            var dto = await PubsSvc.CreateAsync(new CreatePublicationRequest(cid, _fCaption, sched, _selected.ToList()), _actor);
+            var urls = _media.Select(m => m.Url).ToList();
+            var dto = await PubsSvc.CreateAsync(new CreatePublicationRequest(cid, _fCaption, sched, _selected.ToList(), urls), _actor);
             if (dto is null) { _error = "No hay agencia activa o cliente invalido."; return; }
             _createOpen = false;
+            _media.Clear();
             await Reload();
         }
         catch (Exception ex) { _error = ex.Message; }
@@ -182,6 +427,51 @@ else
         if (value is null || !Enum.TryParse<PublicationStatus>(value, out var s) || s == p.Status) { return; }
         await PubsSvc.SetStatusAsync(p.Id, s, _actor);
         await Reload();
+    }
+
+    /// <summary>Reglas de validacion previa a "Crear" — bloquea publicar al vacio.</summary>
+    private List<string> GetMissing()
+    {
+        var missing = new List<string>();
+        if (string.IsNullOrWhiteSpace(_fClient)) { missing.Add("Elegir un cliente."); }
+        if (string.IsNullOrWhiteSpace(_fCaption)) { missing.Add("Escribir el copy del post."); }
+        if (_clientAccounts.Count > 0 && _selected.Count == 0)
+        {
+            missing.Add("Marcar al menos una cuenta destino (checkbox abajo).");
+        }
+        // Si alguno de los targets es TikTok exigir un archivo MP4/MOV/WEBM.
+        var targetsTikTok = _clientAccounts.Where(a => _selected.Contains(a.Id) && a.NetworkCode == "tiktok").ToList();
+        if (targetsTikTok.Count > 0)
+        {
+            var hasVideo = _media.Any(m => IsVideo(m.Url));
+            if (!hasVideo) { missing.Add("Adjuntar un archivo VIDEO (MP4/MOV/WEBM) — TikTok no acepta PNG/JPG en este flujo."); }
+        }
+        return missing;
+    }
+
+    private async Task ExecuteNow(PublicationDto p)
+    {
+        _publishingId = p.Id;
+        _lastExec = null;
+        try
+        {
+            _lastExec = await ExecSvc.ExecuteAsync(p.Id, _actor);
+            await Reload();
+        }
+        finally { _publishingId = null; }
+    }
+
+    private static bool IsVideo(string url)
+    {
+        var ext = Path.GetExtension(url);
+        return !string.IsNullOrEmpty(ext) && VideoExt.Contains(ext);
+    }
+
+    private static string FormatBytes(long b)
+    {
+        if (b < 1024) { return b + " B"; }
+        if (b < 1024 * 1024) { return (b / 1024.0).ToString("0.#") + " KB"; }
+        return (b / 1024.0 / 1024.0).ToString("0.#") + " MB";
     }
 
     private static string StatusLabel(PublicationStatus s) => s switch

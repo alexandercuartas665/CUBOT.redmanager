@@ -44,6 +44,12 @@ public class CubotRedManagerDbContext : DbContext, IApplicationDbContext
     public DbSet<Client> Clients => Set<Client>();
     public DbSet<UserClientLink> UserClientLinks => Set<UserClientLink>();
     public DbSet<SocialAccount> SocialAccounts => Set<SocialAccount>();
+    public DbSet<TikTokAppConfig> TikTokAppConfigs => Set<TikTokAppConfig>();
+    public DbSet<TikTokVideo> TikTokVideos => Set<TikTokVideo>();
+    public DbSet<AutoReplyConfig> AutoReplyConfigs => Set<AutoReplyConfig>();
+    public DbSet<AutoReplyTemplate> AutoReplyTemplates => Set<AutoReplyTemplate>();
+    public DbSet<AutoReplyJobLog> AutoReplyJobLogs => Set<AutoReplyJobLog>();
+    public DbSet<AutomationRule> AutomationRules => Set<AutomationRule>();
     public DbSet<TaskBoard> TaskBoards => Set<TaskBoard>();
     public DbSet<TaskColumn> TaskColumns => Set<TaskColumn>();
     public DbSet<TaskCard> TaskCards => Set<TaskCard>();
@@ -51,6 +57,13 @@ public class CubotRedManagerDbContext : DbContext, IApplicationDbContext
     public DbSet<PublicationTarget> PublicationTargets => Set<PublicationTarget>();
     public DbSet<InboxMessage> InboxMessages => Set<InboxMessage>();
     public DbSet<InboxReply> InboxReplies => Set<InboxReply>();
+    public DbSet<MessageTemplate> MessageTemplates => Set<MessageTemplate>();
+
+    // Contenedor de Datos (modelos dinamicos EAV).
+    public DbSet<DataContainer> DataContainers => Set<DataContainer>();
+    public DbSet<DataContainerColumn> DataContainerColumns => Set<DataContainerColumn>();
+    public DbSet<DataContainerRow> DataContainerRows => Set<DataContainerRow>();
+    public DbSet<DataContainerCell> DataContainerCells => Set<DataContainerCell>();
 
     // IA (capa 3)
     public DbSet<AiAgent> AiAgents => Set<AiAgent>();
@@ -101,6 +114,25 @@ public class CubotRedManagerDbContext : DbContext, IApplicationDbContext
         modelBuilder.Entity<SocialAccount>().Property(x => x.Status).HasConversion<string>();
         modelBuilder.Entity<SocialAccount>()
             .HasIndex(x => new { x.TenantId, x.ClientId, x.NetworkCode, x.ExternalId }).IsUnique();
+        // App de TikTok: una config por tenant (Modulo 2.2).
+        modelBuilder.Entity<TikTokAppConfig>().HasIndex(x => x.TenantId).IsUnique();
+        // Videos TikTok: idempotencia por cuenta + external_id (Modulo 2.4 Sync).
+        modelBuilder.Entity<TikTokVideo>().HasIndex(x => new { x.TenantId, x.SocialAccountId, x.ExternalId }).IsUnique();
+        modelBuilder.Entity<TikTokVideo>().HasIndex(x => new { x.SocialAccountId, x.PublishedAt });
+
+        // Autorespuesta (Modulo 2.11): una config por cuenta social.
+        modelBuilder.Entity<AutoReplyConfig>().HasIndex(x => x.SocialAccountId).IsUnique();
+        modelBuilder.Entity<AutoReplyConfig>().Property(x => x.Mode).HasConversion<string>();
+        modelBuilder.Entity<AutoReplyConfig>().Property(x => x.Frequency).HasConversion<string>();
+        modelBuilder.Entity<AutoReplyConfig>().HasMany(c => c.Templates).WithOne(t => t.Config!).HasForeignKey(t => t.ConfigId).OnDelete(DeleteBehavior.Cascade);
+        modelBuilder.Entity<AutoReplyTemplate>().HasIndex(x => new { x.ConfigId, x.SortOrder });
+        modelBuilder.Entity<AutoReplyJobLog>().Property(x => x.Status).HasConversion<string>();
+        modelBuilder.Entity<AutoReplyJobLog>().HasIndex(x => new { x.SocialAccountId, x.StartedAt });
+
+        // Automatizaciones.
+        modelBuilder.Entity<AutomationRule>().Property(x => x.Trigger).HasConversion<string>();
+        modelBuilder.Entity<AutomationRule>().Property(x => x.Action).HasConversion<string>();
+        modelBuilder.Entity<AutomationRule>().HasIndex(x => new { x.TenantId, x.IsActive });
 
         // Tablero Kanban (Modulo 2.7).
         modelBuilder.Entity<TaskCard>().Property(x => x.Priority).HasConversion<string>();
@@ -117,8 +149,40 @@ public class CubotRedManagerDbContext : DbContext, IApplicationDbContext
         // Bandeja unificada (Modulo 2.6).
         modelBuilder.Entity<InboxMessage>().Property(x => x.Type).HasConversion<string>();
         modelBuilder.Entity<InboxMessage>().Property(x => x.Status).HasConversion<string>();
+        modelBuilder.Entity<InboxMessage>().Property(x => x.PipelineStage).HasConversion<string>();
+        modelBuilder.Entity<InboxMessage>().HasIndex(x => new { x.TenantId, x.PipelineStage });
         modelBuilder.Entity<InboxMessage>().HasIndex(x => new { x.NetworkCode, x.ExternalId }).IsUnique();
         modelBuilder.Entity<InboxMessage>().HasMany(m => m.Replies).WithOne(r => r.Message!).HasForeignKey(r => r.InboxMessageId).OnDelete(DeleteBehavior.Cascade);
+
+        // Plantillas de mensajes reutilizables (Configuracion / Plantillas).
+        modelBuilder.Entity<MessageTemplate>().HasIndex(x => new { x.TenantId, x.Name });
+
+        // Contenedor de Datos (modelos dinamicos EAV).
+        modelBuilder.Entity<DataContainer>().HasIndex(x => new { x.TenantId, x.Name }).IsUnique();
+        modelBuilder.Entity<DataContainerColumn>().Property(x => x.Type).HasConversion<string>();
+        modelBuilder.Entity<DataContainerColumn>().HasIndex(x => new { x.ContainerId, x.Name }).IsUnique();
+        modelBuilder.Entity<DataContainerColumn>()
+            .HasOne(c => c.Container)
+            .WithMany(c => c.Columns)
+            .HasForeignKey(c => c.ContainerId)
+            .OnDelete(DeleteBehavior.Cascade);
+        modelBuilder.Entity<DataContainerRow>()
+            .HasOne(r => r.Container)
+            .WithMany(c => c.Rows)
+            .HasForeignKey(r => r.ContainerId)
+            .OnDelete(DeleteBehavior.Cascade);
+        modelBuilder.Entity<DataContainerRow>().HasIndex(x => new { x.ContainerId, x.CreatedAt });
+        modelBuilder.Entity<DataContainerCell>().HasIndex(x => new { x.RowId, x.ColumnId }).IsUnique();
+        modelBuilder.Entity<DataContainerCell>()
+            .HasOne(c => c.Row)
+            .WithMany(r => r.Cells)
+            .HasForeignKey(c => c.RowId)
+            .OnDelete(DeleteBehavior.Cascade);
+        modelBuilder.Entity<DataContainerCell>()
+            .HasOne(c => c.Column)
+            .WithMany()
+            .HasForeignKey(c => c.ColumnId)
+            .OnDelete(DeleteBehavior.Cascade);
 
         // Auditoria global.
         modelBuilder.Entity<SuperAdminAuditLog>().Property(x => x.ActorType).HasConversion<string>();

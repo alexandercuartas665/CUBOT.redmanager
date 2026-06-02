@@ -16,7 +16,10 @@ public sealed record SocialAccountDto(
     string? DisplayName,
     SocialAccountStatus Status,
     DateTimeOffset? ExpiresAt,
-    DateTimeOffset? LastSyncAt)
+    DateTimeOffset? LastSyncAt,
+    long? FollowersCount = null,
+    string? AvatarUrl = null,
+    string? Bio = null)
 {
     /// <summary>Token por expirar (menos de 7 dias) y cuenta conectada.</summary>
     public bool ExpiringSoon => Status == SocialAccountStatus.Connected && ExpiresAt is { } e && e <= DateTimeOffset.UtcNow.AddDays(7);
@@ -34,4 +37,5 @@ public interface ISocialAccountService
     Task<IReadOnlyList<SocialAccountDto>> ListAsync(Guid? clientId = null, CancellationToken cancellationToken = default);
     Task<SocialAccountDto?> ConnectDemoAsync(ConnectSocialAccountRequest request, Guid actorUserId, CancellationToken cancellationToken = default);
     Task<SocialAccountDto?> ChangeStatusAsync(Guid id, SocialAccountStatus status, Guid actorUserId, CancellationToken cancellationToken = default);
+    Task<bool> DeleteAsync(Guid id, Guid actorUserId, CancellationToken cancellationToken = default);
 }
