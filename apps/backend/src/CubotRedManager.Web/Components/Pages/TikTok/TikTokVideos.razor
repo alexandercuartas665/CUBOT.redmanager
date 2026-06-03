@@ -70,6 +70,7 @@ else
     <div class="field" style="flex:1; margin:0; min-width:200px;">
         <label class="form-label">Cuenta</label>
         <select class="form-control" @bind="_selectedAccount" @bind:after="OnAccountChanged">
+            <option value="">Todas las cuentas</option>
             @foreach (var a in _accounts) { <option value="@a.Id">@(string.IsNullOrEmpty(a.Handle) ? a.ClientName : "@" + a.Handle)</option> }
         </select>
     </div>
@@ -89,8 +90,36 @@ else
         <button class="btn btn-outline-secondary" @onclick="SyncVideos" disabled="@_busy">@(_busy && _stage == "v" ? "..." : "1. Videos")</button>
         <button class="btn btn-outline-secondary" @onclick="SyncComments" disabled="@_busy">@(_busy && _stage == "c" ? "..." : "2. Comentarios")</button>
         <button class="btn btn-primary" @onclick="SyncAll" disabled="@_busy">@(_busy && _stage == "a" ? "Sincronizando..." : "Sincronizar todo")</button>
+        <button class="btn btn-outline-danger" @onclick="OpenDeleteAllConfirm" disabled="@(_busy || (_stats?.TotalVideos ?? 0) == 0)" title="Borra todos los videos sincronizados y sus comentarios. Mantiene config, cuentas y agentes.">Eliminar todos</button>
     </div>
 </div>
+
+@* === Modal confirmacion Eliminar todos los videos === *@
+@if (_deleteAllOpen)
+{
+    <div class="modal-overlay">
+        <div class="modal-dialog" style="max-width:520px;">
+            <div class="modal-head">
+                <h3>Eliminar todos los videos sincronizados</h3>
+                <button class="modal-close" @onclick="() => _deleteAllOpen = false">&times;</button>
+            </div>
+            <div class="modal-body">
+                <p>Vas a borrar <strong>@(_stats?.TotalVideos ?? 0) video(s)</strong> y <strong>@(_stats?.TotalComments ?? 0) comentario(s)</strong> sincronizados desde TikTok.</p>
+                <p class="text-muted" style="font-size:12.5px;">Se eliminan en cascada las respuestas que mando el bot/operador a esos comentarios.</p>
+                <p class="text-muted" style="font-size:12.5px;">
+                    <strong>No</strong> se ven afectados: las cuentas TikTok conectadas, la configuracion de autorespuesta, los agentes IA, ni los logs del worker.
+                </p>
+                <p class="text-muted" style="font-size:12px;">Despues de eliminar, puedes pulsar <em>Sincronizar todo</em> para volver a descargar los videos desde TikTok.</p>
+                @if (_deleteAllError is not null) { <div class="text-danger small">@_deleteAllError</div> }
+                @if (_deleteAllResult is not null) { <div class="text-success small">@_deleteAllResult</div> }
+            </div>
+            <div class="modal-foot">
+                <button class="btn btn-outline-secondary" @onclick="() => _deleteAllOpen = false">Cancelar</button>
+                <button class="btn btn-danger" @onclick="DeleteAllAsync" disabled="@_deleteAllBusy">@(_deleteAllBusy ? "Eliminando..." : "Si, eliminar todo")</button>
+            </div>
+        </div>
+    </div>
+}
 
 @if (_lastResult is not null)
 {
@@ -319,7 +348,9 @@ else
         var st = await AuthProvider.GetAuthenticationStateAsync();
         Guid.TryParse(st.User.FindFirst(ClaimTypes.NameIdentifier)?.Value, out _actor);
         _accounts = (await AccountsSvc.ListAsync()).Where(a => a.NetworkCode == "tiktok").ToList();
-        if (_accounts.Count > 0) { _selectedAccount = _accounts[0].Id.ToString(); await Reload(); }
+        // Default: "Todas las cuentas" si hay mas de una; si solo hay 1, la preseleccionamos.
+        _selectedAccount = _accounts.Count == 1 ? _accounts[0].Id.ToString() : "";
+        if (_accounts.Count > 0) { await Reload(); }
         _loading = false;
     }
 
@@ -327,7 +358,23 @@ else
 
     private async Task Reload()
     {
-        if (Guid.TryParse(_selectedAccount, out var gid))
+        if (string.IsNullOrEmpty(_selectedAccount))
+        {
+            // "Todas las cuentas": agregamos stats y videos de cada cuenta TikTok del tenant.
+            // Secuencial (no Task.WhenAll) porque DbContext scoped no es thread-safe.
+            if (_accounts.Count == 0) { _stats = new TikTokAccountStats(0, 0, 0, 0); _videos = new(); return; }
+            int totV = 0, totC = 0, totP = 0, totR = 0;
+            var allVideos = new List<TikTokVideoDto>();
+            foreach (var a in _accounts)
+            {
+                var s = await SyncSvc.GetStatsAsync(a.Id);
+                totV += s.TotalVideos; totC += s.TotalComments; totP += s.PendingComments; totR += s.RepliedComments;
+                allVideos.AddRange(await SyncSvc.ListVideosAsync(a.Id, _onlyWithPending, _textFilter));
+            }
+            _stats = new TikTokAccountStats(totV, totC, totP, totR);
+            _videos = allVideos.OrderByDescending(v => v.PublishedAt ?? DateTimeOffset.MinValue).ToList();
+        }
+        else if (Guid.TryParse(_selectedAccount, out var gid))
         {
             _stats = await SyncSvc.GetStatsAsync(gid);
             _videos = (await SyncSvc.ListVideosAsync(gid, _onlyWithPending, _textFilter)).ToList();
@@ -342,11 +389,37 @@ else
 
     private async Task RunSync(string stage, Func<Guid, Task<TikTokSyncResult>> op)
     {
-        if (!Guid.TryParse(_selectedAccount, out var gid)) { return; }
+        // Determina los target accounts: una sola o todas (si "Todas las cuentas").
+        var targets = string.IsNullOrEmpty(_selectedAccount)
+            ? _accounts.Select(a => a.Id).ToList()
+            : (Guid.TryParse(_selectedAccount, out var gid) ? new List<Guid> { gid } : new List<Guid>());
+        if (targets.Count == 0) { return; }
+
         _busy = true; _stage = stage;
         try
         {
-            _lastResult = await op(gid);
+            var results = new List<TikTokSyncResult>();
+            for (var i = 0; i < targets.Count; i++)
+            {
+                results.Add(await op(targets[i]));
+            }
+            // Agregar resultados en un solo TikTokSyncResult resumen.
+            var trace = string.Join("\n---\n", results.Select((r, i) =>
+            {
+                var acc = _accounts.FirstOrDefault(a => a.Id == targets[i]);
+                var label = acc is null ? targets[i].ToString() : (string.IsNullOrEmpty(acc.Handle) ? acc.ClientName : "@" + acc.Handle);
+                return $"=== Cuenta {label} ===\n{r.Trace}";
+            }));
+            _lastResult = new TikTokSyncResult(
+                results.All(r => r.Success),
+                results.Sum(r => r.VideosInserted),
+                results.Sum(r => r.VideosUpdated),
+                results.Sum(r => r.CommentsInserted),
+                results.Sum(r => r.CommentsUpdated),
+                results.Sum(r => r.RepliesInserted),
+                results.Sum(r => r.Errors),
+                trace,
+                results.FirstOrDefault(r => !r.Success)?.ErrorMessage);
             await Reload();
         }
         catch (Exception ex)
@@ -432,4 +505,37 @@ else
         InboxStatus.Archived => "secondary",
         _ => "info"
     };
+
+    // ===== Eliminar todos los videos =====
+    private bool _deleteAllOpen;
+    private bool _deleteAllBusy;
+    private string? _deleteAllError;
+    private string? _deleteAllResult;
+
+    private void OpenDeleteAllConfirm()
+    {
+        _deleteAllError = null;
+        _deleteAllResult = null;
+        _deleteAllOpen = true;
+    }
+
+    private async Task DeleteAllAsync()
+    {
+        _deleteAllBusy = true;
+        _deleteAllError = null;
+        _deleteAllResult = null;
+        try
+        {
+            var (v, c) = await SyncSvc.DeleteAllVideosAsync(_actor);
+            _deleteAllResult = $"Eliminados {v} videos y {c} comentarios.";
+            // Refrescar UI: stats y lista
+            await Reload();
+        }
+        catch (Exception ex) { _deleteAllError = ex.Message; }
+        finally { _deleteAllBusy = false; }
+        // Cerrar modal tras 1.5s para que se vea el resultado
+        await Task.Delay(1500);
+        _deleteAllOpen = false;
+        StateHasChanged();
+    }
 }

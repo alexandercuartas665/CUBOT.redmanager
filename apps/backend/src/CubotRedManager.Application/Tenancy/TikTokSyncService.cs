@@ -446,7 +446,19 @@ public sealed class TikTokSyncService : ITikTokSyncService
         if (string.IsNullOrEmpty(account.AccessTokenEncrypted)) { trace.AppendLine("[ERROR] Sin Access Token. Reconecta la cuenta."); return (null, null, null, "Sin Access Token."); }
         if (string.IsNullOrEmpty(account.ExternalId)) { trace.AppendLine("[ERROR] Sin Business ID (open_id). Reconecta la cuenta."); return (null, null, null, "Sin Business ID."); }
 
-        var token = _protector.Unprotect(account.AccessTokenEncrypted);
+        string token;
+        try { token = _protector.Unprotect(account.AccessTokenEncrypted); }
+        catch
+        {
+            // Llave de DataProtection desaparecio (ej. dev efimero anterior). El token guardado no
+            // sirve. Marcamos la cuenta como Disconnected para que la UI lo refleje y el operador
+            // sepa que tiene que reconectar.
+            account.Status = Domain.Enums.SocialAccountStatus.Disconnected;
+            account.LastSyncError = "Token no descifrable (llave de DataProtection perdida). Reconecta la cuenta para regenerar el token.";
+            await _db.SaveChangesAsync(ct);
+            trace.AppendLine("[ERROR] Access token no descifrable (llave perdida). Cuenta marcada como Disconnected.");
+            return (null, null, null, "Token no descifrable. Reconecta la cuenta.");
+        }
         trace.AppendLine($"[OK] Credenciales cargadas. Business ID: {account.ExternalId}");
         return (account, token, account.ExternalId, null);
     }
@@ -638,4 +650,26 @@ public sealed class TikTokSyncService : ITikTokSyncService
     }
 
     private static string Truncate(string s, int n) => s.Length <= n ? s : s[..n] + "...";
+
+    public async Task<(int videos, int comments)> DeleteAllVideosAsync(Guid actorUserId, CancellationToken cancellationToken = default)
+    {
+        if (_tenantContext.TenantId is not Guid tenantId) { return (0, 0); }
+
+        // 1) Borrar TikTokVideos del tenant.
+        var deletedVideos = await _db.TikTokVideos
+            .Where(v => v.TenantId == tenantId)
+            .ExecuteDeleteAsync(cancellationToken);
+
+        // 2) Borrar InboxMessages tipo Comment de red TikTok del tenant.
+        //    InboxReplies asociadas se borran en cascada por FK ON DELETE CASCADE.
+        //    No tocamos DMs/menciones de otras redes ni replies enviadas por humanos.
+        var deletedComments = await _db.InboxMessages
+            .Where(m => m.TenantId == tenantId && m.NetworkCode == Network && m.Type == Domain.Enums.InboxMessageType.Comment)
+            .ExecuteDeleteAsync(cancellationToken);
+
+        _audit.Write(actorUserId, "tiktok.videos.delete-all", nameof(Domain.Entities.TikTokVideo), Guid.Empty,
+            previousValue: new { videos = deletedVideos, comments = deletedComments }, newValue: null, tenantId: tenantId);
+
+        return (deletedVideos, deletedComments);
+    }
 }

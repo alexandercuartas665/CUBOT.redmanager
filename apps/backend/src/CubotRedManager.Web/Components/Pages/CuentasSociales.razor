@@ -6,7 +6,10 @@
 @using CubotRedManager.Domain.Enums
 @inject ISocialAccountService AccountsSvc
 @inject IClientService ClientsSvc
+@inject ITikTokConnectionService TikTokSvc
 @inject AuthenticationStateProvider AuthProvider
+@inject IJSRuntime JS
+@inject NavigationManager Nav
 
 <PageTitle>Cuentas sociales - CUBOT.redmanager</PageTitle>
 
@@ -58,15 +61,17 @@ else
                             <td>@(string.IsNullOrWhiteSpace(a.Handle) ? "—" : "@" + a.Handle)</td>
                             <td><span class="badge bg-@StatusColor(a.Status)">@StatusText(a.Status)</span> @if (a.ExpiringSoon) { <span class="badge bg-warning">por expirar</span> }</td>
                             <td style="font-size:12px;color:var(--muted-foreground);">@(a.ExpiresAt is { } e ? e.LocalDateTime.ToString("dd MMM yyyy") : "—")</td>
-                            <td style="text-align:right;padding-right:14px;">
+                            <td style="text-align:right;padding-right:14px;display:flex;gap:6px;justify-content:flex-end;">
                                 @if (a.Status == SocialAccountStatus.Connected)
                                 {
                                     <button class="btn btn-sm btn-outline-secondary" @onclick="() => ChangeStatus(a, SocialAccountStatus.Disconnected)">Desconectar</button>
                                 }
                                 else
                                 {
-                                    <button class="btn btn-sm btn-primary" @onclick="() => ChangeStatus(a, SocialAccountStatus.Connected)">Reconectar</button>
+                                    @* Reconectar dispara el OAuth REAL en un modal inline (no deriva). *@
+                                    <button class="btn btn-sm btn-primary" @onclick="() => GoReconnectAsync(a)">Reconectar</button>
                                 }
+                                <button class="btn btn-sm btn-outline-danger" title="Eliminar cuenta (borrado en cascada)" @onclick="() => OpenDeleteConfirm(a)">Eliminar</button>
                             </td>
                         </tr>
                     }
@@ -85,16 +90,10 @@ else
                 <button class="modal-close" @onclick="() => _connectOpen = false">&times;</button>
             </div>
             <div class="modal-body">
-                <div class="field">
-                    <label class="form-label">Cliente (marca)</label>
-                    <select class="form-control" @bind="_cClient">
-                        <option value="">Selecciona...</option>
-                        @foreach (var c in _clients!)
-                        {
-                            <option value="@c.Id">@c.Name</option>
-                        }
-                    </select>
-                </div>
+                <p class="text-muted" style="font-size:13px;margin-bottom:14px;">
+                    El nombre de la cuenta y los datos se obtienen automaticamente al completar el OAuth oficial.
+                    Elige la red social y te llevamos al flujo de autorizacion correspondiente.
+                </p>
                 <div class="field">
                     <label class="form-label">Red social</label>
                     <select class="form-control" @bind="_cNetwork">
@@ -104,13 +103,107 @@ else
                         }
                     </select>
                 </div>
-                <div class="field"><label class="form-label">Usuario / handle</label><input class="form-control" @bind="_cHandle" placeholder="ej. nikecolombia" /></div>
-                <div class="text-muted" style="font-size:11px;">El flujo OAuth oficial se integra en Fase 2 (Modulo 2.2). Aqui se registra una cuenta demo conectada.</div>
                 @if (_error is not null) { <div class="text-danger small">@_error</div> }
             </div>
             <div class="modal-foot">
                 <button class="btn btn-outline-secondary" @onclick="() => _connectOpen = false">Cancelar</button>
-                <button class="btn btn-primary" @onclick="ConnectAsync" disabled="@(_busy || string.IsNullOrWhiteSpace(_cClient))">Conectar</button>
+                <button class="btn btn-primary" @onclick="GoOAuthAsync">Continuar al OAuth</button>
+            </div>
+        </div>
+    </div>
+}
+
+@* === Modal Reconectar (renovar OAuth de TikTok para una cuenta existente) === *@
+@if (_reconnectAccount is not null)
+{
+    <div class="modal-overlay">
+        <div class="modal-dialog">
+            <div class="modal-head">
+                <h3>Reconectar @(string.IsNullOrEmpty(_reconnectAccount.Handle) ? _reconnectAccount.ClientName : "@" + _reconnectAccount.Handle)</h3>
+                <button class="modal-close" @onclick="CloseReconnect">&times;</button>
+            </div>
+            <div class="modal-body">
+                <p class="text-muted" style="font-size:12.5px;margin-bottom:14px;">
+                    Vamos a renovar el token OAuth de esta cuenta con TikTok. Esto sustituye el token actual por uno nuevo, sin perder configuracion ni datos sincronizados.
+                </p>
+
+                @if (_reconnectStep == 1)
+                {
+                    <ol style="font-size:13px;line-height:1.7;padding-left:18px;margin-bottom:14px;">
+                        <li>Click en <strong>Autorizar en TikTok</strong>: se abre una pestana nueva.</li>
+                        <li>Inicia sesion con la cuenta <strong>@_reconnectAccount.Handle</strong> y acepta los permisos.</li>
+                        <li>TikTok te devolvera a una URL con un parametro <code>code=...</code>. Copia ese codigo y pegalo en el siguiente paso.</li>
+                    </ol>
+                    <button class="btn btn-primary" @onclick="ReconnectAuthorize" disabled="@_reconnectBusy">
+                        @(_reconnectBusy ? "Abriendo..." : "Autorizar en TikTok")
+                    </button>
+                }
+                else if (_reconnectStep == 2)
+                {
+                    <div class="field">
+                        <label class="form-label">Pega aqui el <code>code</code> que TikTok te devolvio</label>
+                        <input class="form-control" @bind="_reconnectCode" placeholder="ej. abc123..." />
+                        <div class="text-muted" style="font-size:11px;margin-top:6px;">Lo encuentras en la URL despues de autorizar, como <code>?code=XYZ&amp;state=...</code></div>
+                    </div>
+                }
+                else if (_reconnectStep == 3)
+                {
+                    <div style="background:oklch(0.85 0.15 145 / 0.2);border:1px solid oklch(0.65 0.15 145 / 0.5);color:oklch(0.35 0.1 145);border-radius:8px;padding:12px;font-size:13px;">
+                        Cuenta reconectada correctamente. Token nuevo cifrado con las llaves actuales.
+                    </div>
+                }
+
+                @if (_reconnectError is not null)
+                {
+                    <div class="text-danger small" style="margin-top:12px;white-space:pre-wrap;">@_reconnectError</div>
+                }
+                @if (!string.IsNullOrEmpty(_reconnectTrace))
+                {
+                    <details style="margin-top:10px;font-size:11px;">
+                        <summary style="cursor:pointer;color:var(--muted-foreground);">Traza tecnica</summary>
+                        <pre style="background:#0f172a;color:#94a3b8;padding:10px;border-radius:6px;font-size:11px;overflow:auto;max-height:160px;">@_reconnectTrace</pre>
+                    </details>
+                }
+            </div>
+            <div class="modal-foot">
+                <button class="btn btn-outline-secondary" @onclick="CloseReconnect">@(_reconnectStep == 3 ? "Cerrar" : "Cancelar")</button>
+                @if (_reconnectStep == 2)
+                {
+                    <button class="btn btn-primary" @onclick="ReconnectExchange" disabled="@(_reconnectBusy || string.IsNullOrWhiteSpace(_reconnectCode))">
+                        @(_reconnectBusy ? "Renovando..." : "Renovar conexion")
+                    </button>
+                }
+            </div>
+        </div>
+    </div>
+}
+
+@* === Modal confirmacion Eliminar cuenta === *@
+@if (_deleteAccount is not null)
+{
+    <div class="modal-overlay">
+        <div class="modal-dialog" style="max-width:520px;">
+            <div class="modal-head">
+                <h3>Eliminar cuenta @(string.IsNullOrEmpty(_deleteAccount.Handle) ? _deleteAccount.ClientName : "@" + _deleteAccount.Handle)?</h3>
+                <button class="modal-close" @onclick="() => _deleteAccount = null">&times;</button>
+            </div>
+            <div class="modal-body">
+                <p>Vas a borrar permanentemente la conexion de <strong>@(_deleteAccount.NetworkDisplay)</strong> del cliente <strong>@_deleteAccount.ClientName</strong>.</p>
+                <p class="text-muted" style="font-size:12.5px;">
+                    Esto borra en cascada (todo lo asociado a esta cuenta especifica):
+                </p>
+                <ul style="font-size:12.5px;color:var(--muted-foreground);">
+                    <li>Configuracion de autorespuesta y plantillas</li>
+                    <li>Logs del job de autorespuesta</li>
+                    <li>Videos sincronizados y sus comentarios en la bandeja</li>
+                    <li>Tokens (access y refresh)</li>
+                </ul>
+                <p class="text-muted" style="font-size:12px;">El cliente, el agente IA y los contenedores de datos del tenant <strong>no</strong> se ven afectados. Si la cuenta es solo de un OAuth roto, puedes reconectarla luego (creara una fila nueva).</p>
+                @if (_deleteError is not null) { <div class="text-danger small">@_deleteError</div> }
+            </div>
+            <div class="modal-foot">
+                <button class="btn btn-outline-secondary" @onclick="() => _deleteAccount = null">Cancelar</button>
+                <button class="btn btn-danger" @onclick="DeleteAccountAsync" disabled="@_deleteBusy">@(_deleteBusy ? "Eliminando..." : "Si, eliminar cuenta")</button>
             </div>
         </div>
     </div>
@@ -127,9 +220,9 @@ else
     private List<ClientDto>? _clients;
     private List<SocialNetworkDto>? _networks;
     private int _expiring;
-    private bool _connectOpen, _busy;
+    private bool _connectOpen;
     private string? _error;
-    private string _cClient = "", _cNetwork = "meta_instagram", _cHandle = "";
+    private string _cNetwork = "tiktok";
     private Guid _actor;
 
     protected override async Task OnInitializedAsync()
@@ -149,30 +242,158 @@ else
 
     private void OpenConnect()
     {
-        _error = null; _cClient = ""; _cHandle = "";
-        _cNetwork = _networks!.FirstOrDefault()?.Code ?? "meta_instagram";
+        _error = null;
+        // Por defecto preseleccionamos TikTok si esta disponible (es la unica con OAuth real hoy).
+        _cNetwork = _networks!.FirstOrDefault(n => n.Code == "tiktok")?.Code
+                    ?? _networks!.FirstOrDefault()?.Code
+                    ?? "tiktok";
         _connectOpen = true;
     }
 
-    private async Task ConnectAsync()
+    /// <summary>
+    /// Deriva al flujo OAuth REAL de la red elegida. Solo TikTok lo tiene implementado por ahora;
+    /// las otras redes (meta, youtube) muestran un aviso para evitar crear cuentas fantasma con
+    /// handle inventado a mano.
+    /// </summary>
+    private Task GoOAuthAsync()
     {
-        _error = null; _busy = true;
-        try
+        var net = (_cNetwork ?? "").ToLowerInvariant();
+        if (net == "tiktok")
         {
-            if (!Guid.TryParse(_cClient, out var clientId)) { _error = "Selecciona un cliente."; return; }
-            var dto = await AccountsSvc.ConnectDemoAsync(new ConnectSocialAccountRequest(clientId, _cNetwork, _cHandle), _actor);
-            if (dto is null) { _error = "No se pudo conectar (cuenta duplicada o cliente invalido)."; return; }
             _connectOpen = false;
-            await Reload();
+            Nav.NavigateTo("/tiktok/cuentas");
+            return Task.CompletedTask;
         }
-        catch (Exception ex) { _error = ex.Message; }
-        finally { _busy = false; }
+        var display = _networks!.FirstOrDefault(n => n.Code == _cNetwork)?.DisplayName ?? _cNetwork;
+        _error = $"El OAuth oficial de {display} se integrara en una proxima fase. Por ahora solo TikTok esta disponible.";
+        return Task.CompletedTask;
     }
 
     private async Task ChangeStatus(SocialAccountDto a, SocialAccountStatus status)
     {
         await AccountsSvc.ChangeStatusAsync(a.Id, status, _actor);
         await Reload();
+    }
+
+    // ===== Reconexion inline (Modulo 2.2 OAuth real, no stub) =====
+    private SocialAccountDto? _reconnectAccount;
+    private int _reconnectStep;
+    private string _reconnectCode = "";
+    private string? _reconnectError;
+    private string? _reconnectTrace;
+    private bool _reconnectBusy;
+
+    /// <summary>
+    /// Reconectar = renovar el token OAuth de la cuenta existente. NO solo cambia Status: ejecuta
+    /// el flujo real con TikTok y reemplaza access_token + refresh_token cifrados con las llaves
+    /// actuales. Si TikTok rebota (app sin configurar, code expirado, etc.), mostramos el error
+    /// inline con la traza tecnica.
+    /// </summary>
+    private Task GoReconnectAsync(SocialAccountDto a)
+    {
+        _reconnectError = null;
+        _reconnectTrace = null;
+        _reconnectCode = "";
+        _reconnectStep = 1;
+        _reconnectBusy = false;
+
+        var net = (a.NetworkCode ?? string.Empty).ToLowerInvariant();
+        if (net != "tiktok")
+        {
+            _error = $"Reconectar {a.NetworkDisplay} estara disponible cuando se integre su OAuth oficial (Modulo 2.2).";
+            return Task.CompletedTask;
+        }
+        _reconnectAccount = a;
+        return Task.CompletedTask;
+    }
+
+    private void CloseReconnect()
+    {
+        _reconnectAccount = null;
+        _reconnectStep = 0;
+        _reconnectError = null;
+        _reconnectTrace = null;
+        _reconnectCode = "";
+    }
+
+    private async Task ReconnectAuthorize()
+    {
+        if (_reconnectAccount is null) { return; }
+        _reconnectBusy = true;
+        _reconnectError = null;
+        try
+        {
+            var cfg = await TikTokSvc.GetAppConfigAsync();
+            if (cfg is null || !cfg.HasSecret)
+            {
+                _reconnectError = "Falta configurar App Key + Secret de TikTok. Pide al Super Admin que lo haga en Servidores / TikTok.";
+                return;
+            }
+            var (url, _, err) = await TikTokSvc.BuildAuthorizeUrlAsync();
+            if (err is not null || string.IsNullOrEmpty(url))
+            {
+                _reconnectError = err ?? "No se pudo construir la URL de autorizacion.";
+                return;
+            }
+            await JS.InvokeVoidAsync("open", url, "_blank");
+            _reconnectStep = 2;
+        }
+        catch (Exception ex) { _reconnectError = ex.Message; }
+        finally { _reconnectBusy = false; }
+    }
+
+    private async Task ReconnectExchange()
+    {
+        if (_reconnectAccount is null) { return; }
+        _reconnectBusy = true;
+        _reconnectError = null;
+        _reconnectTrace = null;
+        try
+        {
+            var code = (_reconnectCode ?? "").Trim();
+            if (code.Length == 0) { _reconnectError = "Pega el code antes de continuar."; return; }
+
+            // El backend UPDATEa la cuenta existente (busca por ClientId + NetworkCode='tiktok')
+            // y reemplaza el access_token con uno nuevo cifrado con las llaves actuales.
+            var r = await TikTokSvc.ExchangeCodeAsync(_reconnectAccount.ClientId, code, _actor);
+            _reconnectTrace = r.Trace;
+            if (!r.Success)
+            {
+                _reconnectError = $"TikTok rechazo el code: {r.Error}";
+                return;
+            }
+            _reconnectStep = 3;
+            await Reload(); // refresca la fila de la cuenta con el nuevo expires_at + Status=Connected
+        }
+        catch (Exception ex) { _reconnectError = ex.Message; }
+        finally { _reconnectBusy = false; }
+    }
+
+    // ===== Eliminar cuenta =====
+    private SocialAccountDto? _deleteAccount;
+    private bool _deleteBusy;
+    private string? _deleteError;
+
+    private void OpenDeleteConfirm(SocialAccountDto a)
+    {
+        _deleteError = null;
+        _deleteAccount = a;
+    }
+
+    private async Task DeleteAccountAsync()
+    {
+        if (_deleteAccount is null) { return; }
+        _deleteBusy = true;
+        _deleteError = null;
+        try
+        {
+            var ok = await AccountsSvc.DeleteAsync(_deleteAccount.Id, _actor);
+            if (!ok) { _deleteError = "No se pudo eliminar (ya no existe?)."; return; }
+            _deleteAccount = null;
+            await Reload();
+        }
+        catch (Exception ex) { _deleteError = ex.Message; }
+        finally { _deleteBusy = false; }
     }
 
     private static string StatusText(SocialAccountStatus s) => s switch

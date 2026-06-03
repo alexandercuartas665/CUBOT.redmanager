@@ -32,6 +32,25 @@ public sealed class InboxService : IInboxService
     public async Task<int> UnreadCountAsync(CancellationToken cancellationToken = default) =>
         await _db.InboxMessages.AsNoTracking().CountAsync(m => m.Status == InboxStatus.Unread, cancellationToken);
 
+    public async Task<int> PendingCountAsync(CancellationToken cancellationToken = default) =>
+        // Pendiente = comentario top-level con Status != Replied y sin InboxReply.
+        // Misma definicion que usa /tiktok/videos para consistencia entre modulos.
+        await _db.InboxMessages.AsNoTracking()
+            .CountAsync(m => m.ParentMessageId == null
+                          && m.Status != InboxStatus.Replied
+                          && m.Status != InboxStatus.Archived
+                          && !_db.InboxReplies.Any(r => r.InboxMessageId == m.Id), cancellationToken);
+
+    public async Task<int> DeleteAllAsync(Guid actorUserId, CancellationToken cancellationToken = default)
+    {
+        if (_tenantContext.TenantId is not Guid tenantId) { return 0; }
+        // FK ON DELETE CASCADE en inbox_replies se encarga de borrar las respuestas asociadas.
+        var count = await _db.InboxMessages
+            .Where(m => m.TenantId == tenantId)
+            .ExecuteDeleteAsync(cancellationToken);
+        return count;
+    }
+
     public async Task<IReadOnlyList<InboxMessageDto>> ListAsync(InboxStatus? status = null, Guid? clientId = null, CancellationToken cancellationToken = default)
     {
         var q = from m in _db.InboxMessages.AsNoTracking()

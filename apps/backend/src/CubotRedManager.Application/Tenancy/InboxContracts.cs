@@ -60,4 +60,13 @@ public interface IInboxService
 
     /// <summary>Inserta un mensaje entrante de prueba (demo; en produccion entra por webhook idempotente).</summary>
     Task<InboxMessageDto?> SimulateIncomingAsync(SimulateInboxRequest request, CancellationToken cancellationToken = default);
+
+    /// <summary>Pendientes = comentarios top-level del tenant con Status != Replied y sin InboxReply.
+    /// Es la misma definicion que usa /tiktok/videos para consistencia entre modulos.</summary>
+    Task<int> PendingCountAsync(CancellationToken cancellationToken = default);
+
+    /// <summary>Borra TODOS los inbox_messages del tenant activo. Las inbox_replies asociadas se
+    /// borran en cascada por FK. Usado por el boton "Eliminar todo" de la Bandeja. Devuelve cuantas
+    /// filas borro.</summary>
+    Task<int> DeleteAllAsync(Guid actorUserId, CancellationToken cancellationToken = default);
 }

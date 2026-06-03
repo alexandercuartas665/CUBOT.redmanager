@@ -1,10 +1,12 @@
 @page "/tiktok/autorespuesta-logs"
 @attribute [Authorize(Policy = AppPolicies.TenantMember)]
 @rendermode InteractiveServer
+@using System.Security.Claims
 @using CubotRedManager.Application.Tenancy
 @using CubotRedManager.Domain.Enums
 @inject IAutoReplyConfigService AutoReplySvc
 @inject ISocialAccountService AccountsSvc
+@inject AuthenticationStateProvider AuthProvider
 
 <PageTitle>Logs Autorespuesta - CUBOT.redmanager</PageTitle>
 
@@ -17,9 +19,32 @@
             <span>TikTok Manager</span>
         </div>
         <h1 class="page-title" style="margin-top:12px;">Autorespuesta — Logs del job</h1>
-        <p class="page-sub" style="margin-bottom:0;">Cada ejecucion del worker queda registrada con duracion, comentarios procesados, respuestas enviadas y errores.</p>
+        <p class="page-sub" style="margin-bottom:0;">Cada ejecucion del worker queda registrada con duracion, comentarios procesados, respuestas enviadas y errores. Los logs se conservan 5 dias y luego se purgan automaticamente.</p>
     </div>
+    <button class="btn btn-outline-danger" @onclick="OpenDeleteConfirm" disabled="@(_busy || _logs.Count == 0)" title="Borra TODOS los logs visibles. Util tras una sesion de pruebas.">Eliminar logs</button>
 </div>
+
+@* === Modal confirmacion de borrado === *@
+@if (_deleteOpen)
+{
+    <div class="modal-overlay">
+        <div class="modal-dialog" style="max-width:480px;">
+            <div class="modal-head">
+                <h3>Eliminar todos los logs</h3>
+                <button class="modal-close" @onclick="() => _deleteOpen = false">&times;</button>
+            </div>
+            <div class="modal-body">
+                <p>Se borraran <strong>todos</strong> los logs de autorespuesta de tu agencia. Esta accion es irreversible.</p>
+                <p class="text-muted" style="font-size:12.5px;">El worker seguira escribiendo logs nuevos en cada ejecucion. La retencion automatica de 5 dias no se ve afectada.</p>
+                @if (_deleteResult is not null) { <div class="text-success small">@_deleteResult</div> }
+            </div>
+            <div class="modal-foot">
+                <button class="btn btn-outline-secondary" @onclick="() => _deleteOpen = false">Cancelar</button>
+                <button class="btn btn-danger" @onclick="DeleteAllAsync" disabled="@_busy">@(_busy ? "Borrando..." : "Si, borrar todos")</button>
+            </div>
+        </div>
+    </div>
+}
 
 @if (_loading) { <p class="text-muted">Cargando...</p> }
 else
@@ -135,17 +160,51 @@ else
 
 @code {
     private bool _loading = true;
+    private bool _busy;
     private List<AutoReplyJobLogDto> _logs = new();
     private List<SocialAccountDto> _accounts = new();
     private string _filterAccount = "", _filterStatus = "";
     private bool _detailOpen;
     private AutoReplyJobLogDetailDto? _detail;
 
+    // Borrado masivo (boton "Eliminar logs")
+    private bool _deleteOpen;
+    private string? _deleteResult;
+    private Guid _actor;
+
     protected override async Task OnInitializedAsync()
     {
+        var st = await AuthProvider.GetAuthenticationStateAsync();
+        Guid.TryParse(st.User.FindFirst(ClaimTypes.NameIdentifier)?.Value, out _actor);
         _accounts = (await AccountsSvc.ListAsync()).Where(a => a.NetworkCode == "tiktok").ToList();
         await Reload();
         _loading = false;
+    }
+
+    private void OpenDeleteConfirm()
+    {
+        _deleteResult = null;
+        _deleteOpen = true;
+    }
+
+    private async Task DeleteAllAsync()
+    {
+        _busy = true;
+        try
+        {
+            var n = await AutoReplySvc.DeleteAllLogsAsync(_actor);
+            _deleteResult = $"Borrados {n} logs.";
+            await Reload();
+        }
+        finally
+        {
+            _busy = false;
+        }
+        // Cerramos el modal tras 1.2s para que se vea el mensaje
+        await Task.Delay(1200);
+        _deleteOpen = false;
+        _deleteResult = null;
+        StateHasChanged();
     }
 
     private async Task Reload()

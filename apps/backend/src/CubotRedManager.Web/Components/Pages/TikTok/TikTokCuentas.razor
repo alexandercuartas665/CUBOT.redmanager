@@ -253,6 +253,32 @@ else
                     <textarea class="form-control" rows="2" @bind="_arDefaultTpl" placeholder="Gracias por tu comentario! Te respondemos por DM."></textarea>
                     <small class="text-muted">Se usa cuando ninguna keyword matchea y el modo es Solo plantillas.</small>
                 </div>
+
+                <hr style="margin:18px 0; border:0; border-top:1px solid #f3f4f6;" />
+                <div class="field">
+                    <label class="form-label">Agente IA (lista de agentes activos)</label>
+                    <select class="form-control" @bind="_arAgentId">
+                        <option value="">(Auto: usa el primer agente IA activo del tenant)</option>
+                        @foreach (var ag in _arAgentOptions.Where(a => a.IsActive))
+                        {
+                            <option value="@ag.Id">@ag.Name — @ag.Provider</option>
+                        }
+                        @if (_arAgentOptions.Any(a => !a.IsActive))
+                        {
+                            <optgroup label="Inactivos (no procesan)">
+                                @foreach (var ag in _arAgentOptions.Where(a => !a.IsActive))
+                                {
+                                    <option value="@ag.Id" disabled>@ag.Name — @ag.Provider (apagado)</option>
+                                }
+                            </optgroup>
+                        }
+                    </select>
+                    <small class="text-muted">
+                        Modo <strong>Mixto</strong>: si una plantilla matchea, la pasamos a este agente como sugerencia para que genere una variacion (no copia literal).
+                        Modo <strong>Solo IA</strong>: el agente recibe solo el comentario.
+                        Modo <strong>Solo plantillas</strong>: ignora al agente.
+                    </small>
+                </div>
             }
             else if (_arTab == "programacion")
             {
@@ -498,6 +524,8 @@ else
     private int _arHoursMask = 0x1FFF00;
     private byte _arDaysMask = 0x7F;
     private readonly List<TemplateRow> _arTemplates = new();
+    private string _arAgentId = "";
+    private List<AutoReplyAgentOptionDto> _arAgentOptions = new();
     private string? _arError;
 
     private async Task OpenAutoReply(SocialAccountDto a)
@@ -518,6 +546,8 @@ else
             _arHoursMask = _arCfg.ActiveHoursMask;
             _arDaysMask = _arCfg.ActiveDaysOfWeekMask;
             _arDefaultTpl = _arCfg.DefaultTemplate ?? "";
+            _arAgentId = _arCfg.AiAgentId?.ToString() ?? "";
+            _arAgentOptions = (await AutoReplySvc.ListAgentOptionsAsync()).ToList();
             _arTemplates.Clear();
             foreach (var t in _arCfg.Templates) { _arTemplates.Add(new TemplateRow { Id = t.Id, Keywords = t.Keywords, Body = t.Body, SortOrder = t.SortOrder }); }
             _arOpen = true;
@@ -558,9 +588,10 @@ else
         try
         {
             var tpls = _arTemplates.Select((t, i) => new AutoReplyTemplateInput(t.Id, t.Keywords, t.Body, i)).ToList();
+            Guid? agentId = Guid.TryParse(_arAgentId, out var gid) ? gid : null;
             var req = new SaveAutoReplyConfigRequest(
                 _arAccount.Id, _arIsActive, _arMode, _arMaxReplies, _arDelayMin, _arDelayMax,
-                _arBlacklist, _arFrequency, _arCronCustom, _arHoursMask, _arDaysMask, _arDefaultTpl, tpls);
+                _arBlacklist, _arFrequency, _arCronCustom, _arHoursMask, _arDaysMask, _arDefaultTpl, agentId, tpls);
             var dto = await AutoReplySvc.SaveAsync(req, _actor);
             if (dto is null) { _arError = "No se pudo guardar."; return; }
             CloseAutoReply();

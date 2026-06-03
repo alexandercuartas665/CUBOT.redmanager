@@ -42,5 +42,14 @@ public class AutoReplyConfig : TenantEntity
     /// <summary>Plantilla a usar si Mode=Template y ningun keyword matchea.</summary>
     public string? DefaultTemplate { get; set; }
 
+    /// <summary>
+    /// Agente IA del tenant que ejecuta las respuestas cuando Mode=Ai/Mixed. Si es null el
+    /// worker elige el primer agente activo del tenant (compatibilidad hacia atras). Cuando
+    /// Mode=Mixed y una plantilla matchea, la plantilla se pasa AL AGENTE como sugerencia
+    /// para que genere una respuesta variada que respete el sentido (no copia literal).
+    /// </summary>
+    public Guid? AiAgentId { get; set; }
+    public AiAgent? AiAgent { get; set; }
+
     public ICollection<AutoReplyTemplate> Templates { get; set; } = new List<AutoReplyTemplate>();
 }

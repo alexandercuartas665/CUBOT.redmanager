@@ -1,0 +1,1418 @@
+@page "/tableros/{boardId:guid}"
+@attribute [Authorize(Policy = "TenantMember")]
+@rendermode @(new InteractiveServerRenderMode(prerender: false))
+@using CubotRedManager.Application.Tenancy
+@using CubotRedManager.Domain.Enums
+@inject ITaskBoardService BoardsSvc
+@inject ITaskCardService CardsSvc
+@inject ITenantUserService TenantUsersSvc
+@inject NavigationManager Nav
+
+<PageTitle>@(_board?.Name ?? "Tablero") - CUBOT.redmanager</PageTitle>
+
+@if (_loading)
+{
+    <p><em>Cargando tablero...</em></p>
+}
+else if (_board is null)
+{
+    <div class="card" style="padding:32px;max-width:680px;">
+        <p>No se encontro el tablero. <a href="/tableros">Volver a tableros</a>.</p>
+    </div>
+}
+else
+{
+    <div class="module-head">
+        <div>
+            <div class="module-eyebrow">
+                <div class="module-icon">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="7" height="7" x="3" y="3" rx="1"/><rect width="7" height="7" x="14" y="3" rx="1"/><rect width="7" height="7" x="14" y="14" rx="1"/><rect width="7" height="7" x="3" y="14" rx="1"/></svg>
+                </div>
+                <span>Gestion de Proyectos</span>
+            </div>
+            <h1 class="page-title" style="margin-top:12px;">@_board.Name <span>Agil</span></h1>
+            <p class="page-sub" style="margin-bottom:0;">@(string.IsNullOrWhiteSpace(_board.Description) ? "Embudo Kanban con etapas configurables para mover tareas hasta su cierre." : _board.Description)</p>
+        </div>
+        <div style="display:flex;gap:10px;flex-wrap:wrap;">
+            <button class="btn btn-outline-secondary" @onclick="@(() => Nav.NavigateTo("/tableros"))">&larr; Tableros</button>
+            <button class="btn btn-outline-secondary" @onclick="OpenConfig">Configurar tablero</button>
+            <button class="btn btn-outline-secondary" @onclick="OpenHistorial">Historial</button>
+            <button class="btn btn-primary" @onclick="@(() => OpenNewCardModal(_columns.FirstOrDefault()?.Id ?? Guid.Empty))" disabled="@(_columns.Count == 0)">+ Nueva tarea</button>
+        </div>
+    </div>
+
+    @* ===== 3 KPI cards ===== *@
+    <div class="kpi-grid" style="margin-bottom:24px;grid-template-columns:repeat(3,minmax(0,1fr));max-width:1280px;">
+        <div class="kpi-card">
+            <div class="kpi-top">
+                <div class="kpi-icon tone-primary">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v6h6"/></svg>
+                </div>
+            </div>
+            <div class="kpi-label">Total tareas</div>
+            <div class="kpi-value">@_totalCount</div>
+            <div class="kpi-hint">Activas en el tablero</div>
+        </div>
+        <div class="kpi-card">
+            <div class="kpi-top">
+                <div class="kpi-icon tone-success">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" x2="18" y1="20" y2="10"/><line x1="12" x2="12" y1="20" y2="4"/><line x1="6" x2="6" y1="20" y2="14"/></svg>
+                </div>
+            </div>
+            <div class="kpi-label">Tasa de finalizacion</div>
+            <div class="kpi-value">@_completionRate%</div>
+            <div class="kpi-hint">@_doneCount completadas de @_totalCount</div>
+        </div>
+        <div class="kpi-card">
+            <div class="kpi-top">
+                <div class="kpi-icon tone-gold">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+                </div>
+            </div>
+            <div class="kpi-label">En progreso</div>
+            <div class="kpi-value">@_inProgressCount</div>
+            <div class="kpi-hint">Tareas en desarrollo</div>
+        </div>
+    </div>
+
+    @* ===== Toolbar (search + sort + view + filter) ===== *@
+    <div class="tb-toolbar">
+        <div class="tb-toolbar-search">
+            <svg class="tb-search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
+            <input type="text" placeholder="Buscar tarea o responsable..." @bind="_search" @bind:event="oninput" />
+        </div>
+        <div class="tb-toolbar-right">
+            <div class="tb-sort">
+                <span>Ordenar:</span>
+                <select @bind="_sort">
+                    <option value="manual">Manual</option>
+                    <option value="due">Fecha</option>
+                    <option value="title">Titulo</option>
+                </select>
+            </div>
+            <div class="tb-view">
+                <button class="@(_view == "kanban" ? "active" : "")" @onclick="@(() => _view = "kanban")">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="7" height="7" x="3" y="3" rx="1"/><rect width="7" height="7" x="14" y="3" rx="1"/><rect width="7" height="7" x="14" y="14" rx="1"/><rect width="7" height="7" x="3" y="14" rx="1"/></svg>
+                    Kanban
+                </button>
+                <button class="@(_view == "list" ? "active" : "")" @onclick="@(() => _view = "list")">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="8" x2="21" y1="6" y2="6"/><line x1="8" x2="21" y1="12" y2="12"/><line x1="8" x2="21" y1="18" y2="18"/><line x1="3" x2="3.01" y1="6" y2="6"/><line x1="3" x2="3.01" y1="12" y2="12"/><line x1="3" x2="3.01" y1="18" y2="18"/></svg>
+                    Lista
+                </button>
+            </div>
+        </div>
+    </div>
+
+    @if (_view == "kanban")
+    {
+        <div class="tb-board">
+            @foreach (var col in _columns)
+            {
+                <div class="tb-col @(_dragOverColumnId == col.Id ? "tb-col-drag" : "")"
+                     ondragover="event.preventDefault()"
+                     @ondragenter="@(() => _dragOverColumnId = col.Id)"
+                     @ondragleave="@(() => { if (_dragOverColumnId == col.Id) _dragOverColumnId = null; })"
+                     @ondrop="@(() => OnDropAsync(col.Id))">
+                    <div class="tb-col-head">
+                        <span class="tb-col-name">@col.Name</span>
+                        <span class="tb-col-count">@FilteredCardsForColumn(col.Id).Count()</span>
+                    </div>
+                    <div class="tb-col-body">
+                        @{
+                            var colCards = FilteredCardsForColumn(col.Id).ToList();
+                        }
+                        @if (colCards.Count == 0)
+                        {
+                            <div class="tb-col-empty">Sin tareas en esta etapa</div>
+                        }
+                        @foreach (var card in colCards)
+                        {
+                            <div class="tb-card-item @(_dragCardId == card.Id ? "dragging" : "")"
+                                 draggable="true"
+                                 @ondragstart="@(() => _dragCardId = card.Id)"
+                                 @ondragend="@(() => _dragCardId = null)"
+                                 @onclick="@(() => OpenCardAsync(card.Id))">
+                                @if (card.Tags.Count > 0)
+                                {
+                                    <div class="tb-card-tags">
+                                        @foreach (var t in card.Tags)
+                                        {
+                                            <span class="tb-tag" style="@(string.IsNullOrWhiteSpace(t.Color) ? "" : $"background:{t.Color};color:#fff;")">@t.Name</span>
+                                        }
+                                    </div>
+                                }
+                                <div class="tb-card-title" style="@(string.IsNullOrEmpty(card.Color) ? "" : $"color:{card.Color};border-left:3px solid {card.Color};padding-left:8px;")">@card.Title</div>
+                                @if (!string.IsNullOrWhiteSpace(card.Description) || card.ChecklistTotal > 0 || card.CommentsCount > 0 || card.AttachmentsCount > 0)
+                                {
+                                    <div class="tb-card-meta">
+                                        @if (!string.IsNullOrWhiteSpace(card.Description))
+                                        {
+                                            <span class="tb-card-meta-item" title="Tiene descripcion">
+                                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="17" x2="3" y1="6" y2="6"/><line x1="21" x2="3" y1="12" y2="12"/><line x1="15" x2="3" y1="18" y2="18"/></svg>
+                                            </span>
+                                        }
+                                        @if (card.ChecklistTotal > 0)
+                                        {
+                                            <span class="tb-card-meta-item" title="Checklist">
+                                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 11 12 14 22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>
+                                                <span>@card.ChecklistDone/@card.ChecklistTotal</span>
+                                            </span>
+                                        }
+                                        @if (card.CommentsCount > 0)
+                                        {
+                                            <span class="tb-card-meta-item" title="Comentarios">
+                                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+                                                <span>@card.CommentsCount</span>
+                                            </span>
+                                        }
+                                        @if (card.AttachmentsCount > 0)
+                                        {
+                                            <span class="tb-card-meta-item" title="Adjuntos">
+                                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l8.57-8.57A4 4 0 1 1 17.93 8.8l-8.59 8.57a2 2 0 1 1-2.83-2.83l8.49-8.48"/></svg>
+                                                <span>@card.AttachmentsCount</span>
+                                            </span>
+                                        }
+                                    </div>
+                                }
+                                <div class="tb-card-foot">
+                                    <div class="tb-members">
+                                        @if (card.Members.Count == 0)
+                                        {
+                                            <div class="tb-avatar empty" title="Sin asignar">
+                                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width:12px;height:12px;"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
+                                            </div>
+                                        }
+                                        else
+                                        {
+                                            @foreach (var m in card.Members)
+                                            {
+                                                <div class="tb-avatar" title="@m.DisplayName">@m.Initials</div>
+                                            }
+                                        }
+                                    </div>
+                                    @if (card.DueAt is not null)
+                                    {
+                                        var isLate = card.DueAt < DateTimeOffset.UtcNow && !_doneColumnIds.Contains(card.ColumnId);
+                                        <span class="tb-due @(isLate ? "late" : "")">
+                                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+                                            @FormatDue(card.DueAt.Value, isLate)
+                                        </span>
+                                    }
+                                </div>
+                            </div>
+                        }
+                    </div>
+                    <div class="tb-col-foot">
+                        <button class="tb-col-add" @onclick="@(() => OpenNewCardModal(col.Id))" disabled="@_busy">
+                            <span class="tb-col-add-plus">+</span> Agregar tarea
+                        </button>
+                    </div>
+                </div>
+            }
+        </div>
+    }
+    else
+    {
+        @* ===== Vista Lista ===== *@
+        <div class="tb-list">
+            @{
+                var listCards = AllFilteredCards().ToList();
+            }
+            @if (listCards.Count == 0)
+            {
+                <div class="tb-list-empty">No hay tareas que coincidan con la busqueda.</div>
+            }
+            else
+            {
+                <table>
+                    <thead>
+                        <tr>
+                            <th style="width:36%;">Tarea</th>
+                            <th>Etiquetas</th>
+                            <th>Columna</th>
+                            <th>Asignados</th>
+                            <th>Vence</th>
+                            <th style="text-align:right;">Checklist</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var card in listCards)
+                        {
+                            var col = _columns.FirstOrDefault(c => c.Id == card.ColumnId);
+                            var isLate = card.DueAt is not null && card.DueAt < DateTimeOffset.UtcNow && !_doneColumnIds.Contains(card.ColumnId);
+                            <tr @onclick="@(() => OpenCardAsync(card.Id))">
+                                <td><strong>@card.Title</strong></td>
+                                <td>
+                                    @foreach (var t in card.Tags)
+                                    {
+                                        <span class="tb-tag" style="@(string.IsNullOrWhiteSpace(t.Color) ? "" : $"background:{t.Color};color:#fff;") margin-right:4px;">@t.Name</span>
+                                    }
+                                </td>
+                                <td>
+                                    <span class="tb-status @StatusClass(col)">@(col?.Name ?? "-")</span>
+                                </td>
+                                <td>
+                                    <div class="tb-members">
+                                        @foreach (var m in card.Members)
+                                        {
+                                            <div class="tb-avatar" title="@m.DisplayName">@m.Initials</div>
+                                        }
+                                    </div>
+                                </td>
+                                <td>
+                                    @if (card.DueAt is not null)
+                                    {
+                                        <span class="tb-due @(isLate ? "late" : "")">@FormatDue(card.DueAt.Value, isLate)</span>
+                                    }
+                                </td>
+                                <td style="text-align:right;color:var(--muted-foreground);font-size:12.5px;">
+                                    @if (card.ChecklistTotal > 0)
+                                    {
+                                        <text>@card.ChecklistDone / @card.ChecklistTotal</text>
+                                    }
+                                </td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            }
+        </div>
+    }
+}
+
+@* ===== Modal: detalle de tarjeta ===== *@
+@if (_cardDetail is not null)
+{
+    var detail = _cardDetail;
+    var col = _columns.FirstOrDefault(c => c.Id == detail.Card.ColumnId);
+    <div class="modal-overlay" @onclick="CloseCard">
+        <div class="tb-modal" @onclick:stopPropagation="true">
+            <div class="tb-modal-head">
+                <svg class="tb-modal-head-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="7" height="7" x="3" y="3" rx="1"/><rect width="7" height="7" x="14" y="3" rx="1"/><rect width="7" height="7" x="14" y="14" rx="1"/><rect width="7" height="7" x="3" y="14" rx="1"/></svg>
+                <div class="tb-modal-head-content">
+                    @if (_editingTitle)
+                    {
+                        <input class="form-control" @bind="_editTitle" @bind:event="oninput" style="font-size:1.4rem;font-weight:700;" />
+                        <div style="margin-top:8px;display:flex;gap:8px;">
+                            <button class="btn btn-sm btn-primary" @onclick="SaveTitleAsync" disabled="@_busy">Guardar</button>
+                            <button class="btn btn-sm btn-outline-secondary" @onclick="@(() => { _editingTitle = false; _editTitle = detail.Card.Title; })">Cancelar</button>
+                        </div>
+                    }
+                    else
+                    {
+                        <h2 class="tb-modal-title" @onclick="@(() => { _editingTitle = true; _editTitle = detail.Card.Title; })" style="cursor:text;@(string.IsNullOrEmpty(detail.Card.Color) ? "" : $"color:{detail.Card.Color};")">@detail.Card.Title</h2>
+                        <p class="tb-modal-subtitle">en la lista <strong>@(col?.Name ?? "(sin columna)")</strong></p>
+                    }
+                </div>
+                <button class="tb-modal-close" @onclick="CloseCard" aria-label="Cerrar">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
+                </button>
+            </div>
+
+            <div class="tb-modal-body">
+                <div class="tb-modal-main">
+                    @* Members + Tags inline row *@
+                    @if (detail.Card.Members.Count > 0 || detail.Card.Tags.Count > 0)
+                    {
+                        <div class="tb-modal-inline-row">
+                            @if (detail.Card.Members.Count > 0)
+                            {
+                                <div>
+                                    <h4 class="tb-modal-mini-h4">Miembros</h4>
+                                    <div style="display:flex;gap:4px;align-items:center;">
+                                        @foreach (var m in detail.Card.Members)
+                                        {
+                                            <div class="tb-avatar lg" title="@m.DisplayName" @onclick="@(() => UnassignMemberAsync(m.TenantUserId))" style="cursor:pointer;">@m.Initials</div>
+                                        }
+                                        <button class="tb-modal-add-btn" @onclick="@(() => _showMembersPop = !_showMembersPop)" title="Agregar miembro">
+                                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/><path d="M12 5v14"/></svg>
+                                        </button>
+                                    </div>
+                                </div>
+                            }
+                            @if (detail.Card.Tags.Count > 0)
+                            {
+                                <div>
+                                    <h4 class="tb-modal-mini-h4">Etiquetas</h4>
+                                    <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;">
+                                        @foreach (var t in detail.Card.Tags)
+                                        {
+                                            <span class="tb-modal-tag" style="@(string.IsNullOrWhiteSpace(t.Color) ? "" : $"background:{t.Color};color:#fff;")" @onclick="@(() => DetachTagAsync(t.Id))" title="Quitar etiqueta">@t.Name</span>
+                                        }
+                                        <button class="tb-modal-add-btn sq" @onclick="@(() => _showTagsPop = !_showTagsPop)" title="Agregar etiqueta">
+                                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/><path d="M12 5v14"/></svg>
+                                        </button>
+                                    </div>
+                                </div>
+                            }
+                        </div>
+                    }
+
+                    @* Descripcion *@
+                    <div class="tb-modal-section">
+                        <svg class="tb-modal-section-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="17" x2="3" y1="6" y2="6"/><line x1="21" x2="3" y1="12" y2="12"/><line x1="15" x2="3" y1="18" y2="18"/></svg>
+                        <div class="tb-modal-section-body">
+                            <div class="tb-modal-section-head">
+                                <h3 class="tb-modal-section-title">Descripcion</h3>
+                                @if (!string.IsNullOrWhiteSpace(detail.Card.Description) && !_editingDesc)
+                                {
+                                    <button class="tb-modal-section-action" @onclick="@(() => { _editingDesc = true; _editDescription = detail.Card.Description ?? ""; })">Editar</button>
+                                }
+                            </div>
+                            @if (_editingDesc)
+                            {
+                                <div class="tb-desc-edit">
+                                    <textarea @bind="_editDescription" @bind:event="oninput" placeholder="Que detalles importantes debe saber el equipo?"></textarea>
+                                    <div class="tb-desc-edit-actions">
+                                        <button class="btn btn-sm btn-primary" @onclick="SaveDescriptionAsync" disabled="@_busy">Guardar</button>
+                                        <button class="btn btn-sm btn-outline-secondary" @onclick="@(() => { _editingDesc = false; _editDescription = detail.Card.Description ?? ""; })">Cancelar</button>
+                                    </div>
+                                </div>
+                            }
+                            else if (string.IsNullOrWhiteSpace(detail.Card.Description))
+                            {
+                                <div class="tb-desc-empty" @onclick="@(() => { _editingDesc = true; _editDescription = ""; })">
+                                    Agrega una descripcion mas detallada...
+                                </div>
+                            }
+                            else
+                            {
+                                <div class="tb-desc-text" @onclick="@(() => { _editingDesc = true; _editDescription = detail.Card.Description ?? ""; })">@detail.Card.Description</div>
+                            }
+                        </div>
+                    </div>
+
+                    @* Checklist *@
+                    @if (detail.Checklist.Count > 0 || _showChecklistAdd)
+                    {
+                        var totalChecks = detail.Checklist.Count;
+                        var doneChecks = detail.Checklist.Count(i => i.IsCompleted);
+                        var pct = totalChecks == 0 ? 0 : (int)Math.Round((double)doneChecks / totalChecks * 100);
+                        <div class="tb-modal-section">
+                            <svg class="tb-modal-section-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 11 12 14 22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>
+                            <div class="tb-modal-section-body">
+                                <div class="tb-modal-section-head">
+                                    <h3 class="tb-modal-section-title">Checklist</h3>
+                                </div>
+                                @if (totalChecks > 0)
+                                {
+                                    <div class="tb-check-progress">
+                                        <span class="tb-check-progress-label">@pct%</span>
+                                        <div class="tb-check-bar">
+                                            <div class="tb-check-bar-fill" style="width:@(pct)%"></div>
+                                        </div>
+                                    </div>
+                                }
+                                <div class="tb-check-list">
+                                    @foreach (var item in detail.Checklist)
+                                    {
+                                        <div class="tb-check-item">
+                                            <input type="checkbox" checked="@item.IsCompleted" @onchange="@(e => ToggleChecklistItemAsync(item.Id, (bool)e.Value!, item.Text))" />
+                                            <span class="tb-check-item-text @(item.IsCompleted ? "done" : "")">@item.Text</span>
+                                            <button class="tb-check-item-del" @onclick="@(() => DeleteChecklistItemAsync(item.Id))" title="Eliminar">
+                                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width:14px;height:14px;"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
+                                            </button>
+                                        </div>
+                                    }
+                                </div>
+                                <div class="tb-check-add">
+                                    <input @bind="_newChecklistText" @bind:event="oninput" placeholder="Agregar elemento al checklist..." />
+                                    <button class="btn btn-sm btn-primary" @onclick="AddChecklistAsync" disabled="@(_busy || string.IsNullOrWhiteSpace(_newChecklistText))">Agregar</button>
+                                </div>
+                            </div>
+                        </div>
+                    }
+
+                    @* Actividad *@
+                    <div class="tb-modal-section">
+                        <svg class="tb-modal-section-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>
+                        <div class="tb-modal-section-body">
+                            <div class="tb-modal-section-head">
+                                <h3 class="tb-modal-section-title">Actividad</h3>
+                            </div>
+                            <div class="tb-act-input">
+                                <div class="tb-avatar lg">@_actorInitials</div>
+                                <div class="tb-act-input-box">
+                                    <textarea @bind="_newComment" @bind:event="oninput" placeholder="Escribe un comentario..."></textarea>
+                                    <div class="tb-act-input-foot">
+                                        <span></span>
+                                        <button class="btn btn-sm btn-primary" @onclick="AddCommentAsync" disabled="@(_busy || string.IsNullOrWhiteSpace(_newComment))">Guardar</button>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="tb-act-list">
+                                @if (detail.Activity.Count == 0)
+                                {
+                                    <p style="font-size:13px;color:var(--muted-foreground);font-style:italic;margin:0;padding-left:44px;">No hay actividad reciente en esta tarea.</p>
+                                }
+                                @foreach (var a in detail.Activity)
+                                {
+                                    <div class="tb-act-item">
+                                        <div class="tb-act-item-avatar">@InitialsOf(a.ActorName)</div>
+                                        @if (a.Type == TaskActivityType.Comment)
+                                        {
+                                            <div class="tb-act-item-bubble">
+                                                <div class="tb-act-item-head">
+                                                    <span class="tb-act-item-name">@a.ActorName</span>
+                                                    <span class="tb-act-item-time">@FormatRelative(a.CreatedAt)</span>
+                                                </div>
+                                                <p class="tb-act-item-text">@a.Text</p>
+                                            </div>
+                                        }
+                                        else
+                                        {
+                                            <div class="tb-act-item-action">
+                                                <strong>@a.ActorName</strong> @a.Text <span class="tb-act-item-time" style="margin-left:6px;">@FormatRelative(a.CreatedAt)</span>
+                                            </div>
+                                        }
+                                    </div>
+                                }
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                @* ===== Sidebar derecha ===== *@
+                <div class="tb-modal-side">
+                    <div>
+                        <h4>Agregar a la tarjeta</h4>
+                        <div style="display:flex;flex-direction:column;gap:6px;">
+                            <button class="tb-modal-side-btn" @onclick="@(() => TogglePopover("members"))">
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="8.5" cy="7" r="4"/><line x1="20" x2="20" y1="8" y2="14"/><line x1="23" x2="17" y1="11" y2="11"/></svg>
+                                Miembros
+                            </button>
+                            <button class="tb-modal-side-btn" @onclick="@(() => TogglePopover("tags"))">
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"/><line x1="7" x2="7.01" y1="7" y2="7"/></svg>
+                                Etiquetas
+                            </button>
+                            <button class="tb-modal-side-btn" @onclick="@(() => { CloseAllPopovers(); _showChecklistAdd = true; })">
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 11 12 14 22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>
+                                Checklist
+                            </button>
+                            <button class="tb-modal-side-btn" @onclick="@(() => TogglePopover("date"))">
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="18" height="18" x="3" y="4" rx="2" ry="2"/><line x1="16" x2="16" y1="2" y2="6"/><line x1="8" x2="8" y1="2" y2="6"/><line x1="3" x2="21" y1="10" y2="10"/></svg>
+                                Fechas
+                            </button>
+                            <button class="tb-modal-side-btn" @onclick="@(() => TogglePopover("color"))">
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="13.5" cy="6.5" r=".5"/><circle cx="17.5" cy="10.5" r=".5"/><circle cx="8.5" cy="7.5" r=".5"/><circle cx="6.5" cy="12.5" r=".5"/><path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10c.926 0 1.648-.746 1.648-1.688 0-.437-.18-.835-.437-1.125-.29-.289-.438-.652-.438-1.125a1.64 1.64 0 0 1 1.668-1.668h1.996c3.051 0 5.555-2.503 5.555-5.554C21.965 6.012 17.461 2 12 2z"/></svg>
+                                Color
+                            </button>
+                        </div>
+                    </div>
+                    <div>
+                        <h4>Acciones</h4>
+                        <div style="display:flex;flex-direction:column;gap:6px;">
+                            <button class="tb-modal-side-btn" @onclick="@(() => TogglePopover("move"))">
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="5" x2="19" y1="12" y2="12"/><polyline points="12 5 19 12 12 19"/></svg>
+                                Mover
+                            </button>
+                            <hr class="tb-modal-side-divider" />
+                            <button class="tb-modal-side-btn danger" @onclick="ArchiveCardAsync" disabled="@_busy">
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-2 14a2 2 0 0 1-2 2H9a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/></svg>
+                                Archivar
+                            </button>
+                        </div>
+                    </div>
+                </div>
+
+                @* ===== Popovers (miembros / etiquetas / fechas / mover / color) — anclados al modal ===== *@
+                @if (_showMembersPop)
+                {
+                    <div class="tb-pop" style="top:140px;" @onclick:stopPropagation="true">
+            <div class="tb-pop-head">
+                <span class="tb-pop-title">Asignar miembro</span>
+                <button class="tb-modal-close" style="width:24px;height:24px;" @onclick="@(() => _showMembersPop = false)">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width:14px;height:14px;"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
+                </button>
+            </div>
+            <div class="tb-pop-list">
+                @if (_tenantUsers.Count == 0)
+                {
+                    <div style="color:var(--muted-foreground);font-size:12px;font-style:italic;padding:8px;">No hay usuarios disponibles.</div>
+                }
+                else
+                {
+                    @foreach (var u in _tenantUsers)
+                    {
+                        var isSel = _cardDetail!.Card.Members.Any(m => m.TenantUserId == u.Id);
+                        <div class="tb-pop-item @(isSel ? "selected" : "")" @onclick="@(() => ToggleMemberAsync(u.Id, !isSel))">
+                            <div class="tb-avatar">@InitialsOf(u.Email)</div>
+                            <span style="flex:1;">@u.Email</span>
+                            @if (isSel)
+                            {
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width:14px;height:14px;"><polyline points="20 6 9 17 4 12"/></svg>
+                            }
+                        </div>
+                    }
+                }
+            </div>
+        </div>
+    }
+
+    @if (_showTagsPop)
+    {
+        <div class="tb-pop" style="top:200px;" @onclick:stopPropagation="true">
+            <div class="tb-pop-head">
+                <span class="tb-pop-title">Etiquetas</span>
+                <button class="tb-modal-close" style="width:24px;height:24px;" @onclick="@(() => _showTagsPop = false)">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width:14px;height:14px;"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
+                </button>
+            </div>
+            <div class="tb-pop-list">
+                @if (_boardTags.Count == 0)
+                {
+                    <div style="color:var(--muted-foreground);font-size:12px;font-style:italic;padding:8px;">Aun no hay etiquetas en el tablero. Crea una abajo.</div>
+                }
+                else
+                {
+                    @foreach (var t in _boardTags)
+                    {
+                        var isSel = _cardDetail!.Card.Tags.Any(x => x.Id == t.Id);
+                        <div class="tb-pop-item @(isSel ? "selected" : "")" @onclick="@(() => ToggleTagAsync(t.Id, !isSel))">
+                            <span class="tb-tag" style="@(string.IsNullOrWhiteSpace(t.Color) ? "" : $"background:{t.Color};color:#fff;")">@t.Name</span>
+                            <span style="flex:1;"></span>
+                            @if (isSel)
+                            {
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width:14px;height:14px;"><polyline points="20 6 9 17 4 12"/></svg>
+                            }
+                        </div>
+                    }
+                }
+            </div>
+            <div class="tb-pop-add">
+                <input @bind="_newTagName" @bind:event="oninput" placeholder="Nueva etiqueta" />
+                <input @bind="_newTagColor" @bind:event="oninput" placeholder="#7c4dff" style="width:80px;" />
+                <button class="btn btn-sm btn-primary" @onclick="CreateTagAsync" disabled="@(_busy || string.IsNullOrWhiteSpace(_newTagName))">+</button>
+            </div>
+        </div>
+    }
+
+    @if (_showDatePop)
+    {
+        <div class="tb-pop" style="top:260px;" @onclick:stopPropagation="true">
+            <div class="tb-pop-head">
+                <span class="tb-pop-title">Fecha de vencimiento</span>
+                <button class="tb-modal-close" style="width:24px;height:24px;" @onclick="@(() => _showDatePop = false)">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width:14px;height:14px;"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
+                </button>
+            </div>
+            <div style="display:flex;flex-direction:column;gap:10px;">
+                <input type="date" class="form-control" @bind="_dueDate" />
+                <div style="display:flex;gap:6px;">
+                    <button class="btn btn-sm btn-primary" @onclick="SaveDueDateAsync" disabled="@_busy">Guardar</button>
+                    <button class="btn btn-sm btn-outline-secondary" @onclick="ClearDueDateAsync">Quitar</button>
+                </div>
+            </div>
+        </div>
+    }
+
+    @if (_showColorPop)
+    {
+        <div class="tb-pop" style="top:320px;" @onclick:stopPropagation="true">
+            <div class="tb-pop-head">
+                <span class="tb-pop-title">Color del titulo</span>
+                <button class="tb-modal-close" style="width:24px;height:24px;" @onclick="@(() => _showColorPop = false)">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width:14px;height:14px;"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
+                </button>
+            </div>
+            <div class="tb-color-swatches">
+                @foreach (var c in _colorPalette)
+                {
+                    var isSel = detail.Card.Color == c;
+                    <button class="tb-color-swatch @(isSel ? "selected" : "")" style="background:@c;" @onclick="@(() => SaveColorAsync(c))" title="@c"></button>
+                }
+                <button class="tb-color-swatch clear @(string.IsNullOrEmpty(detail.Card.Color) ? "selected" : "")" @onclick="@(() => SaveColorAsync(null))" title="Sin color">x</button>
+            </div>
+            <div style="margin-top:10px;display:flex;gap:6px;">
+                <input type="color" class="form-control" style="height:32px;padding:2px;width:48px;" @bind="_customColor" />
+                <button class="btn btn-sm btn-primary" style="flex:1;" @onclick="@(() => SaveColorAsync(_customColor))" disabled="@_busy">Aplicar</button>
+            </div>
+        </div>
+    }
+
+    @if (_showMovePop)
+    {
+        <div class="tb-pop" style="top:380px;" @onclick:stopPropagation="true">
+            <div class="tb-pop-head">
+                <span class="tb-pop-title">Mover a columna</span>
+                <button class="tb-modal-close" style="width:24px;height:24px;" @onclick="@(() => _showMovePop = false)">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width:14px;height:14px;"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
+                </button>
+            </div>
+            <div class="tb-pop-list">
+                @foreach (var c in _columns)
+                {
+                    var isSel = c.Id == detail.Card.ColumnId;
+                    <div class="tb-pop-item @(isSel ? "selected" : "")" @onclick="@(() => MoveCardAsync(c.Id))">
+                        <span style="flex:1;">@c.Name</span>
+                        @if (isSel)
+                        {
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width:14px;height:14px;"><polyline points="20 6 9 17 4 12"/></svg>
+                        }
+                    </div>
+                }
+            </div>
+        </div>
+    }
+            </div> @* /tb-modal-body *@
+        </div> @* /tb-modal *@
+    </div> @* /modal-overlay *@
+}
+
+@* ===== Modal Configurar tablero ===== *@
+@if (_showConfig)
+{
+    <div class="modal-overlay" @onclick="@(() => _showConfig = false)">
+        <div class="modal-dialog" style="max-width:720px;" @onclick:stopPropagation="true">
+            <div class="modal-head">
+                <h3>Configurar tablero</h3>
+                <button class="modal-close" @onclick="@(() => _showConfig = false)">&times;</button>
+            </div>
+            <div class="modal-body">
+                <h4 style="font-size:13px;font-weight:700;margin:0 0 10px;">Columnas</h4>
+                <div style="display:flex;flex-direction:column;gap:6px;margin-bottom:18px;">
+                    @foreach (var c in _columns)
+                    {
+                        <div class="tb-config-row">
+                            <span class="tb-color-dot" style="background:@(string.IsNullOrWhiteSpace(c.Color) ? "#7c4dff" : c.Color);"></span>
+                            <input type="text" value="@c.Name" @onchange="@(e => RenameColumnAsync(c.Id, e.Value?.ToString() ?? c.Name, c.IsDone))" />
+                            <label style="display:flex;align-items:center;gap:4px;font-size:12px;color:var(--muted-foreground);">
+                                <input type="checkbox" checked="@c.IsDone" @onchange="@(e => RenameColumnAsync(c.Id, c.Name, (bool)e.Value!))" />
+                                Completado
+                            </label>
+                            <button class="btn btn-sm btn-outline-danger" @onclick="@(() => DeleteColumnAsync(c.Id))">&times;</button>
+                        </div>
+                    }
+                </div>
+                <div style="display:flex;gap:6px;margin-bottom:24px;">
+                    <input class="form-control form-control-sm" @bind="_newColumnName" @bind:event="oninput" placeholder="Nueva columna" />
+                    <button class="btn btn-sm btn-primary" @onclick="AddColumnAsync" disabled="@(_busy || string.IsNullOrWhiteSpace(_newColumnName))">+ Agregar</button>
+                </div>
+
+                <h4 style="font-size:13px;font-weight:700;margin:0 0 10px;">Catalogo de etiquetas</h4>
+                <div style="display:flex;flex-direction:column;gap:6px;margin-bottom:14px;">
+                    @foreach (var t in _boardTags)
+                    {
+                        <div class="tb-config-row">
+                            <span class="tb-color-dot" style="background:@(string.IsNullOrWhiteSpace(t.Color) ? "#94a3b8" : t.Color);"></span>
+                            <input type="text" value="@t.Name" @onchange="@(e => RenameTagAsync(t.Id, e.Value?.ToString() ?? t.Name, t.Color))" />
+                            <input type="text" value="@(t.Color ?? "")" @onchange="@(e => RenameTagAsync(t.Id, t.Name, e.Value?.ToString()))" style="max-width:90px;" placeholder="#color" />
+                            <button class="btn btn-sm btn-outline-danger" @onclick="@(() => DeleteTagAsync(t.Id))">&times;</button>
+                        </div>
+                    }
+                </div>
+                <div style="display:flex;gap:6px;">
+                    <input class="form-control form-control-sm" @bind="_newTagName" @bind:event="oninput" placeholder="Nueva etiqueta" />
+                    <input class="form-control form-control-sm" @bind="_newTagColor" @bind:event="oninput" placeholder="#7c4dff" style="max-width:110px;" />
+                    <button class="btn btn-sm btn-primary" @onclick="CreateTagAsync" disabled="@(_busy || string.IsNullOrWhiteSpace(_newTagName))">+ Agregar</button>
+                </div>
+            </div>
+            <div class="modal-foot">
+                <button class="btn btn-outline-secondary" @onclick="@(() => _showConfig = false)">Cerrar</button>
+            </div>
+        </div>
+    </div>
+}
+
+@* ===== Modal Nueva tarea ===== *@
+@if (_showNewCardModal)
+{
+    <div class="modal-overlay" @onclick="@(() => _showNewCardModal = false)">
+        <div class="modal-dialog" style="max-width:520px;" @onclick:stopPropagation="true">
+            <div class="modal-head">
+                <h3>Nueva tarea</h3>
+                <button class="modal-close" @onclick="@(() => _showNewCardModal = false)">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div class="field">
+                    <label class="form-label">Titulo *</label>
+                    <input class="form-control" @bind="_newCardTitle" @bind:event="oninput" placeholder="Que hay que hacer?" autocomplete="off" />
+                </div>
+                <div class="field">
+                    <label class="form-label">Descripcion (opcional)</label>
+                    <textarea class="form-control" rows="3" @bind="_newCardDescription" placeholder="Detalles, contexto..."></textarea>
+                </div>
+                <div style="display:flex;gap:12px;">
+                    <div class="field" style="flex:1;">
+                        <label class="form-label">Columna</label>
+                        <select class="form-control" @bind="_newCardColumnId">
+                            @foreach (var c in _columns)
+                            {
+                                <option value="@c.Id">@c.Name</option>
+                            }
+                        </select>
+                    </div>
+                    <div class="field" style="flex:1;">
+                        <label class="form-label">Vence (opcional)</label>
+                        <input type="date" class="form-control" @bind="_newCardDueDate" />
+                    </div>
+                </div>
+                <div class="field">
+                    <label class="form-label">Color del titulo (opcional)</label>
+                    <div class="tb-color-swatches">
+                        @foreach (var c in _colorPalette)
+                        {
+                            var isSel = _newCardColor == c;
+                            <button type="button" class="tb-color-swatch @(isSel ? "selected" : "")" style="background:@c;" @onclick="@(() => _newCardColor = c)" title="@c"></button>
+                        }
+                        <button type="button" class="tb-color-swatch clear @(string.IsNullOrEmpty(_newCardColor) ? "selected" : "")" @onclick="@(() => _newCardColor = null)" title="Sin color">x</button>
+                    </div>
+                </div>
+            </div>
+            <div class="modal-foot">
+                <button class="btn btn-outline-secondary" @onclick="@(() => _showNewCardModal = false)">Cancelar</button>
+                <button class="btn btn-primary" @onclick="SubmitNewCardModalAsync" disabled="@(_busy || string.IsNullOrWhiteSpace(_newCardTitle))">Crear tarea</button>
+            </div>
+        </div>
+    </div>
+}
+
+@* ===== Modal Historial ===== *@
+@if (_showHistorial)
+{
+    <div class="modal-overlay" @onclick="@(() => _showHistorial = false)">
+        <div class="modal-dialog" style="max-width:680px;" @onclick:stopPropagation="true">
+            <div class="modal-head">
+                <h3>Tareas archivadas</h3>
+                <button class="modal-close" @onclick="@(() => _showHistorial = false)">&times;</button>
+            </div>
+            <div class="modal-body">
+                @if (_archivedCards.Count == 0)
+                {
+                    <p style="color:var(--muted-foreground);font-style:italic;">No hay tareas archivadas en este tablero.</p>
+                }
+                else
+                {
+                    <div style="display:flex;flex-direction:column;gap:8px;max-height:480px;overflow-y:auto;">
+                        @foreach (var card in _archivedCards)
+                        {
+                            var col = _columns.FirstOrDefault(c => c.Id == card.ColumnId);
+                            <div style="display:flex;align-items:center;gap:10px;padding:10px 12px;border:1px solid var(--border);border-radius:8px;">
+                                <div style="flex:1;">
+                                    <div style="font-weight:600;font-size:13.5px;">@card.Title</div>
+                                    <div style="font-size:11.5px;color:var(--muted-foreground);">@(col?.Name ?? "(sin columna)")</div>
+                                </div>
+                                <button class="btn btn-sm btn-outline-secondary" @onclick="@(() => RestoreCardAsync(card.Id))" disabled="@_busy">Restaurar</button>
+                            </div>
+                        }
+                    </div>
+                }
+            </div>
+            <div class="modal-foot">
+                <button class="btn btn-outline-secondary" @onclick="@(() => _showHistorial = false)">Cerrar</button>
+            </div>
+        </div>
+    </div>
+}
+
+@code {
+    [Parameter] public Guid BoardId { get; set; }
+    [CascadingParameter] private Task<AuthenticationState>? AuthState { get; set; }
+
+    private bool _loading = true;
+    private bool _busy;
+    private TaskBoardDto? _board;
+    private List<TaskBoardColumnDto> _columns = new();
+    private List<TaskCardSummaryDto> _cards = new();
+    private List<TaskCardSummaryDto> _archivedCards = new();
+    private List<TaskCardTagDto> _boardTags = new();
+    private List<TenantUserDto> _tenantUsers = new();
+    private HashSet<Guid> _doneColumnIds = new();
+
+    private Guid? _dragCardId;
+    private Guid? _dragOverColumnId;
+
+    // Modal "Nueva tarea"
+    private bool _showNewCardModal;
+    private Guid _newCardColumnId;
+    private string _newCardTitle = "";
+    private string _newCardDescription = "";
+    private DateTime? _newCardDueDate;
+    private string? _newCardColor;
+
+    // Paleta predefinida para colores del titulo de la tarjeta.
+    private static readonly string[] _colorPalette = new[]
+    {
+        "#ef4444", "#f97316", "#f59e0b", "#22c55e", "#10b981",
+        "#06b6d4", "#3b82f6", "#6366f1", "#8b5cf6", "#a855f7",
+        "#ec4899", "#475569"
+    };
+    private string _customColor = "#7c4dff";
+    private bool _showColorPop;
+
+    private TaskCardDetailDto? _cardDetail;
+    private bool _editingTitle;
+    private bool _editingDesc;
+    private string _editTitle = "";
+    private string _editDescription = "";
+    private string _newChecklistText = "";
+    private string _newComment = "";
+    private bool _showChecklistAdd;
+
+    // Popovers
+    private bool _showMembersPop;
+    private bool _showTagsPop;
+    private bool _showDatePop;
+    private bool _showMovePop;
+    private DateTime? _dueDate;
+
+    // Catalogo etiquetas en modal config
+    private string _newTagName = "";
+    private string _newTagColor = "#7c4dff";
+    private string _newColumnName = "";
+
+    // UI state
+    private string _view = "kanban";
+    private string _search = "";
+    private string _sort = "manual";
+    private bool _showConfig;
+    private bool _showHistorial;
+    private string _actorInitials = "??";
+
+    protected override async Task OnInitializedAsync()
+    {
+        await LoadAsync();
+        _loading = false;
+    }
+
+    private async Task LoadAsync()
+    {
+        var boards = await BoardsSvc.ListBoardsAsync(includeArchived: true);
+        _board = boards.FirstOrDefault(b => b.Id == BoardId);
+        if (_board is null) { return; }
+        _columns = (await BoardsSvc.ListColumnsAsync(BoardId)).OrderBy(c => c.SortOrder).ToList();
+        _doneColumnIds = _columns.Where(c => c.IsDone).Select(c => c.Id).ToHashSet();
+        _cards = (await CardsSvc.ListByBoardAsync(BoardId, includeArchived: false)).ToList();
+        var allCards = (await CardsSvc.ListByBoardAsync(BoardId, includeArchived: true)).ToList();
+        _archivedCards = allCards.Where(c => c.IsArchived).ToList();
+        _boardTags = (await BoardsSvc.ListBoardTagsAsync(BoardId)).ToList();
+        _tenantUsers = (await TenantUsersSvc.ListAsync()).ToList();
+        _actorInitials = await ActorInitialsAsync();
+    }
+
+    private int _totalCount => _cards.Count;
+    private int _doneCount => _cards.Count(c => _doneColumnIds.Contains(c.ColumnId));
+    private int _inProgressCount => _cards.Count(c => !_doneColumnIds.Contains(c.ColumnId) && _columns.FirstOrDefault()?.Id != c.ColumnId);
+    private int _completionRate => _totalCount == 0 ? 0 : (int)Math.Round((double)_doneCount / _totalCount * 100);
+
+    private IEnumerable<TaskCardSummaryDto> FilteredCardsForColumn(Guid columnId)
+    {
+        var q = _cards.Where(c => c.ColumnId == columnId);
+        if (!string.IsNullOrWhiteSpace(_search))
+        {
+            var s = _search.Trim();
+            q = q.Where(c => (c.Title?.Contains(s, StringComparison.OrdinalIgnoreCase) ?? false)
+                          || c.Members.Any(m => m.DisplayName.Contains(s, StringComparison.OrdinalIgnoreCase) || m.Initials.Contains(s, StringComparison.OrdinalIgnoreCase)));
+        }
+        q = _sort switch
+        {
+            "due" => q.OrderBy(c => c.DueAt ?? DateTimeOffset.MaxValue),
+            "title" => q.OrderBy(c => c.Title),
+            _ => q.OrderBy(c => c.SortOrder),
+        };
+        return q;
+    }
+
+    private IEnumerable<TaskCardSummaryDto> AllFilteredCards()
+    {
+        var q = _cards.AsEnumerable();
+        if (!string.IsNullOrWhiteSpace(_search))
+        {
+            var s = _search.Trim();
+            q = q.Where(c => (c.Title?.Contains(s, StringComparison.OrdinalIgnoreCase) ?? false)
+                          || c.Members.Any(m => m.DisplayName.Contains(s, StringComparison.OrdinalIgnoreCase)));
+        }
+        q = _sort switch
+        {
+            "due" => q.OrderBy(c => c.DueAt ?? DateTimeOffset.MaxValue),
+            "title" => q.OrderBy(c => c.Title),
+            _ => q.OrderBy(c => _columns.FindIndex(co => co.Id == c.ColumnId)).ThenBy(c => c.SortOrder),
+        };
+        return q;
+    }
+
+    private string StatusClass(TaskBoardColumnDto? c)
+    {
+        if (c is null) return "todo";
+        if (c.IsDone) return "done";
+        var idx = _columns.FindIndex(x => x.Id == c.Id);
+        return idx switch
+        {
+            1 => "progress",
+            2 => "review",
+            _ => "todo",
+        };
+    }
+
+    private static string FormatDue(DateTimeOffset due, bool isLate)
+    {
+        if (isLate) return "Atrasado";
+        var local = due.ToLocalTime().Date;
+        var today = DateTimeOffset.Now.Date;
+        if (local == today) return "Hoy";
+        if (local == today.AddDays(1)) return "Manana";
+        if (local == today.AddDays(-1)) return "Ayer";
+        return local.ToString("dd MMM");
+    }
+
+    private static string FormatRelative(DateTimeOffset when)
+    {
+        var diff = DateTimeOffset.UtcNow - when;
+        if (diff.TotalMinutes < 1) return "ahora mismo";
+        if (diff.TotalMinutes < 60) return $"hace {(int)diff.TotalMinutes} min";
+        if (diff.TotalHours < 24) return $"hace {(int)diff.TotalHours} h";
+        if (diff.TotalDays < 7) return $"hace {(int)diff.TotalDays} d";
+        return when.ToLocalTime().ToString("dd MMM");
+    }
+
+    private static string InitialsOf(string? name)
+    {
+        if (string.IsNullOrWhiteSpace(name)) return "??";
+        var trimmed = name.Trim();
+        var atIdx = trimmed.IndexOf('@');
+        if (atIdx > 0) trimmed = trimmed[..atIdx];
+        var parts = trimmed.Split(new[] { ' ', '.', '-', '_' }, StringSplitOptions.RemoveEmptyEntries);
+        if (parts.Length == 0) return trimmed.Length >= 2 ? trimmed[..2].ToUpperInvariant() : trimmed.ToUpperInvariant();
+        if (parts.Length == 1) return parts[0].Length >= 2 ? parts[0][..2].ToUpperInvariant() : parts[0].ToUpperInvariant();
+        return (parts[0][0].ToString() + parts[1][0]).ToUpperInvariant();
+    }
+
+    private async Task OnDropAsync(Guid targetColumnId)
+    {
+        _dragOverColumnId = null;
+        if (_dragCardId is null) { return; }
+        var card = _cards.FirstOrDefault(c => c.Id == _dragCardId.Value);
+        var dragged = _dragCardId.Value;
+        _dragCardId = null;
+        if (card is null || card.ColumnId == targetColumnId) { return; }
+
+        var actor = await ActorAsync();
+        var actorName = await ActorNameAsync();
+        var newOrder = _cards.Count(c => c.ColumnId == targetColumnId);
+        var ok = await CardsSvc.MoveAsync(dragged, new MoveTaskCardRequest(targetColumnId, newOrder), actor, actorName);
+        if (ok) { await LoadAsync(); }
+    }
+
+    private void OpenNewCardModal(Guid columnId)
+    {
+        _newCardColumnId = columnId == Guid.Empty ? (_columns.FirstOrDefault()?.Id ?? Guid.Empty) : columnId;
+        _newCardTitle = "";
+        _newCardDescription = "";
+        _newCardDueDate = null;
+        _newCardColor = null;
+        _showNewCardModal = true;
+    }
+
+    private async Task SubmitNewCardModalAsync()
+    {
+        if (string.IsNullOrWhiteSpace(_newCardTitle) || _newCardColumnId == Guid.Empty) { return; }
+        _busy = true;
+        try
+        {
+            var actor = await ActorAsync();
+            var actorName = await ActorNameAsync();
+            DateTimeOffset? due = _newCardDueDate is null ? null : new DateTimeOffset(_newCardDueDate.Value, TimeSpan.Zero);
+            await CardsSvc.CreateAsync(new CreateTaskCardRequest(BoardId, _newCardColumnId,
+                _newCardTitle.Trim(),
+                string.IsNullOrWhiteSpace(_newCardDescription) ? null : _newCardDescription.Trim(),
+                _newCardColor,
+                due), actor, actorName);
+            _showNewCardModal = false;
+            await LoadAsync();
+        }
+        finally { _busy = false; }
+    }
+
+    private async Task SaveColorAsync(string? color)
+    {
+        if (_cardDetail is null) { return; }
+        _busy = true;
+        try
+        {
+            var actor = await ActorAsync();
+            var actorName = await ActorNameAsync();
+            await CardsSvc.UpdateAsync(_cardDetail.Card.Id,
+                new UpdateTaskCardRequest(_cardDetail.Card.Title, _cardDetail.Card.Description, _cardDetail.Card.DueAt, color),
+                actor, actorName);
+            _showColorPop = false;
+            await ReloadDetailAsync();
+            await LoadAsync();
+        }
+        finally { _busy = false; }
+    }
+
+    private async Task OpenCardAsync(Guid cardId)
+    {
+        _cardDetail = await CardsSvc.GetDetailAsync(cardId);
+        _editingTitle = false;
+        _editingDesc = false;
+        _showMembersPop = _showTagsPop = _showDatePop = _showMovePop = false;
+        _showChecklistAdd = false;
+        if (_cardDetail is not null)
+        {
+            _editTitle = _cardDetail.Card.Title;
+            _editDescription = _cardDetail.Card.Description ?? "";
+            _newChecklistText = "";
+            _newComment = "";
+            _dueDate = _cardDetail.Card.DueAt?.ToLocalTime().DateTime;
+        }
+    }
+
+    private void CloseCard()
+    {
+        _cardDetail = null;
+        _showMembersPop = _showTagsPop = _showDatePop = _showMovePop = false;
+    }
+
+    private async Task SaveTitleAsync()
+    {
+        if (_cardDetail is null || string.IsNullOrWhiteSpace(_editTitle)) { return; }
+        _busy = true;
+        try
+        {
+            var actor = await ActorAsync();
+            var actorName = await ActorNameAsync();
+            await CardsSvc.UpdateAsync(_cardDetail.Card.Id,
+                new UpdateTaskCardRequest(_editTitle, _cardDetail.Card.Description, _cardDetail.Card.DueAt, _cardDetail.Card.Color),
+                actor, actorName);
+            _editingTitle = false;
+            await ReloadDetailAsync();
+            await LoadAsync();
+        }
+        finally { _busy = false; }
+    }
+
+    private async Task SaveDescriptionAsync()
+    {
+        if (_cardDetail is null) { return; }
+        _busy = true;
+        try
+        {
+            var actor = await ActorAsync();
+            var actorName = await ActorNameAsync();
+            await CardsSvc.UpdateAsync(_cardDetail.Card.Id,
+                new UpdateTaskCardRequest(_cardDetail.Card.Title, string.IsNullOrWhiteSpace(_editDescription) ? null : _editDescription, _cardDetail.Card.DueAt, _cardDetail.Card.Color),
+                actor, actorName);
+            _editingDesc = false;
+            await ReloadDetailAsync();
+            await LoadAsync();
+        }
+        finally { _busy = false; }
+    }
+
+    private async Task SaveDueDateAsync()
+    {
+        if (_cardDetail is null) { return; }
+        _busy = true;
+        try
+        {
+            var actor = await ActorAsync();
+            var actorName = await ActorNameAsync();
+            DateTimeOffset? due = _dueDate is null ? null : new DateTimeOffset(_dueDate.Value, TimeSpan.Zero);
+            await CardsSvc.UpdateAsync(_cardDetail.Card.Id,
+                new UpdateTaskCardRequest(_cardDetail.Card.Title, _cardDetail.Card.Description, due, _cardDetail.Card.Color),
+                actor, actorName);
+            _showDatePop = false;
+            await ReloadDetailAsync();
+            await LoadAsync();
+        }
+        finally { _busy = false; }
+    }
+
+    private async Task ClearDueDateAsync()
+    {
+        _dueDate = null;
+        await SaveDueDateAsync();
+    }
+
+    private async Task ArchiveCardAsync()
+    {
+        if (_cardDetail is null) { return; }
+        _busy = true;
+        try
+        {
+            var actor = await ActorAsync();
+            var actorName = await ActorNameAsync();
+            await CardsSvc.ArchiveAsync(_cardDetail.Card.Id, actor, actorName);
+            _cardDetail = null;
+            await LoadAsync();
+        }
+        finally { _busy = false; }
+    }
+
+    private async Task RestoreCardAsync(Guid cardId)
+    {
+        _busy = true;
+        try
+        {
+            var actor = await ActorAsync();
+            var actorName = await ActorNameAsync();
+            await CardsSvc.RestoreAsync(cardId, actor, actorName);
+            await LoadAsync();
+        }
+        finally { _busy = false; }
+    }
+
+    private async Task MoveCardAsync(Guid targetColumnId)
+    {
+        if (_cardDetail is null) { return; }
+        if (_cardDetail.Card.ColumnId == targetColumnId) { _showMovePop = false; return; }
+        _busy = true;
+        try
+        {
+            var actor = await ActorAsync();
+            var actorName = await ActorNameAsync();
+            var newOrder = _cards.Count(c => c.ColumnId == targetColumnId);
+            await CardsSvc.MoveAsync(_cardDetail.Card.Id, new MoveTaskCardRequest(targetColumnId, newOrder), actor, actorName);
+            _showMovePop = false;
+            await ReloadDetailAsync();
+            await LoadAsync();
+        }
+        finally { _busy = false; }
+    }
+
+    private async Task ToggleMemberAsync(Guid tenantUserId, bool assign)
+    {
+        if (_cardDetail is null) { return; }
+        _busy = true;
+        try
+        {
+            var actor = await ActorAsync();
+            var actorName = await ActorNameAsync();
+            if (assign)
+            {
+                await CardsSvc.AssignMemberAsync(new AssignMemberRequest(_cardDetail.Card.Id, tenantUserId), actor, actorName);
+            }
+            else
+            {
+                await CardsSvc.UnassignMemberAsync(_cardDetail.Card.Id, tenantUserId, actor, actorName);
+            }
+            await ReloadDetailAsync();
+            await LoadAsync();
+        }
+        finally { _busy = false; }
+    }
+
+    private async Task UnassignMemberAsync(Guid tenantUserId)
+    {
+        await ToggleMemberAsync(tenantUserId, false);
+    }
+
+    private async Task ToggleTagAsync(Guid tagId, bool attach)
+    {
+        if (_cardDetail is null) { return; }
+        _busy = true;
+        try
+        {
+            var actor = await ActorAsync();
+            var actorName = await ActorNameAsync();
+            if (attach) { await CardsSvc.AttachTagAsync(_cardDetail.Card.Id, tagId, actor, actorName); }
+            else { await CardsSvc.DetachTagAsync(_cardDetail.Card.Id, tagId, actor, actorName); }
+            await ReloadDetailAsync();
+            await LoadAsync();
+        }
+        finally { _busy = false; }
+    }
+
+    private async Task DetachTagAsync(Guid tagId)
+    {
+        await ToggleTagAsync(tagId, false);
+    }
+
+    private async Task CreateTagAsync()
+    {
+        if (string.IsNullOrWhiteSpace(_newTagName)) { return; }
+        _busy = true;
+        try
+        {
+            var actor = await ActorAsync();
+            await BoardsSvc.CreateBoardTagAsync(new CreateBoardTagRequest(BoardId, _newTagName.Trim(), string.IsNullOrWhiteSpace(_newTagColor) ? null : _newTagColor), actor);
+            _newTagName = "";
+            await LoadAsync();
+        }
+        finally { _busy = false; }
+    }
+
+    private async Task RenameTagAsync(Guid tagId, string name, string? color)
+    {
+        if (string.IsNullOrWhiteSpace(name)) { return; }
+        _busy = true;
+        try
+        {
+            var actor = await ActorAsync();
+            await BoardsSvc.UpdateBoardTagAsync(tagId, new UpdateBoardTagRequest(name.Trim(), string.IsNullOrWhiteSpace(color) ? null : color), actor);
+            await LoadAsync();
+        }
+        finally { _busy = false; }
+    }
+
+    private async Task DeleteTagAsync(Guid tagId)
+    {
+        _busy = true;
+        try
+        {
+            var actor = await ActorAsync();
+            await BoardsSvc.DeleteBoardTagAsync(tagId, actor);
+            await LoadAsync();
+        }
+        finally { _busy = false; }
+    }
+
+    private async Task AddColumnAsync()
+    {
+        if (string.IsNullOrWhiteSpace(_newColumnName)) { return; }
+        _busy = true;
+        try
+        {
+            var actor = await ActorAsync();
+            await BoardsSvc.CreateColumnAsync(new CreateTaskColumnRequest(BoardId, _newColumnName.Trim(), null, false), actor);
+            _newColumnName = "";
+            await LoadAsync();
+        }
+        finally { _busy = false; }
+    }
+
+    private async Task RenameColumnAsync(Guid columnId, string name, bool isDone)
+    {
+        if (string.IsNullOrWhiteSpace(name)) { return; }
+        _busy = true;
+        try
+        {
+            var actor = await ActorAsync();
+            var col = _columns.FirstOrDefault(c => c.Id == columnId);
+            await BoardsSvc.UpdateColumnAsync(columnId, new UpdateTaskColumnRequest(name.Trim(), col?.Color, isDone), actor);
+            await LoadAsync();
+        }
+        finally { _busy = false; }
+    }
+
+    private async Task DeleteColumnAsync(Guid columnId)
+    {
+        _busy = true;
+        try
+        {
+            var actor = await ActorAsync();
+            await BoardsSvc.DeleteColumnAsync(columnId, actor);
+            await LoadAsync();
+        }
+        finally { _busy = false; }
+    }
+
+    private async Task AddChecklistAsync()
+    {
+        if (_cardDetail is null || string.IsNullOrWhiteSpace(_newChecklistText)) { return; }
+        _busy = true;
+        try
+        {
+            var actor = await ActorAsync();
+            var actorName = await ActorNameAsync();
+            await CardsSvc.AddChecklistItemAsync(new AddChecklistItemRequest(_cardDetail.Card.Id, _newChecklistText.Trim()), actor, actorName);
+            _newChecklistText = "";
+            await ReloadDetailAsync();
+            await LoadAsync();
+        }
+        finally { _busy = false; }
+    }
+
+    private async Task ToggleChecklistItemAsync(Guid itemId, bool isCompleted, string text)
+    {
+        _busy = true;
+        try
+        {
+            var actor = await ActorAsync();
+            var actorName = await ActorNameAsync();
+            await CardsSvc.UpdateChecklistItemAsync(itemId, new UpdateChecklistItemRequest(text, isCompleted), actor, actorName);
+            await ReloadDetailAsync();
+            await LoadAsync();
+        }
+        finally { _busy = false; }
+    }
+
+    private async Task DeleteChecklistItemAsync(Guid itemId)
+    {
+        _busy = true;
+        try
+        {
+            var actor = await ActorAsync();
+            await CardsSvc.DeleteChecklistItemAsync(itemId, actor);
+            await ReloadDetailAsync();
+            await LoadAsync();
+        }
+        finally { _busy = false; }
+    }
+
+    private async Task AddCommentAsync()
+    {
+        if (_cardDetail is null || string.IsNullOrWhiteSpace(_newComment)) { return; }
+        _busy = true;
+        try
+        {
+            var actor = await ActorAsync();
+            var actorName = await ActorNameAsync();
+            await CardsSvc.AddCommentAsync(new AddCommentRequest(_cardDetail.Card.Id, _newComment.Trim()), actor, actorName);
+            _newComment = "";
+            await ReloadDetailAsync();
+            await LoadAsync();
+        }
+        finally { _busy = false; }
+    }
+
+    private async Task ReloadDetailAsync()
+    {
+        if (_cardDetail is null) { return; }
+        _cardDetail = await CardsSvc.GetDetailAsync(_cardDetail.Card.Id);
+    }
+
+    private void OpenConfig() => _showConfig = true;
+    private void OpenHistorial() => _showHistorial = true;
+
+    /// <summary>Cierra todos los popovers del sidebar del modal de tarjeta.</summary>
+    private void CloseAllPopovers()
+    {
+        _showMembersPop = _showTagsPop = _showDatePop = _showColorPop = _showMovePop = false;
+    }
+
+    /// <summary>Abre el popover indicado y cierra los demas (mutuamente excluyentes).</summary>
+    private void TogglePopover(string name)
+    {
+        var wasOpen = name switch
+        {
+            "members" => _showMembersPop,
+            "tags" => _showTagsPop,
+            "date" => _showDatePop,
+            "color" => _showColorPop,
+            "move" => _showMovePop,
+            _ => false,
+        };
+        CloseAllPopovers();
+        if (wasOpen) return; // si ya estaba abierto, queda cerrado
+        switch (name)
+        {
+            case "members": _showMembersPop = true; break;
+            case "tags": _showTagsPop = true; break;
+            case "date": _showDatePop = true; break;
+            case "color": _showColorPop = true; break;
+            case "move": _showMovePop = true; break;
+        }
+    }
+
+    private async Task<Guid> ActorAsync()
+    {
+        if (AuthState is null) { return Guid.Empty; }
+        var st = await AuthState;
+        return Guid.TryParse(st.User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value, out var id) ? id : Guid.Empty;
+    }
+
+    private async Task<string> ActorNameAsync()
+    {
+        if (AuthState is null) { return "Usuario"; }
+        var st = await AuthState;
+        return st.User.FindFirst(System.Security.Claims.ClaimTypes.Name)?.Value ?? "Usuario";
+    }
+
+    private async Task<string> ActorInitialsAsync()
+    {
+        var name = await ActorNameAsync();
+        return InitialsOf(name);
+    }
+}

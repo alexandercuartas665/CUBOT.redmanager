@@ -51,8 +51,14 @@ public class CubotRedManagerDbContext : DbContext, IApplicationDbContext
     public DbSet<AutoReplyJobLog> AutoReplyJobLogs => Set<AutoReplyJobLog>();
     public DbSet<AutomationRule> AutomationRules => Set<AutomationRule>();
     public DbSet<TaskBoard> TaskBoards => Set<TaskBoard>();
-    public DbSet<TaskColumn> TaskColumns => Set<TaskColumn>();
+    public DbSet<TaskBoardColumn> TaskBoardColumns => Set<TaskBoardColumn>();
     public DbSet<TaskCard> TaskCards => Set<TaskCard>();
+    public DbSet<TaskCardAssignment> TaskCardAssignments => Set<TaskCardAssignment>();
+    public DbSet<TaskCardTag> TaskCardTags => Set<TaskCardTag>();
+    public DbSet<TaskCardTagAssignment> TaskCardTagAssignments => Set<TaskCardTagAssignment>();
+    public DbSet<TaskCardChecklistItem> TaskCardChecklistItems => Set<TaskCardChecklistItem>();
+    public DbSet<TaskCardActivity> TaskCardActivities => Set<TaskCardActivity>();
+    public DbSet<TaskCardAttachment> TaskCardAttachments => Set<TaskCardAttachment>();
     public DbSet<Publication> Publications => Set<Publication>();
     public DbSet<PublicationTarget> PublicationTargets => Set<PublicationTarget>();
     public DbSet<InboxMessage> InboxMessages => Set<InboxMessage>();
@@ -134,11 +140,82 @@ public class CubotRedManagerDbContext : DbContext, IApplicationDbContext
         modelBuilder.Entity<AutomationRule>().Property(x => x.Action).HasConversion<string>();
         modelBuilder.Entity<AutomationRule>().HasIndex(x => new { x.TenantId, x.IsActive });
 
-        // Tablero Kanban (Modulo 2.7).
-        modelBuilder.Entity<TaskCard>().Property(x => x.Priority).HasConversion<string>();
-        modelBuilder.Entity<TaskBoard>().HasMany(b => b.Columns).WithOne(c => c.Board!).HasForeignKey(c => c.BoardId).OnDelete(DeleteBehavior.Cascade);
-        modelBuilder.Entity<TaskColumn>().HasMany(c => c.Cards).WithOne().HasForeignKey(x => x.ColumnId).OnDelete(DeleteBehavior.Cascade);
-        modelBuilder.Entity<TaskCard>().HasIndex(x => new { x.ColumnId, x.SortOrder });
+        // ---- Modulo Tableros (Kanban) - portado verbatim desde travels ----
+
+        modelBuilder.Entity<TaskBoard>(b =>
+        {
+            b.Property(x => x.Name).HasMaxLength(150).IsRequired();
+            b.Property(x => x.Description).HasMaxLength(2000);
+            b.Property(x => x.Color).HasMaxLength(20);
+            b.HasIndex(x => new { x.TenantId, x.SortOrder });
+        });
+
+        modelBuilder.Entity<TaskBoardColumn>(b =>
+        {
+            b.Property(x => x.Name).HasMaxLength(120).IsRequired();
+            b.Property(x => x.Color).HasMaxLength(20);
+            b.HasOne(x => x.Board).WithMany().HasForeignKey(x => x.BoardId).OnDelete(DeleteBehavior.Cascade);
+            b.HasIndex(x => new { x.TenantId, x.BoardId, x.SortOrder });
+        });
+
+        modelBuilder.Entity<TaskCard>(b =>
+        {
+            b.Property(x => x.Title).HasMaxLength(200).IsRequired();
+            b.Property(x => x.Description).HasColumnType("text");
+            b.HasOne(x => x.Board).WithMany().HasForeignKey(x => x.BoardId).OnDelete(DeleteBehavior.Cascade);
+            b.HasOne(x => x.Column).WithMany().HasForeignKey(x => x.ColumnId).OnDelete(DeleteBehavior.Restrict);
+            b.HasIndex(x => new { x.TenantId, x.BoardId, x.ColumnId, x.SortOrder });
+            b.HasIndex(x => new { x.TenantId, x.IsArchived });
+        });
+
+        modelBuilder.Entity<TaskCardAssignment>(b =>
+        {
+            b.HasOne(x => x.TaskCard).WithMany().HasForeignKey(x => x.TaskCardId).OnDelete(DeleteBehavior.Cascade);
+            b.HasOne(x => x.TenantUser).WithMany().HasForeignKey(x => x.TenantUserId).OnDelete(DeleteBehavior.Cascade);
+            // Un usuario no se asigna dos veces a la misma tarjeta.
+            b.HasIndex(x => new { x.TaskCardId, x.TenantUserId }).IsUnique();
+        });
+
+        modelBuilder.Entity<TaskCardTag>(b =>
+        {
+            b.Property(x => x.Name).HasMaxLength(80).IsRequired();
+            b.Property(x => x.Color).HasMaxLength(20);
+            b.HasOne(x => x.Board).WithMany().HasForeignKey(x => x.BoardId).OnDelete(DeleteBehavior.Cascade);
+            // El nombre de etiqueta es unico por tablero.
+            b.HasIndex(x => new { x.BoardId, x.Name }).IsUnique();
+        });
+
+        modelBuilder.Entity<TaskCardTagAssignment>(b =>
+        {
+            b.HasOne(x => x.TaskCard).WithMany().HasForeignKey(x => x.TaskCardId).OnDelete(DeleteBehavior.Cascade);
+            b.HasOne(x => x.Tag).WithMany().HasForeignKey(x => x.TagId).OnDelete(DeleteBehavior.Cascade);
+            b.HasIndex(x => new { x.TaskCardId, x.TagId }).IsUnique();
+        });
+
+        modelBuilder.Entity<TaskCardChecklistItem>(b =>
+        {
+            b.Property(x => x.Text).HasMaxLength(500).IsRequired();
+            b.HasOne(x => x.TaskCard).WithMany().HasForeignKey(x => x.TaskCardId).OnDelete(DeleteBehavior.Cascade);
+            b.HasIndex(x => new { x.TaskCardId, x.SortOrder });
+        });
+
+        modelBuilder.Entity<TaskCardActivity>(b =>
+        {
+            b.Property(x => x.ActorName).HasMaxLength(200).IsRequired();
+            b.Property(x => x.Text).HasColumnType("text").IsRequired();
+            b.HasOne(x => x.TaskCard).WithMany().HasForeignKey(x => x.TaskCardId).OnDelete(DeleteBehavior.Cascade);
+            b.HasIndex(x => new { x.TaskCardId, x.CreatedAt });
+        });
+
+        modelBuilder.Entity<TaskCardAttachment>(b =>
+        {
+            b.Property(x => x.FileName).HasMaxLength(255).IsRequired();
+            b.Property(x => x.Url).HasMaxLength(500).IsRequired();
+            b.Property(x => x.MimeType).HasMaxLength(120);
+            b.Property(x => x.UploadedByName).HasMaxLength(200);
+            b.HasOne(x => x.TaskCard).WithMany().HasForeignKey(x => x.TaskCardId).OnDelete(DeleteBehavior.Cascade);
+            b.HasIndex(x => new { x.TaskCardId, x.CreatedAt });
+        });
 
         // Calendario / publicaciones (Modulo 2.5).
         modelBuilder.Entity<Publication>().Property(x => x.Status).HasConversion<string>();

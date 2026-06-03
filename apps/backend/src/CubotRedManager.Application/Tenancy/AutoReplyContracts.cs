@@ -18,6 +18,7 @@ public sealed record AutoReplyConfigDto(
     int ActiveHoursMask,
     byte ActiveDaysOfWeekMask,
     string? DefaultTemplate,
+    Guid? AiAgentId,
     IReadOnlyList<AutoReplyTemplateDto> Templates);
 
 /// <summary>Datos para guardar (upsert) la config + plantillas de una cuenta.</summary>
@@ -34,7 +35,11 @@ public sealed record SaveAutoReplyConfigRequest(
     int ActiveHoursMask,
     byte ActiveDaysOfWeekMask,
     string? DefaultTemplate,
+    Guid? AiAgentId,
     IReadOnlyList<AutoReplyTemplateInput> Templates);
+
+/// <summary>Resumen breve de un agente IA del tenant para llenar el dropdown del modal.</summary>
+public sealed record AutoReplyAgentOptionDto(Guid Id, string Name, AiProvider Provider, bool IsActive);
 
 public sealed record AutoReplyTemplateInput(Guid? Id, string Keywords, string Body, int SortOrder);
 
@@ -75,4 +80,13 @@ public interface IAutoReplyConfigService
 
     /// <summary>Detalle de un log (incluye Trace).</summary>
     Task<AutoReplyJobLogDetailDto?> GetLogDetailAsync(Guid logId, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Borra TODOS los logs del tenant actual. Lo dispara el boton manual de la UI; el worker
+    /// hace su propia purga por retencion (5 dias por defecto). Devuelve cuantas filas borro.
+    /// </summary>
+    Task<int> DeleteAllLogsAsync(Guid actorUserId, CancellationToken cancellationToken = default);
+
+    /// <summary>Lista de agentes IA del tenant para llenar el dropdown del modal de Autorespuesta.</summary>
+    Task<IReadOnlyList<AutoReplyAgentOptionDto>> ListAgentOptionsAsync(CancellationToken cancellationToken = default);
 }

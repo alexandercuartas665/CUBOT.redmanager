@@ -3,6 +3,7 @@ using System;
 using CubotRedManager.Infrastructure.Persistence;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 
@@ -11,9 +12,11 @@ using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 namespace CubotRedManager.Infrastructure.Persistence.Migrations
 {
     [DbContext(typeof(CubotRedManagerDbContext))]
-    partial class CubotRedManagerDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260602110747_ReplaceTaskBoardsModelFromTravels")]
+    partial class ReplaceTaskBoardsModelFromTravels
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -479,10 +482,6 @@ namespace CubotRedManager.Infrastructure.Persistence.Migrations
                         .HasColumnType("integer")
                         .HasColumnName("active_hours_mask");
 
-                    b.Property<Guid?>("AiAgentId")
-                        .HasColumnType("uuid")
-                        .HasColumnName("ai_agent_id");
-
                     b.Property<string>("BlacklistKeywords")
                         .HasColumnType("text")
                         .HasColumnName("blacklist_keywords");
@@ -547,9 +546,6 @@ namespace CubotRedManager.Infrastructure.Persistence.Migrations
 
                     b.HasKey("Id")
                         .HasName("pk_auto_reply_configs");
-
-                    b.HasIndex("AiAgentId")
-                        .HasDatabaseName("ix_auto_reply_configs_ai_agent_id");
 
                     b.HasIndex("SocialAccountId")
                         .IsUnique()
@@ -3260,19 +3256,12 @@ namespace CubotRedManager.Infrastructure.Persistence.Migrations
 
             modelBuilder.Entity("CubotRedManager.Domain.Entities.AutoReplyConfig", b =>
                 {
-                    b.HasOne("CubotRedManager.Domain.Entities.AiAgent", "AiAgent")
-                        .WithMany()
-                        .HasForeignKey("AiAgentId")
-                        .HasConstraintName("fk_auto_reply_configs_ai_agents_ai_agent_id");
-
                     b.HasOne("CubotRedManager.Domain.Entities.SocialAccount", "SocialAccount")
                         .WithMany()
                         .HasForeignKey("SocialAccountId")
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired()
                         .HasConstraintName("fk_auto_reply_configs_social_accounts_social_account_id");
-
-                    b.Navigation("AiAgent");
 
                     b.Navigation("SocialAccount");
                 });

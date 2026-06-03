@@ -119,9 +119,17 @@ public sealed class TikTokConnectionService : ITikTokConnectionService
         // 6. Credenciales (sondeo via refresh dummy)
         if (reachable)
         {
-            var secret = _protector.Unprotect(cfg.ClientSecretEncrypted!);
-            var probe = await _tiktok.ProbeCredentialsAsync(cfg.ClientKey, secret, cancellationToken);
-            checks.Add(new("credentials", "App Key + Secret aceptados por TikTok", probe.CredentialsOk, probe.Detail));
+            try
+            {
+                var secret = _protector.Unprotect(cfg.ClientSecretEncrypted!);
+                var probe = await _tiktok.ProbeCredentialsAsync(cfg.ClientKey, secret, cancellationToken);
+                checks.Add(new("credentials", "App Key + Secret aceptados por TikTok", probe.CredentialsOk, probe.Detail));
+            }
+            catch
+            {
+                checks.Add(new("credentials", "App Key + Secret aceptados por TikTok", false,
+                    "El App Secret guardado no se puede descifrar (llave perdida). Re-introduce el App Secret y guarda."));
+            }
         }
         else
         {
@@ -163,7 +171,16 @@ public sealed class TikTokConnectionService : ITikTokConnectionService
             return new TikTokOpResult(false, "", "Configura App Key y App Secret de TikTok primero.", null);
         }
 
-        var secret = _protector.Unprotect(cfg.ClientSecretEncrypted);
+        string secret;
+        try { secret = _protector.Unprotect(cfg.ClientSecretEncrypted); }
+        catch
+        {
+            // El App Secret se cifro con una llave de DataProtection que ya no existe (dev efimero,
+            // rotacion). Re-introducirlo en la seccion 1 lo cifra con las llaves actuales.
+            return new TikTokOpResult(false, "",
+                "El App Secret guardado no se puede descifrar (llave perdida). Vuelve a la seccion 1, re-pega el App Secret en 'App Secret (client_secret)' y pulsa 'Guardar configuracion'. Luego vuelve a Canjear Auth Code.",
+                null);
+        }
         var result = await _tiktok.ExchangeCodeAsync(cfg.ClientKey, secret, cfg.RedirectUri, authCode.Trim(), cancellationToken);
         if (!result.Success || string.IsNullOrEmpty(result.AccessToken))
         {
@@ -171,8 +188,14 @@ public sealed class TikTokConnectionService : ITikTokConnectionService
         }
 
         var externalId = string.IsNullOrWhiteSpace(result.OpenId) ? Guid.CreateVersion7().ToString("N")[..16] : result.OpenId!;
+        // Identificamos la cuenta TikTok especifica por su external_id (open_id de TikTok). Asi:
+        //  - Si el usuario reconecta la MISMA cuenta TikTok -> encuentra y actualiza tokens.
+        //  - Si conecta OTRA cuenta TikTok del mismo cliente -> no encuentra -> crea fila nueva
+        //    (UNIQUE constraint UNIQUE(tenant_id, client_id, network_code, external_id) lo permite).
+        // Antes el query buscaba solo (ClientId, NetworkCode) y sobrescribia la fila existente,
+        // borrando logicamente la primera cuenta conectada al conectar la segunda.
         var account = await _db.SocialAccounts.FirstOrDefaultAsync(
-            a => a.ClientId == clientId && a.NetworkCode == TikTokNetwork, cancellationToken);
+            a => a.ClientId == clientId && a.NetworkCode == TikTokNetwork && a.ExternalId == externalId, cancellationToken);
         if (account is null)
         {
             account = new SocialAccount { TenantId = tenantId, ClientId = clientId, NetworkCode = TikTokNetwork };
@@ -291,8 +314,25 @@ public sealed class TikTokConnectionService : ITikTokConnectionService
         var cfg = await _db.TikTokAppConfigs.AsNoTracking().FirstOrDefaultAsync(cancellationToken);
         if (cfg is null || string.IsNullOrEmpty(cfg.ClientSecretEncrypted)) { return new TikTokOpResult(false, "", "Falta config de app TikTok.", null); }
 
-        var secret = _protector.Unprotect(cfg.ClientSecretEncrypted);
-        var refresh = _protector.Unprotect(account.RefreshTokenEncrypted);
+        string secret, refresh;
+        try { secret = _protector.Unprotect(cfg.ClientSecretEncrypted); }
+        catch
+        {
+            return new TikTokOpResult(false, "",
+                "El App Secret guardado no se puede descifrar (llave perdida). Re-introduce el App Secret en TikTok manager y guarda.",
+                null);
+        }
+        try { refresh = _protector.Unprotect(account.RefreshTokenEncrypted); }
+        catch
+        {
+            // Refresh token cifrado con llave perdida: la cuenta ya no se puede recuperar via refresh.
+            account.Status = SocialAccountStatus.Disconnected;
+            account.LastSyncError = "Refresh token no descifrable (llave perdida). Vuelve a hacer OAuth para reconectar.";
+            await _db.SaveChangesAsync(cancellationToken);
+            return new TikTokOpResult(false, "",
+                "El refresh token de esta cuenta no se puede descifrar. Reconecta la cuenta para regenerar credenciales.",
+                null);
+        }
         var result = await _tiktok.RefreshAsync(cfg.ClientKey, secret, refresh, cancellationToken);
         if (!result.Success || string.IsNullOrEmpty(result.AccessToken))
         {

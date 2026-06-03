@@ -21,8 +21,37 @@
         <h1 class="page-title" style="margin-top:12px;">Bandeja unificada</h1>
         <p class="page-sub" style="margin-bottom:0;">DMs, comentarios y menciones de todas las redes en una sola bandeja.</p>
     </div>
-    <button class="btn btn-outline-secondary" @onclick="() => _simOpen = true" disabled="@(_clients is null || _clients.Count == 0)">Simular entrante</button>
+    <div style="display:flex;gap:8px;">
+        <button class="btn btn-outline-secondary" @onclick="() => _simOpen = true" disabled="@(_clients is null || _clients.Count == 0)">Simular entrante</button>
+        <button class="btn btn-outline-danger" @onclick="OpenDeleteAllConfirm" disabled="@(_msgs is null || _msgs.Count == 0)" title="Borra TODOS los mensajes de la bandeja (DMs, comentarios, menciones). Util para resetear pruebas.">Eliminar todo</button>
+    </div>
 </div>
+
+@* === Modal confirmacion Eliminar todo === *@
+@if (_deleteAllOpen)
+{
+    <div class="modal-overlay">
+        <div class="modal-dialog" style="max-width:520px;">
+            <div class="modal-head">
+                <h3>Eliminar toda la bandeja</h3>
+                <button class="modal-close" @onclick="() => _deleteAllOpen = false">&times;</button>
+            </div>
+            <div class="modal-body">
+                <p>Vas a borrar <strong>todos</strong> los mensajes de tu bandeja unificada: DMs, comentarios y menciones de todas las redes.</p>
+                <p class="text-muted" style="font-size:12.5px;">Se eliminan en cascada las respuestas (InboxReply) asociadas a esos mensajes.</p>
+                <p class="text-muted" style="font-size:12.5px;">
+                    <strong>No</strong> se ven afectados: cuentas TikTok conectadas, videos sincronizados, configuracion de autorespuesta, plantillas, agentes IA, ni los logs del worker.
+                </p>
+                @if (_deleteAllError is not null) { <div class="text-danger small">@_deleteAllError</div> }
+                @if (_deleteAllResult is not null) { <div class="text-success small">@_deleteAllResult</div> }
+            </div>
+            <div class="modal-foot">
+                <button class="btn btn-outline-secondary" @onclick="() => _deleteAllOpen = false">Cancelar</button>
+                <button class="btn btn-danger" @onclick="DeleteAllAsync" disabled="@_deleteAllBusy">@(_deleteAllBusy ? "Borrando..." : "Si, eliminar todo")</button>
+            </div>
+        </div>
+    </div>
+}
 
 <div class="ib-filters">
     <button class="ib-f @(_filter is null ? "on" : "")" @onclick="() => SetFilter(null)">Todos</button>
@@ -193,4 +222,31 @@ else
     {
         InboxStatus.Unread => "warning", InboxStatus.Replied => "success", InboxStatus.EscalateToHuman => "danger", _ => "secondary"
     };
+
+    // ===== Eliminar todo =====
+    private bool _deleteAllOpen;
+    private bool _deleteAllBusy;
+    private string? _deleteAllError;
+    private string? _deleteAllResult;
+
+    private void OpenDeleteAllConfirm()
+    {
+        _deleteAllError = null; _deleteAllResult = null; _deleteAllOpen = true;
+    }
+
+    private async Task DeleteAllAsync()
+    {
+        _deleteAllBusy = true; _deleteAllError = null; _deleteAllResult = null;
+        try
+        {
+            var n = await InboxSvc.DeleteAllAsync(_actor);
+            _deleteAllResult = $"Borrados {n} mensajes.";
+            await Reload();
+        }
+        catch (Exception ex) { _deleteAllError = ex.Message; }
+        finally { _deleteAllBusy = false; }
+        await Task.Delay(1500);
+        _deleteAllOpen = false;
+        StateHasChanged();
+    }
 }

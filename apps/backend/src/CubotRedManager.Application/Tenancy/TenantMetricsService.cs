@@ -1,4 +1,5 @@
 using CubotRedManager.Application.Abstractions;
+using CubotRedManager.Domain.Entities;
 using CubotRedManager.Domain.Enums;
 using Microsoft.EntityFrameworkCore;
 
@@ -33,7 +34,15 @@ public sealed class TenantMetricsService : ITenantMetricsService
         var comments = inbox.Where(m => m.Type == InboxMessageType.Comment).ToList();
         var totalComments = comments.Count;
         var repliedComments = comments.Count(c => c.Status == InboxStatus.Replied);
-        var pendingComments = comments.Count(c => c.Status == InboxStatus.Unread || c.Status == InboxStatus.Read);
+        // Pendiente unificado: top-level con Status != Replied/Archived (misma logica que /tiktok/videos).
+        var replyMessageIds = await _db.InboxReplies.AsNoTracking().Select(r => r.InboxMessageId).Distinct().ToListAsync(ct);
+        var replySet = replyMessageIds.ToHashSet();
+        bool IsPending(InboxMessage m) =>
+            m.ParentMessageId == null
+            && m.Status != InboxStatus.Replied
+            && m.Status != InboxStatus.Archived
+            && !replySet.Contains(m.Id);
+        var pendingComments = comments.Count(IsPending);
 
         var clients = await _db.Clients.AsNoTracking().ToDictionaryAsync(c => c.Id, c => c.Name, ct);
         var videos = await _db.TikTokVideos.AsNoTracking().ToListAsync(ct);
@@ -45,7 +54,7 @@ public sealed class TenantMetricsService : ITenantMetricsService
             var videosOfAccount = videos.Count(v => v.SocialAccountId == a.Id);
             var commentsOfAccount = comments.Where(c => c.SocialAccountId == a.Id).ToList();
             var replied = commentsOfAccount.Count(c => c.Status == InboxStatus.Replied);
-            var pending = commentsOfAccount.Count(c => c.Status == InboxStatus.Unread || c.Status == InboxStatus.Read);
+            var pending = commentsOfAccount.Count(IsPending);
             accountActivity.Add(new AccountActivityDto(
                 Network: a.NetworkCode,
                 Handle: a.Handle,

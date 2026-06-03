@@ -67,4 +67,12 @@ public interface ITikTokSyncService
 
     /// <summary>Re-sincroniza comentarios + replies de UN solo video. Para refrescar bajo demanda desde el detalle.</summary>
     Task<TikTokSyncResult> SyncCommentsForVideoAsync(Guid socialAccountId, string videoExternalId, Guid actorUserId, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Borra TODOS los videos sincronizados del tenant + sus comentarios (InboxMessage tipo
+    /// Comment de la red TikTok). Las InboxReplies asociadas se borran en cascada por FK.
+    /// NO toca: SocialAccount, AutoReplyConfig, AutoReplyJobLogs, TikTokAppConfig.
+    /// Devuelve (cuantos videos, cuantos comentarios) borrados.
+    /// </summary>
+    Task<(int videos, int comments)> DeleteAllVideosAsync(Guid actorUserId, CancellationToken cancellationToken = default);
 }

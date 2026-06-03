@@ -48,6 +48,8 @@ public static class DependencyInjection
         // Cliente HTTP de datos TikTok (Modulo 2.4 Sync).
         services.AddHttpClient<ITikTokApiClient, CubotRedManager.Infrastructure.Social.TikTokApiClient>();
         services.AddScoped<ITaskBoardService, TaskBoardService>();
+        services.AddScoped<ITaskCardService, TaskCardService>();
+        services.AddScoped<ITenantUserService, TenantUserService>();
         services.AddScoped<IPublicationService, PublicationService>();
         services.AddScoped<IInboxService, InboxService>();
         services.AddScoped<IMessageTemplateService, MessageTemplateService>();

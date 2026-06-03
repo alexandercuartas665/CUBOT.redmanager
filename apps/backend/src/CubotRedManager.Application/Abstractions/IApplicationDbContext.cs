@@ -24,8 +24,14 @@ public interface IApplicationDbContext
     DbSet<AutoReplyJobLog> AutoReplyJobLogs { get; }
     DbSet<AutomationRule> AutomationRules { get; }
     DbSet<TaskBoard> TaskBoards { get; }
-    DbSet<TaskColumn> TaskColumns { get; }
+    DbSet<TaskBoardColumn> TaskBoardColumns { get; }
     DbSet<TaskCard> TaskCards { get; }
+    DbSet<TaskCardAssignment> TaskCardAssignments { get; }
+    DbSet<TaskCardTag> TaskCardTags { get; }
+    DbSet<TaskCardTagAssignment> TaskCardTagAssignments { get; }
+    DbSet<TaskCardChecklistItem> TaskCardChecklistItems { get; }
+    DbSet<TaskCardActivity> TaskCardActivities { get; }
+    DbSet<TaskCardAttachment> TaskCardAttachments { get; }
     DbSet<Publication> Publications { get; }
     DbSet<PublicationTarget> PublicationTargets { get; }
     DbSet<InboxMessage> InboxMessages { get; }

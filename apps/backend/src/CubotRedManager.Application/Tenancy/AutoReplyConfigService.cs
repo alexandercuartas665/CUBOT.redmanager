@@ -28,7 +28,7 @@ public sealed class AutoReplyConfigService : IAutoReplyConfigService
             return new AutoReplyConfigDto(
                 null, socialAccountId, false, AutoReplyMode.Mixed, 20, 3, 10, null,
                 AutoReplyFrequency.Every30m, "*/30 * * * *", 0x1FFF00, 0x7F, null,
-                Array.Empty<AutoReplyTemplateDto>());
+                null, Array.Empty<AutoReplyTemplateDto>());
         }
         var templates = await _db.AutoReplyTemplates.AsNoTracking()
             .Where(t => t.ConfigId == cfg.Id)
@@ -71,6 +71,7 @@ public sealed class AutoReplyConfigService : IAutoReplyConfigService
         cfg.ActiveHoursMask = request.ActiveHoursMask;
         cfg.ActiveDaysOfWeekMask = request.ActiveDaysOfWeekMask;
         cfg.DefaultTemplate = string.IsNullOrWhiteSpace(request.DefaultTemplate) ? null : request.DefaultTemplate.Trim();
+        cfg.AiAgentId = request.AiAgentId;
 
         // Reemplazar plantillas (full sync).
         foreach (var existing in cfg.Templates.ToList())
@@ -148,8 +149,33 @@ public sealed class AutoReplyConfigService : IAutoReplyConfigService
         return new AutoReplyJobLogDetailDto(dto, row.l.Trace);
     }
 
+    /// <summary>
+    /// Borrado masivo de logs del tenant activo. El filtro global de TenantId aplica via
+    /// HasQueryFilter, asi que solo afecta los logs del tenant que esta haciendo la peticion.
+    /// La purga automatica por retencion (5 dias por defecto) la hace el worker; este metodo
+    /// es el boton manual de la UI "Eliminar logs".
+    /// </summary>
+    public async Task<int> DeleteAllLogsAsync(Guid actorUserId, CancellationToken cancellationToken = default)
+    {
+        if (_tenantContext.TenantId is not Guid tenantId) { return 0; }
+        var count = await _db.AutoReplyJobLogs
+            .Where(l => l.TenantId == tenantId)
+            .ExecuteDeleteAsync(cancellationToken);
+        _audit.Write(actorUserId, "auto-reply.logs.delete-all", nameof(AutoReplyJobLog), Guid.Empty,
+            previousValue: new { count }, newValue: null, tenantId: tenantId);
+        return count;
+    }
+
     private static AutoReplyConfigDto Map(AutoReplyConfig c, IReadOnlyList<AutoReplyTemplateDto> templates) =>
         new(c.Id, c.SocialAccountId, c.IsActive, c.Mode, c.MaxRepliesPerRun,
             c.DelayMinSeconds, c.DelayMaxSeconds, c.BlacklistKeywords, c.Frequency, c.CronCustom,
-            c.ActiveHoursMask, c.ActiveDaysOfWeekMask, c.DefaultTemplate, templates);
+            c.ActiveHoursMask, c.ActiveDaysOfWeekMask, c.DefaultTemplate, c.AiAgentId, templates);
+
+    public async Task<IReadOnlyList<AutoReplyAgentOptionDto>> ListAgentOptionsAsync(CancellationToken cancellationToken = default)
+    {
+        return await _db.AiAgents.AsNoTracking()
+            .OrderByDescending(a => a.IsActive).ThenBy(a => a.Name)
+            .Select(a => new AutoReplyAgentOptionDto(a.Id, a.Name, a.Provider, a.IsActive))
+            .ToListAsync(cancellationToken);
+    }
 }

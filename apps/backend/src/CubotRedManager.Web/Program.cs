@@ -42,6 +42,14 @@ if (tkOpts.Enabled)
     builder.Services.AddHostedService<CubotRedManager.Web.BackgroundJobs.TikTokMaintenanceWorker>();
 }
 
+// AutoReply (Modulo 2.11). Worker que procesa comentarios pendientes segun la programacion
+// configurada por cuenta (Frequency + ActiveHoursMask + ActiveDaysOfWeekMask) y genera respuesta
+// via plantilla / IA segun Mode. Escribe AutoReplyJobLog para auditoria en la pagina de logs.
+var arOpts = builder.Configuration.GetSection("AutoReply").Get<CubotRedManager.Web.BackgroundJobs.AutoReplyOptions>()
+             ?? new CubotRedManager.Web.BackgroundJobs.AutoReplyOptions();
+builder.Services.AddSingleton(arOpts);
+builder.Services.AddHostedService<CubotRedManager.Web.BackgroundJobs.AutoReplyWorker>();
+
 // Estado de autenticacion en cascada para los componentes (AuthorizeView, AuthorizeRouteView).
 builder.Services.AddCascadingAuthenticationState();
 builder.Services.AddHttpContextAccessor();
