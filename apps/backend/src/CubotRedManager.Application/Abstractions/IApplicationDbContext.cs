@@ -66,6 +66,7 @@ public interface IApplicationDbContext
 
     // WhatsApp / Evolution
     DbSet<WhatsAppLine> WhatsAppLines { get; }
+    DbSet<WhatsAppTemplate> WhatsAppTemplates { get; }
     DbSet<TenantEvolutionConfig> TenantEvolutionConfigs { get; }
     DbSet<EvolutionMasterConfig> EvolutionMasterConfigs { get; }
 

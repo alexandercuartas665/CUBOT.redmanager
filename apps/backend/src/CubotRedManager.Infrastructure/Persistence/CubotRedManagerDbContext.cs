@@ -3,6 +3,7 @@ using CubotRedManager.Application.Abstractions;
 // IApplicationDbContext vive en Application.Abstractions (incluido arriba).
 using CubotRedManager.Domain.Common;
 using CubotRedManager.Domain.Entities;
+using Microsoft.AspNetCore.DataProtection.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore;
 
 namespace CubotRedManager.Infrastructure.Persistence;
@@ -13,7 +14,7 @@ namespace CubotRedManager.Infrastructure.Persistence;
 /// - filtro global por tenant en toda entidad ITenantScoped.
 /// - auditoria automatica de CreatedAt/UpdatedAt.
 /// </summary>
-public class CubotRedManagerDbContext : DbContext, IApplicationDbContext
+public class CubotRedManagerDbContext : DbContext, IApplicationDbContext, IDataProtectionKeyContext
 {
     private readonly ITenantProvider _tenantProvider;
 
@@ -24,6 +25,11 @@ public class CubotRedManagerDbContext : DbContext, IApplicationDbContext
     {
         _tenantProvider = tenantProvider;
     }
+
+    // Llaves de DataProtection (tabla data_protection_keys via snake_case). Compartidas por
+    // Web y SuperAdmin (mismo ApplicationName) para que la cookie sea valida en ambos hosts.
+    // NO se expone en IApplicationDbContext: es plomeria de infraestructura, no dominio.
+    public DbSet<DataProtectionKey> DataProtectionKeys => Set<DataProtectionKey>();
 
     // Globales
     public DbSet<Tenant> Tenants => Set<Tenant>();
@@ -81,6 +87,7 @@ public class CubotRedManagerDbContext : DbContext, IApplicationDbContext
 
     // WhatsApp / Evolution
     public DbSet<WhatsAppLine> WhatsAppLines => Set<WhatsAppLine>();
+    public DbSet<WhatsAppTemplate> WhatsAppTemplates => Set<WhatsAppTemplate>();
     public DbSet<TenantEvolutionConfig> TenantEvolutionConfigs => Set<TenantEvolutionConfig>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
@@ -275,7 +282,19 @@ public class CubotRedManagerDbContext : DbContext, IApplicationDbContext
 
         // WhatsApp: una instancia por agencia.
         modelBuilder.Entity<WhatsAppLine>().HasIndex(x => new { x.TenantId, x.InstanceName }).IsUnique();
+        modelBuilder.Entity<WhatsAppLine>().Property(x => x.Provider).HasConversion<string>();
+        // El sender YCloud identifica al numero contra el webhook; unico global cuando no es null.
+        modelBuilder.Entity<WhatsAppLine>()
+            .HasIndex(x => x.YCloudPhoneNumberId)
+            .IsUnique()
+            .HasFilter("y_cloud_phone_number_id IS NOT NULL");
         modelBuilder.Entity<TenantEvolutionConfig>().HasIndex(x => x.TenantId).IsUnique();
+
+        // WhatsApp Templates (HSM). Nombre + idioma unico por tenant (regla Meta).
+        modelBuilder.Entity<WhatsAppTemplate>().Property(x => x.Provider).HasConversion<string>();
+        modelBuilder.Entity<WhatsAppTemplate>().Property(x => x.BodyText).HasColumnType("text");
+        modelBuilder.Entity<WhatsAppTemplate>().Property(x => x.VariablesJson).HasColumnType("jsonb");
+        modelBuilder.Entity<WhatsAppTemplate>().HasIndex(x => new { x.TenantId, x.Name, x.Language }).IsUnique();
 
         // Unicidad / constraints clave.
         modelBuilder.Entity<PlatformUser>().HasIndex(x => x.Email).IsUnique();

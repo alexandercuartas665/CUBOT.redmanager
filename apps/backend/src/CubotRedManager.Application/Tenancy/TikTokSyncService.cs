@@ -496,14 +496,37 @@ public sealed class TikTokSyncService : ITikTokSyncService
         }
         var createdAt = GetUnixTimestamp(c, "create_time") ?? _time.GetUtcNow();
 
+        // Si el comentario lo escribio el propio dueño de la cuenta conectada (manual o bot),
+        // NO debe entrar a la Bandeja como mensaje "entrante": ya esta en inbox_replies si fue
+        // del bot, o es respuesta humana en el hilo. Asi evitamos ensuciar la Bandeja con cards
+        // "Sin leer" que en realidad son nuestras propias publicaciones.
+        var isOwnerMessage =
+            (!string.IsNullOrEmpty(account.ExternalId) && !string.IsNullOrEmpty(authorId)
+                && string.Equals(account.ExternalId, authorId, StringComparison.OrdinalIgnoreCase))
+            || (!string.IsNullOrEmpty(account.Handle) && !string.IsNullOrEmpty(authorName)
+                && string.Equals(account.Handle, authorName, StringComparison.OrdinalIgnoreCase));
+
         var existing = await _db.InboxMessages.FirstOrDefaultAsync(
             m => m.NetworkCode == Network && m.ExternalId == commentId, ct);
         if (existing is not null)
         {
+            // Si una fila existente resulta ser del dueño (limpieza retroactiva), la borramos.
+            if (isOwnerMessage)
+            {
+                _db.InboxMessages.Remove(existing);
+                await _db.SaveChangesAsync(ct);
+                return (false, null);
+            }
             existing.Body = text ?? existing.Body;
             existing.AuthorName = authorName ?? existing.AuthorName;
             existing.AuthorAvatarUrl = authorAvatar ?? existing.AuthorAvatarUrl;
             return (false, existing);
+        }
+
+        // No insertar si es del dueño (mensaje saliente, no entrante).
+        if (isOwnerMessage)
+        {
+            return (false, null);
         }
 
         var msg = new InboxMessage

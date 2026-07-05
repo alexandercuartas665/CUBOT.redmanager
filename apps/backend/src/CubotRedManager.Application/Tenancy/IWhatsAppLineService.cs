@@ -17,4 +17,7 @@ public interface IWhatsAppLineService
 
     /// <summary>Asigna (o desasigna con null) la linea a un usuario de la agencia.</summary>
     Task<WhatsAppLineDto?> AssignAsync(Guid lineId, Guid? tenantUserId, Guid actorUserId, CancellationToken cancellationToken = default);
+
+    /// <summary>Elimina la linea. Devuelve false si no existe.</summary>
+    Task<bool> DeleteAsync(Guid lineId, Guid actorUserId, CancellationToken cancellationToken = default);
 }

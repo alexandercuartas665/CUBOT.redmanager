@@ -335,5 +335,9 @@ public sealed class WhatsAppConnectorService : IWhatsAppConnectorService
     }
 
     private static WhatsAppLineDto Map(WhatsAppLine l) =>
-        new(l.Id, l.InstanceName, l.PhoneNumber, l.Status, l.AssignedToTenantUserId, l.LastConnectedAt, l.LastStatusAt);
+        new(l.Id, l.InstanceName, l.PhoneNumber, l.Status, l.AssignedToTenantUserId, l.LastConnectedAt, l.LastStatusAt,
+            l.Provider, l.CloudPhoneNumberId, l.CloudBusinessAccountId,
+            !string.IsNullOrEmpty(l.CloudAccessTokenEncrypted),
+            !string.IsNullOrEmpty(l.CloudWebhookVerifyTokenEncrypted),
+            l.YCloudPhoneNumberId, l.YCloudWabaId, !string.IsNullOrEmpty(l.YCloudApiKeyEncrypted));
 }

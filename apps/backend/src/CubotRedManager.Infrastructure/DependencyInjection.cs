@@ -18,7 +18,7 @@ public static class DependencyInjection
     public static IServiceCollection AddInfrastructure(
         this IServiceCollection services, IConfiguration configuration)
     {
-        var connectionString = configuration.GetConnectionString("Default");
+        var connectionString = NormalizeConnectionString(configuration.GetConnectionString("Default"));
 
         services.AddDbContext<CubotRedManagerDbContext>(options =>
         {
@@ -66,6 +66,13 @@ public static class DependencyInjection
         // Evolution (WhatsApp): cliente HTTP + config maestra.
         services.AddHttpClient<CubotRedManager.Application.Admin.IEvolutionApiClient, CubotRedManager.Infrastructure.Evolution.EvolutionApiClient>();
         services.AddScoped<CubotRedManager.Application.Admin.IEvolutionMasterConfigService, CubotRedManager.Application.Admin.EvolutionMasterConfigService>();
+
+        // YCloud (BSP oficial de WhatsApp): cliente HTTP + servicio HSM. Timeout 25s.
+        services.AddHttpClient<IYCloudApiClient, CubotRedManager.Infrastructure.YCloud.YCloudApiClient>(c =>
+        {
+            c.Timeout = TimeSpan.FromSeconds(25);
+        });
+        services.AddScoped<IWhatsAppTemplateService, WhatsAppTemplateService>();
         services.AddScoped<CubotRedManager.Application.Admin.IPlanAdminService, CubotRedManager.Application.Admin.PlanAdminService>();
         services.AddScoped<CubotRedManager.Application.Admin.ITenantAdminService, CubotRedManager.Application.Admin.TenantAdminService>();
         services.AddScoped<CubotRedManager.Application.Admin.IWompiConfigService, CubotRedManager.Application.Admin.WompiConfigService>();
@@ -94,5 +101,31 @@ public static class DependencyInjection
         services.AddScoped<CubotRedManager.Application.Tenancy.ITenantApiService, CubotRedManager.Application.Tenancy.TenantApiService>();
 
         return services;
+    }
+
+    /// <summary>
+    /// Acepta la connection string en formato Npgsql (dev) o en formato URI de Railway/Heroku
+    /// (postgres://user:pass@host:port/db). Npgsql no parsea el URI directamente, asi que se
+    /// convierte aqui al arranque; el usuario solo referencia ${{Postgres.DATABASE_URL}}.
+    /// </summary>
+    internal static string? NormalizeConnectionString(string? raw)
+    {
+        if (string.IsNullOrWhiteSpace(raw)) { return raw; }
+        if (!raw.StartsWith("postgres://", StringComparison.OrdinalIgnoreCase)
+            && !raw.StartsWith("postgresql://", StringComparison.OrdinalIgnoreCase))
+        {
+            return raw;
+        }
+
+        var uri = new Uri(raw);
+        var userInfo = uri.UserInfo.Split(':', 2);
+        var user = Uri.UnescapeDataString(userInfo[0]);
+        var pass = userInfo.Length > 1 ? Uri.UnescapeDataString(userInfo[1]) : string.Empty;
+        var db = uri.AbsolutePath.TrimStart('/');
+        var port = uri.Port > 0 ? uri.Port : 5432;
+
+        // SSL Mode=Require: Railway expone Postgres con TLS; Trust Server Certificate evita
+        // fallos por CA interna. En red privada de Railway tambien funciona.
+        return $"Host={uri.Host};Port={port};Database={db};Username={user};Password={pass};SSL Mode=Require;Trust Server Certificate=true";
     }
 }

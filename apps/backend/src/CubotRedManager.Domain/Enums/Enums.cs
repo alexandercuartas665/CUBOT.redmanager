@@ -73,6 +73,22 @@ public enum WhatsAppLineStatus
     Disabled
 }
 
+/// <summary>
+/// Proveedor de la linea WhatsApp.
+/// <list type="bullet">
+///   <item><b>Evolution</b>: conexion no oficial via QR (Evolution API). Riesgo de bloqueos por Meta.</item>
+///   <item><b>Cloud</b>: WhatsApp Cloud API oficial de Meta (graph.facebook.com). Numeros verificados.</item>
+///   <item><b>YCloud</b>: BSP oficial de WhatsApp (api.ycloud.com) con soporte de coexistencia
+///   (usar la WhatsApp Business App y la API sobre el mismo numero). Onboarding asistido via Embedded Signup.</item>
+/// </list>
+/// </summary>
+public enum WhatsAppProvider
+{
+    Evolution = 0,
+    Cloud = 1,
+    YCloud = 2
+}
+
 /// <summary>Estado de la integracion con el servidor Evolution API maestro (Super Admin SaaS).</summary>
 public enum EvolutionIntegrationStatus
 {

@@ -31,13 +31,24 @@ builder.Services.AddScoped<ITenantContext>(sp => sp.GetRequiredService<HttpTenan
 // JWT settings (mismo secret que el Web para que la cookie sea verificable en ambos hosts).
 builder.Services.Configure<JwtSettings>(builder.Configuration.GetSection(JwtSettings.SectionName));
 
-// DataProtection compartido con Web (:5036): mismo ApplicationName + misma carpeta de llaves
-// permiten descifrar la cookie de auth en ambos hosts.
-var dpKeysDir = System.IO.Path.Combine(builder.Environment.ContentRootPath, "..", "..", ".dp-keys");
-System.IO.Directory.CreateDirectory(dpKeysDir);
+// DataProtection compartido con Web: mismo ApplicationName + llaves en la tabla
+// data_protection_keys de la MISMA base de datos. Asi la cookie emitida por el Web se valida
+// aqui, en dev y en Railway (donde el filesystem es efimero).
 builder.Services.AddDataProtection()
     .SetApplicationName("cubot.redmanager")
-    .PersistKeysToFileSystem(new System.IO.DirectoryInfo(dpKeysDir));
+    .PersistKeysToDbContext<CubotRedManagerDbContext>();
+
+// URL del Web (login unificado) para redirects (dev: localhost:5036; prod: red.cubot.com.co).
+var webUrl = (builder.Configuration["Deployment:WebUrl"] ?? "http://localhost:5036").TrimEnd('/');
+
+// Railway hace TLS termination antes del contenedor (ver comentario equivalente en el Web).
+builder.Services.Configure<Microsoft.AspNetCore.Builder.ForwardedHeadersOptions>(options =>
+{
+    options.ForwardedHeaders = Microsoft.AspNetCore.HttpOverrides.ForwardedHeaders.XForwardedFor
+        | Microsoft.AspNetCore.HttpOverrides.ForwardedHeaders.XForwardedProto;
+    options.KnownIPNetworks.Clear();
+    options.KnownProxies.Clear();
+});
 
 builder.Services
     .AddAuthentication(CookieAuthenticationDefaults.AuthenticationScheme)
@@ -51,6 +62,13 @@ builder.Services
         options.AccessDeniedPath = "/login";
         options.ExpireTimeSpan = TimeSpan.FromHours(8);
         options.SlidingExpiration = true;
+        // Cookie compartida entre red.cubot.com.co y admin.red.cubot.com.co en produccion.
+        if (builder.Environment.IsProduction())
+        {
+            options.Cookie.Domain = ".cubot.com.co";
+            options.Cookie.SameSite = SameSiteMode.Lax;
+            options.Cookie.SecurePolicy = CookieSecurePolicy.Always;
+        }
     });
 
 builder.Services.AddAuthorizationBuilder()
@@ -58,6 +76,9 @@ builder.Services.AddAuthorizationBuilder()
     .AddPolicy("SuperAdminOnly", p => p.RequireClaim("platform_role", "SuperAdmin"));
 
 var app = builder.Build();
+
+// ForwardedHeaders antes de cualquier middleware que mire el scheme (ver Web).
+app.UseForwardedHeaders();
 
 using (var scope = app.Services.CreateScope())
 {
@@ -86,7 +107,21 @@ app.MapRazorComponents<App>()
 app.MapPost("/auth/logout", async (HttpContext http) =>
 {
     await http.SignOutAsync(CookieAuthenticationDefaults.AuthenticationScheme);
-    return Results.Redirect("http://localhost:5036/login");
+    return Results.Redirect($"{webUrl}/login");
 }).DisableAntiforgery();
+
+// Healthcheck para Railway: app viva + Postgres accesible.
+app.MapGet("/healthz", async (CubotRedManagerDbContext db) =>
+{
+    try
+    {
+        await db.Database.ExecuteSqlRawAsync("SELECT 1");
+        return Results.Ok(new { status = "ok", ts = DateTimeOffset.UtcNow });
+    }
+    catch (Exception ex)
+    {
+        return Results.Problem($"db down: {ex.Message}", statusCode: 503);
+    }
+}).AllowAnonymous();
 
 app.Run();

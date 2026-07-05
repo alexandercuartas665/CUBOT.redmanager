@@ -1,0 +1,13 @@
+# Contexto de build de los Dockerfile.* (raiz del repo). Excluye artefactos locales
+# para acelerar el build y evitar que material de dev entre a la imagen.
+**/bin/
+**/obj/
+**/.vs/
+.dp-keys/
+.git/
+.github/
+deploy/docker/
+docs/
+tools/
+**/*.user
+**/appsettings.Development.json
