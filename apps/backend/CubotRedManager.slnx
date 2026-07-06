@@ -5,7 +5,6 @@
     <Project Path="src/CubotRedManager.Domain/CubotRedManager.Domain.csproj" />
     <Project Path="src/CubotRedManager.Infrastructure/CubotRedManager.Infrastructure.csproj" />
     <Project Path="src/CubotRedManager.Shared/CubotRedManager.Shared.csproj" />
-    <Project Path="src/CubotRedManager.SuperAdmin/CubotRedManager.SuperAdmin.csproj" />
     <Project Path="src/CubotRedManager.Web/CubotRedManager.Web.csproj" />
     <Project Path="src/CubotRedManager.Workers/CubotRedManager.Workers.csproj" />
   </Folder>

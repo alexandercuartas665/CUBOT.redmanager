@@ -65,8 +65,9 @@ builder.Services.AddDataProtection()
     .SetApplicationName("cubot.redmanager")
     .PersistKeysToDbContext<CubotRedManagerDbContext>();
 
-// URL del SuperAdmin para redirects post-login (dev: localhost:5037; prod: admin.red.cubot.com.co).
-var superAdminUrl = (builder.Configuration["Deployment:SuperAdminUrl"] ?? "http://localhost:5037").TrimEnd('/');
+// Nota deploy: el SuperAdmin dejo de ser una app aparte (Camino B, ADR 0003). La consola de
+// plataforma vive en este mismo servicio bajo /admin/*, asi que ya no hace falta una URL externa
+// para redirigir. La variable de entorno Deployment__SuperAdminUrl es historica; se ignora.
 
 // Railway hace TLS termination antes del contenedor: sin ForwardedHeaders, ASP.NET cree que la
 // request es HTTP y entra en bucle de redirects. KnownNetworks/Proxies se limpian porque el
@@ -83,19 +84,17 @@ builder.Services
     .AddAuthentication(CookieAuthenticationDefaults.AuthenticationScheme)
     .AddCookie(options =>
     {
-        // Cookie compartida con SuperAdmin (:5037): mismo nombre y misma DataProtection (cubotrm)
-        // permiten que ambos hosts (localhost:5036 y :5037) compartan la sesion del usuario.
+        // Cookie de sesion del unico host (red.cubot.com.co). Antes se compartia con el subdominio
+        // admin.red.cubot.com.co via Cookie.Domain=".cubot.com.co"; con el Camino B (ADR 0003) la
+        // consola vive en /admin del mismo host, asi que no hace falta compartir dominio.
         options.Cookie.Name = ".cubot.auth";
         options.Cookie.Path = "/";
         options.LoginPath = "/login";
         options.AccessDeniedPath = "/login";
         options.ExpireTimeSpan = TimeSpan.FromHours(8);
         options.SlidingExpiration = true;
-        // En produccion la cookie se comparte entre red.cubot.com.co y admin.red.cubot.com.co
-        // via el dominio padre. En dev no se fija Domain (localhost no lo soporta).
         if (builder.Environment.IsProduction())
         {
-            options.Cookie.Domain = ".cubot.com.co";
             options.Cookie.SameSite = SameSiteMode.Lax;
             options.Cookie.SecurePolicy = CookieSecurePolicy.Always;
         }
@@ -308,7 +307,7 @@ app.MapPost("/auth/login", async (
     }
     if (isOperator)
     {
-        return Results.Redirect($"{superAdminUrl}/dashboard");
+        return Results.Redirect("/admin");
     }
     return Results.Redirect("/dashboard");
 }).DisableAntiforgery();
@@ -450,7 +449,7 @@ app.MapGet("/signin-google", async (
 
     if (isOperator)
     {
-        return Results.Redirect($"{superAdminUrl}/dashboard");
+        return Results.Redirect("/admin");
     }
     return Results.Redirect("/dashboard");
 }).AllowAnonymous();
@@ -606,9 +605,7 @@ app.Run();
 static bool IsSafeReturnUrl(string url)
 {
     if (url.StartsWith("/", StringComparison.Ordinal)) { return true; }
-    if (url.StartsWith("http://localhost:5037", StringComparison.OrdinalIgnoreCase)) { return true; }
     if (url.StartsWith("http://localhost:5036", StringComparison.OrdinalIgnoreCase)) { return true; }
-    if (url.StartsWith("https://admin.red.cubot.com.co", StringComparison.OrdinalIgnoreCase)) { return true; }
     if (url.StartsWith("https://red.cubot.com.co", StringComparison.OrdinalIgnoreCase)) { return true; }
     return false;
 }

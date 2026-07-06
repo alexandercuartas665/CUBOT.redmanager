@@ -1,15 +1,14 @@
 # ============================================================
 #  CUBOT.redmanager - Lanzador local de desarrollo
 #  Levanta Docker (Postgres/Redis/RabbitMQ/pgAdmin), compila y
-#  arranca las dos consolas:
-#    - Web Agencia    -> http://localhost:5036
-#    - Super Admin    -> http://localhost:5037
+#  arranca la consola unificada:
+#    - Web (Agencia + /admin Super Admin) -> http://localhost:5036
 #  Uso:   pwsh -File tools\run.ps1          (build + run)
 #         pwsh -File tools\run.ps1 -NoBuild (solo run)
 #         pwsh -File tools\run.ps1 -Stop    (detener SOLO este proyecto)
 #
 #  IMPORTANTE: Este script SOLO detiene los procesos dotnet del proyecto
-#  CUBOT.redmanager (identificados por puerto 5036/5037 o por command-line
+#  CUBOT.redmanager (identificados por el puerto 5036 o por command-line
 #  que contenga "CubotRedManager"). NO afecta otros dotnet corriendo en
 #  la maquina (ej. CUBOT.travels en otros puertos).
 # ============================================================
@@ -22,10 +21,9 @@ $ErrorActionPreference = "Stop"
 $root = Split-Path -Parent $PSScriptRoot
 $backend = Join-Path $root "apps\backend"
 $webDir = Join-Path $backend "src\CubotRedManager.Web"
-$saDir = Join-Path $backend "src\CubotRedManager.SuperAdmin"
 $docker = Join-Path $root "deploy\docker"
 $pidFile = Join-Path $PSScriptRoot ".pids"
-$ProjectPorts = @(5036, 5037)
+$ProjectPorts = @(5036)
 
 # Asegura dotnet 10 en el PATH de esta sesion.
 $env:Path = [System.Environment]::GetEnvironmentVariable("Path","Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path","User")
@@ -45,7 +43,6 @@ function Get-CubotPidsByPort {
 }
 
 # Devuelve los PIDs de procesos dotnet cuya command-line contiene "CubotRedManager".
-# Captura el wrapper "dotnet run" que lanza el binario real del proyecto.
 function Get-CubotPidsByCommandLine {
     $pids = @()
     try {
@@ -57,8 +54,6 @@ function Get-CubotPidsByCommandLine {
 }
 
 # Devuelve los PIDs de procesos cuyo Path apunta a un binario del proyecto.
-# Captura los .exe propios (CubotRedManager.Web.exe / CubotRedManager.SuperAdmin.exe /
-# CubotRedManager.Workers.exe / CubotRedManager.Api.exe) lanzados por "dotnet run".
 function Get-CubotPidsByPath {
     $pids = @()
     try {
@@ -69,9 +64,7 @@ function Get-CubotPidsByPath {
     return $pids | Sort-Object -Unique
 }
 
-# Combina las tres estrategias: por puerto + por command-line + por Path del exe.
-# Asi cubrimos tanto el wrapper "dotnet run" (dotnet.exe con CubotRedManager en args)
-# como el binario real del proyecto (CubotRedManager.Web.exe, etc.).
+# Combina las tres estrategias.
 function Get-CubotPids {
     $pids = @()
     $pids += Get-CubotPidsByPort
@@ -114,31 +107,25 @@ if (-not $NoBuild) {
     dotnet build (Join-Path $backend "CubotRedManager.slnx") -c Debug --nologo | Select-Object -Last 3
 }
 
-# 3) Detener instancias PREVIAS de ESTE proyecto (no afecta otros dotnet de la maquina).
+# 3) Detener instancias PREVIAS de ESTE proyecto.
 Stop-Cubot | Out-Null
 Start-Sleep -Seconds 2
 
-# 4) Arrancar las dos consolas (aplican migracion al iniciar). Guardamos sus PIDs.
-Write-Output "[run] Iniciando Web Agencia en http://localhost:5036 ..."
+# 4) Arrancar la consola unificada (aplica migracion al iniciar).
+Write-Output "[run] Iniciando Web en http://localhost:5036 ..."
 $webProc = Start-Process -FilePath "dotnet" -WorkingDirectory $webDir `
     -ArgumentList "run","--no-build","-c","Debug","--urls","http://localhost:5036" `
     -WindowStyle Hidden -PassThru
 
-Write-Output "[run] Iniciando Super Admin en http://localhost:5037 ..."
-$saProc = Start-Process -FilePath "dotnet" -WorkingDirectory $saDir `
-    -ArgumentList "run","--no-build","-c","Debug","--urls","http://localhost:5037" `
-    -WindowStyle Hidden -PassThru
-
-# Guardamos los PIDs para tener un fallback adicional al detener.
-"$($webProc.Id)`n$($saProc.Id)" | Out-File -FilePath $pidFile -Encoding ascii
+"$($webProc.Id)" | Out-File -FilePath $pidFile -Encoding ascii
 
 Start-Sleep -Seconds 12
 
 Write-Output ""
 Write-Output "============================================"
-Write-Output " LISTO. Consolas disponibles:"
-Write-Output "   Agencia    : http://localhost:5036  (Login dev: Admin / Operador)"
-Write-Output "   Super Admin: http://localhost:5037  (Login dev: Operador de plataforma)"
+Write-Output " LISTO. Consola unificada:"
+Write-Output "   Agencia    : http://localhost:5036          (login Admin / Operador)"
+Write-Output "   Super Admin: http://localhost:5036/admin    (login Operador de plataforma)"
 Write-Output ""
 Write-Output " Infra Docker:"
 Write-Output "   PostgreSQL : localhost:5436   Redis: 6383"

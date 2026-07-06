@@ -48,8 +48,7 @@ CUBOT.redmanager/
       CubotRedManager.Infrastructure  # EF Core, proveedores OAuth, DataProtection, repos
       CubotRedManager.Shared          # DTOs y contratos compartidos Web/Api
       CubotRedManager.Api             # ASP.NET Core Web API, endpoints, SignalR, webhooks
-      CubotRedManager.Web             # Blazor Server (consola de la agencia)
-      CubotRedManager.SuperAdmin      # Blazor Server (consola del dueno SaaS)
+      CubotRedManager.Web             # Blazor Server (consola de la agencia + /admin SuperAdmin, ADR 0003)
       CubotRedManager.Workers         # BackgroundService + Hangfire (sync, refresh, publish)
     tests/
       CubotRedManager.Domain.Tests
@@ -70,7 +69,7 @@ Estructura espejo de CUBOT.travels (convencion de la familia). La hoja de ruta d
 ## 4. Stack tecnico
 
 - .NET 10 / ASP.NET Core 10 (SDK 10.0.300, fijado en global.json).
-- Blazor Server (interactividad Server) en Web y SuperAdmin. **Sin Node/npm/React/Vue.** El prototipo HTML/Tailwind es solo referencia visual.
+- Blazor Server (interactividad Server) en la app Web (la consola SuperAdmin vive dentro bajo `/admin/*`, ver ADR 0003). **Sin Node/npm/React/Vue.** El prototipo HTML/Tailwind es solo referencia visual.
 - EF Core 10 sobre PostgreSQL, snake_case, enums como texto, jsonb para campos dinamicos, Guid v7.
 - Redis (cache de metricas, locks de sync, rate limiting OAuth).
 - RabbitMQ + MassTransit (sync, webhooks, scheduled posts).
@@ -85,7 +84,7 @@ Estructura espejo de CUBOT.travels (convencion de la familia). La hoja de ruta d
 ## 5. Reglas no negociables
 
 - **Multi-tenancy:** toda entidad operativa lleva `TenantId`; toda consulta tenant-scoped filtra con `HasQueryFilter`. Operator solo ve clientes asignados (UserClientLink). Tests de aislamiento desde el primer modulo.
-- **Super Admin separado:** rol `PlatformOperator` no se mezcla con `TenantMember`. Endpoints, politicas, UI y auditoria separadas.
+- **Super Admin separado logicamente** (rutas + politicas + layout + auditoria): el rol `PlatformOperator` no se mezcla con `TenantMember`. Toda la consola de gobierno vive bajo `/admin/*` con `[Authorize(Policy = PlatformOperator)]` y su propio `AdminLayout`. La separacion de **proceso/dominio** se elimino en el piloto (ADR 0003, Camino B) para reducir costo Railway y simplificar SSO.
 - **Tokens OAuth cifrados** con DataProtection (llaves en tabla `data_protection_keys`). Columnas `*Encrypted`. JAMAS en logs (ni Base64). Mascara en UI.
 - **Webhooks idempotentes** por `(network_code, provider_event_id)`. Responder 200 en < 200ms; procesar async.
 - **IA gobernada:** sugiere; el operador aprueba. Unica excepcion: Modulo 2.11 Autorespuesta (feature flags `autoreply_*`, blacklist obligatoria, delay anti-bot, MaxRepliesPerRun, horario activo, log inmutable).

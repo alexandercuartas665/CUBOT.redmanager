@@ -1,0 +1,94 @@
+@page "/admin/auditoria"
+@attribute [Authorize(Policy = AppPolicies.PlatformOperator)]
+@layout AdminLayout
+@rendermode @(new InteractiveServerRenderMode(prerender: false))
+@using CubotRedManager.Application.Admin
+@using CubotRedManager.Domain.Enums
+@inject IAuditAdminService AuditSvc
+
+<PageTitle>Auditoria - CUBOT.redmanager</PageTitle>
+
+<div class="module-head">
+    <div>
+        <div class="module-eyebrow">
+            <div class="module-icon">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 12h-5"/><path d="M15 8h-5"/><path d="M19 17V5a2 2 0 0 0-2-2H4"/><path d="M8 21h12a2 2 0 0 0 2-2v-1a1 1 0 0 0-1-1H11a1 1 0 0 0-1 1v1a2 2 0 1 1-4 0V5a2 2 0 1 0-4 0v2a1 1 0 0 0 1 1h3"/></svg>
+            </div>
+            <span>Super Admin SaaS</span>
+        </div>
+        <h1 class="page-title" style="margin-top:12px;">Auditoria global</h1>
+        <p class="page-sub" style="margin-bottom:0;">Cada accion critica del SaaS queda registrada con tenant, actor, timestamp y entidad para cumplimiento.</p>
+    </div>
+</div>
+
+@if (_logs is null)
+{
+    <p><em>Cargando...</em></p>
+}
+else if (_logs.Count == 0)
+{
+    <p class="text-muted">No hay registros de auditoria todavia.</p>
+}
+else
+{
+    <div class="card" style="max-width:1040px;padding:6px 16px;">
+        <table class="table table-hover align-middle" style="margin-bottom:0;">
+            <thead>
+                <tr><th>Timestamp</th><th>Actor</th><th>Agencia</th><th>Accion</th><th>Nivel</th></tr>
+            </thead>
+            <tbody>
+                @foreach (var l in _logs)
+                {
+                    <tr>
+                        <td style="font-family:var(--bs-font-monospace);font-size:12px;color:var(--muted-foreground);">@l.OccurredAt.LocalDateTime.ToString("dd MMM HH:mm")</td>
+                        <td style="font-family:var(--bs-font-monospace);font-size:12px;">@Actor(l)</td>
+                        <td style="font-weight:600;">@(l.TenantName ?? "-")</td>
+                        <td>@Friendly(l.ActionName)</td>
+                        <td><span class="badge bg-@LevelColor(l.ActionName)">@Level(l.ActionName)</span></td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+    </div>
+}
+
+@code {
+    private List<AuditLogListItem>? _logs;
+
+    protected override async Task OnInitializedAsync() => _logs = (await AuditSvc.ListRecentAsync()).ToList();
+
+    private static string Actor(AuditLogListItem l) =>
+        l.ActorType == AuditActorType.System ? "sistema" : l.ActorUserId.ToString()[..8];
+
+    private static string Friendly(string action) => action switch
+    {
+        "tenant.create" => "Alta de agencia",
+        "tenant.change-status" => "Cambio de estado de la agencia",
+        "tenant.profile.update" => "Actualizacion de perfil de agencia",
+        "plan.create" => "Creacion de plan",
+        "plan.update" => "Actualizacion de plan",
+        "plan.set-active" => "Cambio de disponibilidad del plan",
+        "payment.register" => "Registro de pago",
+        "wompi.config.create" or "wompi.config.update" => "Configuracion de Wompi",
+        "wompi.config.validate" => "Validacion de Wompi",
+        "ai.provider.create" or "ai.provider.update" => "Configuracion de proveedor IA",
+        "evolution.master.create" or "evolution.master.update" => "Configuracion de Evolution",
+        "evolution.master.validate" => "Validacion de Evolution",
+        _ => action
+    };
+
+    private static string Level(string action) => action switch
+    {
+        "tenant.change-status" => "warn",
+        "payment.register" => "ok",
+        _ => "info"
+    };
+
+    private static string LevelColor(string action) => Level(action) switch
+    {
+        "warn" => "warning",
+        "ok" => "success",
+        "err" => "danger",
+        _ => "info"
+    };
+}
