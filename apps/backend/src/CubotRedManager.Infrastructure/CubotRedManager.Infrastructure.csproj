@@ -16,6 +16,10 @@
          Requerido en Railway: el filesystem del contenedor es efimero. -->
     <PackageReference Include="Microsoft.AspNetCore.DataProtection.EntityFrameworkCore" Version="10.0.9" />
     <PackageReference Include="Microsoft.EntityFrameworkCore" Version="10.0.9" />
+    <!-- Referencia explicita para forzar Relational 10.0.9 en el publish: DataProtection.EFCore
+         10.0.9 lo exige, pero el provider de Npgsql lo arrastra a una version menor y un restore
+         limpio (Railway) lo omitia -> FileNotFoundException en runtime. -->
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Relational" Version="10.0.9" />
     <PackageReference Include="Microsoft.EntityFrameworkCore.Design" Version="10.0.9">
       <PrivateAssets>all</PrivateAssets>
       <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
