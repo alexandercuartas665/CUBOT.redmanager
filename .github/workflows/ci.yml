@@ -1,0 +1,32 @@
+# CI de CUBOT.redmanager: build + tests en PRs y pushes a main y deploy.
+# El deploy a produccion NO se hace desde GitHub Actions: Railway observa la rama
+# deploy y despliega automaticamente en cada push. Este workflow es el gate verde.
+# Regla del repo: solo ASCII en este archivo.
+name: CI
+
+on:
+  push:
+    branches: [main, deploy]
+  pull_request:
+    branches: [main, deploy]
+
+jobs:
+  build-test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: global.json
+
+      - name: Restore
+        run: dotnet restore apps/backend/CubotRedManager.slnx
+
+      - name: Build
+        run: dotnet build apps/backend/CubotRedManager.slnx --no-restore -c Release
+
+      - name: Test
+        run: dotnet test apps/backend/CubotRedManager.slnx --no-build -c Release --verbosity normal

@@ -200,6 +200,7 @@ public sealed class AutoReplyWorker : BackgroundService
             var apiClient = scopeTenant.ServiceProvider.GetRequiredService<ITikTokApiClient>();
             var protector = scopeTenant.ServiceProvider.GetRequiredService<ISecretProtector>();
             var inference = scopeTenant.ServiceProvider.GetRequiredService<IAiInferenceService>();
+            var connection = scopeTenant.ServiceProvider.GetRequiredService<ITikTokConnectionService>();
 
             // Acc + token
             var account = await db.SocialAccounts.FirstOrDefaultAsync(a => a.Id == t.SocialAccountId, ct);
@@ -209,6 +210,34 @@ public sealed class AutoReplyWorker : BackgroundService
                 await WriteLogAsync(db, t, AutoReplyJobStatus.Error, startedAt, 0, 0, 1, 0, trace, ct);
                 return;
             }
+
+            // Refresh proactivo: si el access_token caduca en < 10 min, lo renovamos AHORA. Asi
+            // evitamos que TikTok rebote con code=40105 a mitad del bucle (lo cual dejaria las
+            // respuestas perdidas hasta el siguiente ciclo). Si el refresh falla, abortamos.
+            var refreshBuffer = TimeSpan.FromMinutes(10);
+            if (account.ExpiresAt is { } expUtc && expUtc - DateTimeOffset.UtcNow < refreshBuffer)
+            {
+                trace.AppendLine($"[INFO] Token expira en {(expUtc - DateTimeOffset.UtcNow).TotalSeconds:F0}s (umbral 10min). Refrescando antes de procesar...");
+                var refresh = await connection.RefreshAccountAsync(account.Id, SystemUserId, ct);
+                if (!refresh.Success)
+                {
+                    trace.AppendLine($"[ERROR] Refresh fallo: {refresh.Error}");
+                    trace.AppendLine(refresh.Trace?.TrimEnd() ?? "");
+                    trace.AppendLine("[INFO] No se procesan comentarios este ciclo. El operador debe reconectar la cuenta manualmente desde /cuentas-sociales si el refresh_token tambien caduco.");
+                    await WriteLogAsync(db, t, AutoReplyJobStatus.Error, startedAt, 0, 0, 1, 0, trace, ct);
+                    return;
+                }
+                // Releer la cuenta con el token nuevo recien guardado.
+                account = await db.SocialAccounts.FirstOrDefaultAsync(a => a.Id == t.SocialAccountId, ct);
+                if (account is null || string.IsNullOrEmpty(account.AccessTokenEncrypted))
+                {
+                    trace.AppendLine("[ERROR] Tras refresh, la cuenta quedo sin token. Skip.");
+                    await WriteLogAsync(db, t, AutoReplyJobStatus.Error, startedAt, 0, 0, 1, 0, trace, ct);
+                    return;
+                }
+                trace.AppendLine($"[OK] Token refrescado. Nueva expiracion: {account.ExpiresAt:yyyy-MM-dd HH:mm:ss} UTC.");
+            }
+
             string token;
             try { token = protector.Unprotect(account.AccessTokenEncrypted); }
             catch

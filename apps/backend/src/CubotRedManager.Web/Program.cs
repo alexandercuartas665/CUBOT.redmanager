@@ -57,14 +57,27 @@ builder.Services.AddHttpContextAccessor();
 // JWT settings (login unificado emite tambien JWT propio si se necesita en futuras integraciones).
 builder.Services.Configure<JwtSettings>(builder.Configuration.GetSection(JwtSettings.SectionName));
 
-// DataProtection compartido con SuperAdmin (:5037): mismo ApplicationName + mismo PFS de llaves
-// permiten descifrar la cookie de auth en ambos hosts. Sin esto, cada app rota su propio anillo
-// y la cookie emitida en :5036 no se valida en :5037.
-var dpKeysDir = System.IO.Path.Combine(builder.Environment.ContentRootPath, "..", "..", ".dp-keys");
-System.IO.Directory.CreateDirectory(dpKeysDir);
+// DataProtection compartido con SuperAdmin: mismo ApplicationName + llaves persistidas en la
+// tabla data_protection_keys de Postgres. Sin esto, cada app rota su propio anillo y la cookie
+// emitida en un host no se valida en el otro. En Railway el filesystem es efimero, por eso las
+// llaves NO pueden vivir en disco (patron portado de CUBOT.travels).
 builder.Services.AddDataProtection()
     .SetApplicationName("cubot.redmanager")
-    .PersistKeysToFileSystem(new System.IO.DirectoryInfo(dpKeysDir));
+    .PersistKeysToDbContext<CubotRedManagerDbContext>();
+
+// URL del SuperAdmin para redirects post-login (dev: localhost:5037; prod: admin.red.cubot.com.co).
+var superAdminUrl = (builder.Configuration["Deployment:SuperAdminUrl"] ?? "http://localhost:5037").TrimEnd('/');
+
+// Railway hace TLS termination antes del contenedor: sin ForwardedHeaders, ASP.NET cree que la
+// request es HTTP y entra en bucle de redirects. KnownNetworks/Proxies se limpian porque el
+// proxy de Railway no tiene IP fija conocida.
+builder.Services.Configure<Microsoft.AspNetCore.Builder.ForwardedHeadersOptions>(options =>
+{
+    options.ForwardedHeaders = Microsoft.AspNetCore.HttpOverrides.ForwardedHeaders.XForwardedFor
+        | Microsoft.AspNetCore.HttpOverrides.ForwardedHeaders.XForwardedProto;
+    options.KnownIPNetworks.Clear();
+    options.KnownProxies.Clear();
+});
 
 builder.Services
     .AddAuthentication(CookieAuthenticationDefaults.AuthenticationScheme)
@@ -78,6 +91,14 @@ builder.Services
         options.AccessDeniedPath = "/login";
         options.ExpireTimeSpan = TimeSpan.FromHours(8);
         options.SlidingExpiration = true;
+        // En produccion la cookie se comparte entre red.cubot.com.co y admin.red.cubot.com.co
+        // via el dominio padre. En dev no se fija Domain (localhost no lo soporta).
+        if (builder.Environment.IsProduction())
+        {
+            options.Cookie.Domain = ".cubot.com.co";
+            options.Cookie.SameSite = SameSiteMode.Lax;
+            options.Cookie.SecurePolicy = CookieSecurePolicy.Always;
+        }
     });
 
 // Politicas alineadas a la familia CUBOT (ver SuperAdmin de travels).
@@ -88,12 +109,47 @@ builder.Services.AddAuthorizationBuilder()
 
 var app = builder.Build();
 
-// Aplica migraciones pendientes al arrancar (dev). En produccion se controla aparte.
+// ForwardedHeaders debe ir ANTES de cualquier middleware que mire el scheme (HttpsRedirection,
+// Authentication): asi Request.Scheme = https detras del proxy de Railway.
+app.UseForwardedHeaders();
+
+// Aplica migraciones pendientes al arrancar. En Railway este es el mecanismo oficial del piloto:
+// el primer arranque crea el esquema completo (incluida data_protection_keys).
 using (var scope = app.Services.CreateScope())
 {
     var db = scope.ServiceProvider.GetRequiredService<CubotRedManagerDbContext>();
     await db.Database.MigrateAsync();
 
+    // Bootstrap de produccion: si la BD no tiene ningun usuario de plataforma, crea el primer
+    // SuperAdmin desde variables de entorno (Bootstrap__AdminEmail / Bootstrap__AdminPassword).
+    // Sin esto, un despliegue nuevo quedaria sin forma de iniciar sesion. No se loggea la clave.
+    if (!app.Environment.IsDevelopment())
+    {
+        var bootEmail = builder.Configuration["Bootstrap:AdminEmail"];
+        var bootPassword = builder.Configuration["Bootstrap:AdminPassword"];
+        if (!string.IsNullOrWhiteSpace(bootEmail)
+            && !string.IsNullOrWhiteSpace(bootPassword)
+            && !await db.PlatformUsers.AnyAsync())
+        {
+            var bootstrapHasher = scope.ServiceProvider.GetRequiredService<CubotRedManager.Application.Common.Auth.IPasswordHasher>();
+            db.PlatformUsers.Add(new CubotRedManager.Domain.Entities.PlatformUser
+            {
+                Id = Guid.CreateVersion7(),
+                Email = bootEmail.Trim().ToLowerInvariant(),
+                DisplayName = "Super Admin",
+                PasswordHash = bootstrapHasher.Hash(bootPassword),
+                PlatformRole = CubotRedManager.Domain.Enums.PlatformRole.SuperAdmin,
+                AuthProvider = CubotRedManager.Domain.Enums.AuthProvider.Local,
+                EmailVerified = true
+            });
+            await db.SaveChangesAsync();
+        }
+    }
+
+    // Los seeds demo (tenant, usuarios con clave conocida, contenedores de datos) son SOLO de
+    // desarrollo: en produccion crearian un SuperAdmin con clave publica (admin123).
+    if (app.Environment.IsDevelopment())
+    {
     // Siembra la agencia demo (mismo GUID que emite el dev-login) para que las entidades
     // tenant-scoped con FK a Tenant (Client, etc.) puedan persistir en desarrollo.
     if (!await db.Tenants.AnyAsync(t => t.Id == DemoTenant.Id))
@@ -159,6 +215,7 @@ using (var scope = app.Services.CreateScope())
     // Filas demo (20 productos + 20 precios) para alimentar al agente FUXION via MCP.
     // Solo siembra si el container existe y todavia esta vacio (idempotente).
     await DataContainerDataSeed.EnsureAsync(db, DemoTenant.Id);
+    }
 }
 
 if (!app.Environment.IsDevelopment())
@@ -251,7 +308,7 @@ app.MapPost("/auth/login", async (
     }
     if (isOperator)
     {
-        return Results.Redirect("http://localhost:5037/dashboard");
+        return Results.Redirect($"{superAdminUrl}/dashboard");
     }
     return Results.Redirect("/dashboard");
 }).DisableAntiforgery();
@@ -393,7 +450,7 @@ app.MapGet("/signin-google", async (
 
     if (isOperator)
     {
-        return Results.Redirect("http://localhost:5037/dashboard");
+        return Results.Redirect($"{superAdminUrl}/dashboard");
     }
     return Results.Redirect("/dashboard");
 }).AllowAnonymous();
@@ -468,15 +525,91 @@ if (app.Environment.IsDevelopment())
     }).AllowAnonymous();
 }
 
+// ===== Webhooks: YCloud (WhatsApp BSP oficial) =====
+// POST /webhooks/ycloud/{tenantId}: recibe mensajes entrantes. Idempotencia por wamid.
+// Resuelve la linea por YCloudPhoneNumberId = payload.to. Guarda como InboxMessage.
+// Responde 200 rapido (Meta desconecta si > 5s). Fira-and-forget al escribir el ambient tenant.
+app.MapPost("/webhooks/ycloud/{tenantId:guid}", async (
+    Guid tenantId,
+    HttpContext http,
+    IServiceScopeFactory scopeFactory,
+    ILoggerFactory loggerFactory) =>
+{
+    var log = loggerFactory.CreateLogger("YCloudWebhook");
+    System.Text.Json.JsonDocument doc;
+    try { doc = await System.Text.Json.JsonDocument.ParseAsync(http.Request.Body); }
+    catch (Exception ex) { log.LogWarning(ex, "YCloud webhook: JSON invalido para tenant {TenantId}", tenantId); return Results.Ok(); }
+
+    List<CubotRedManager.Web.Webhooks.YCloudWebhookParser.InboundMessage> messages;
+    try { messages = CubotRedManager.Web.Webhooks.YCloudWebhookParser.Parse(doc); }
+    finally { doc.Dispose(); }
+    if (messages.Count == 0) { return Results.Ok(); }
+
+    using var scope = scopeFactory.CreateScope();
+    scope.ServiceProvider.GetRequiredService<IAmbientTenantOverride>().Set(tenantId, null);
+    var db = scope.ServiceProvider.GetRequiredService<IApplicationDbContext>();
+
+    foreach (var m in messages)
+    {
+        // Resuelve la linea por sender (to). Si la linea no existe en el tenant o no es YCloud,
+        // se descarta silenciosamente (podria ser un webhook mal configurado).
+        var line = await db.WhatsAppLines.FirstOrDefaultAsync(l =>
+            l.YCloudPhoneNumberId == m.ToPhone && l.Provider == CubotRedManager.Domain.Enums.WhatsAppProvider.YCloud);
+        if (line is null)
+        {
+            log.LogInformation("YCloud webhook: linea no encontrada para tenant {TenantId}, to {To}", tenantId, m.ToPhone);
+            continue;
+        }
+        // Idempotencia global por (network_code, external_id) -- indice unico en el modelo.
+        var exists = await db.InboxMessages
+            .IgnoreQueryFilters()
+            .AnyAsync(x => x.NetworkCode == "whatsapp" && x.ExternalId == m.Wamid);
+        if (exists) { continue; }
+
+        db.InboxMessages.Add(new CubotRedManager.Domain.Entities.InboxMessage
+        {
+            TenantId = tenantId,
+            ClientId = Guid.Empty, // Sin cliente vinculado hasta que se asocie manualmente.
+            NetworkCode = "whatsapp",
+            Type = CubotRedManager.Domain.Enums.InboxMessageType.DirectMessage,
+            ExternalId = m.Wamid,
+            AuthorExternalId = m.FromPhone,
+            AuthorName = m.FromPhone,
+            Body = m.Text ?? $"(mensaje tipo {m.MessageType})",
+            ReceivedAt = m.ReceivedAt,
+            Status = CubotRedManager.Domain.Enums.InboxStatus.Unread
+        });
+    }
+    await db.SaveChangesAsync();
+    return Results.Ok();
+}).AllowAnonymous().DisableAntiforgery();
+
+// Healthcheck para Railway: verifica que la app responde y que Postgres esta accesible.
+// Railway lo consulta tras cada deploy; si falla, el deploy se marca unhealthy y no rota trafico.
+app.MapGet("/healthz", async (CubotRedManagerDbContext db) =>
+{
+    try
+    {
+        await db.Database.ExecuteSqlRawAsync("SELECT 1");
+        return Results.Ok(new { status = "ok", ts = DateTimeOffset.UtcNow });
+    }
+    catch (Exception ex)
+    {
+        return Results.Problem($"db down: {ex.Message}", statusCode: 503);
+    }
+}).AllowAnonymous();
+
 app.Run();
 
-// Helper: solo permite redirigir a URLs locales o al host del SuperAdmin (:5037) para evitar
-// open-redirect.
+// Helper: solo permite redirigir a URLs locales, a los hosts dev (:5036/:5037) o a los dominios
+// de produccion, para evitar open-redirect.
 static bool IsSafeReturnUrl(string url)
 {
     if (url.StartsWith("/", StringComparison.Ordinal)) { return true; }
     if (url.StartsWith("http://localhost:5037", StringComparison.OrdinalIgnoreCase)) { return true; }
     if (url.StartsWith("http://localhost:5036", StringComparison.OrdinalIgnoreCase)) { return true; }
+    if (url.StartsWith("https://admin.red.cubot.com.co", StringComparison.OrdinalIgnoreCase)) { return true; }
+    if (url.StartsWith("https://red.cubot.com.co", StringComparison.OrdinalIgnoreCase)) { return true; }
     return false;
 }
 

@@ -2,6 +2,7 @@
 @layout CubotRedManager.SuperAdmin.Components.Layout.EmptyLayout
 @attribute [AllowAnonymous]
 @inject NavigationManager Nav
+@inject IConfiguration Config
 
 <PageTitle>Redirigiendo al login - Super Admin</PageTitle>
 
@@ -26,10 +27,14 @@
 
     protected override void OnInitialized()
     {
+        // URLs configurables: en dev caen a localhost; en prod vienen de appsettings.Production
+        // (Deployment:WebUrl = red.cubot.com.co, Deployment:SuperAdminUrl = admin.red.cubot.com.co).
+        var webUrl = (Config["Deployment:WebUrl"] ?? "http://localhost:5036").TrimEnd('/');
+        var selfUrl = (Config["Deployment:SuperAdminUrl"] ?? "http://localhost:5037").TrimEnd('/');
         var ret = string.IsNullOrWhiteSpace(ReturnUrl)
-            ? "http://localhost:5037/"
+            ? $"{selfUrl}/"
             : ReturnUrl;
-        _redirectUrl = $"http://localhost:5036/login?ReturnUrl={Uri.EscapeDataString(ret)}";
+        _redirectUrl = $"{webUrl}/login?ReturnUrl={Uri.EscapeDataString(ret)}";
     }
 
     protected override void OnAfterRender(bool firstRender)

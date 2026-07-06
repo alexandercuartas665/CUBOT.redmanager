@@ -1,0 +1,26 @@
+# CUBOT.redmanager - imagen de produccion de la consola de la agencia (Web).
+# Hospeda ademas los HostedService (AutoReplyWorker, TikTokMaintenanceWorker) y los
+# webhooks (/webhooks/ycloud/{tenantId}). Patron portado de CUBOT.travels, subido a .NET 10.
+# Contexto de build esperado: raiz del repo (Railway Root Directory = /).
+
+# --- build ---
+FROM mcr.microsoft.com/dotnet/sdk:10.0 AS build
+WORKDIR /src
+COPY apps/backend/ ./
+RUN dotnet publish src/CubotRedManager.Web/CubotRedManager.Web.csproj \
+    -c Release -o /app/publish /p:UseAppHost=false
+
+# --- runtime ---
+FROM mcr.microsoft.com/dotnet/aspnet:10.0 AS runtime
+WORKDIR /app
+COPY --from=build /app/publish ./
+# Railway inyecta PORT; definir en Railway ASPNETCORE_HTTP_PORTS=${{PORT}}.
+# Este valor es solo fallback local.
+ENV ASPNETCORE_HTTP_PORTS=8080
+# Zona horaria del contenedor: COT (Bogota) para que los logs y DateTime.Now del proceso
+# coincidan con la operacion local. PostgreSQL sigue guardando timestamptz en UTC.
+ENV TZ=America/Bogota
+EXPOSE 8080
+# Usuario no-root incluido en la imagen aspnet:10.0.
+USER app
+ENTRYPOINT ["dotnet", "CubotRedManager.Web.dll"]

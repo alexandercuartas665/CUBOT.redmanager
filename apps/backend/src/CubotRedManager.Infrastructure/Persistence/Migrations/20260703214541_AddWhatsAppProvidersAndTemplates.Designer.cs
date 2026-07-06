@@ -3,6 +3,7 @@ using System;
 using CubotRedManager.Infrastructure.Persistence;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 
@@ -11,13 +12,15 @@ using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 namespace CubotRedManager.Infrastructure.Persistence.Migrations
 {
     [DbContext(typeof(CubotRedManagerDbContext))]
-    partial class CubotRedManagerDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260703214541_AddWhatsAppProvidersAndTemplates")]
+    partial class AddWhatsAppProvidersAndTemplates
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
-                .HasAnnotation("ProductVersion", "10.0.9")
+                .HasAnnotation("ProductVersion", "10.0.4")
                 .HasAnnotation("Relational:MaxIdentifierLength", 63);
 
             NpgsqlModelBuilderExtensions.UseIdentityByDefaultColumns(modelBuilder);
@@ -3358,29 +3361,6 @@ namespace CubotRedManager.Infrastructure.Persistence.Migrations
                         .HasDatabaseName("ix_wompi_webhook_events_provider_event_id");
 
                     b.ToTable("wompi_webhook_events", (string)null);
-                });
-
-            modelBuilder.Entity("Microsoft.AspNetCore.DataProtection.EntityFrameworkCore.DataProtectionKey", b =>
-                {
-                    b.Property<int>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("integer")
-                        .HasColumnName("id");
-
-                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("Id"));
-
-                    b.Property<string>("FriendlyName")
-                        .HasColumnType("text")
-                        .HasColumnName("friendly_name");
-
-                    b.Property<string>("Xml")
-                        .HasColumnType("text")
-                        .HasColumnName("xml");
-
-                    b.HasKey("Id")
-                        .HasName("pk_data_protection_keys");
-
-                    b.ToTable("data_protection_keys", (string)null);
                 });
 
             modelBuilder.Entity("CubotRedManager.Domain.Entities.AiAgentCacheField", b =>

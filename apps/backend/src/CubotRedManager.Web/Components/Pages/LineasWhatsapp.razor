@@ -3,7 +3,9 @@
 @rendermode InteractiveServer
 @using CubotRedManager.Application.Tenancy
 @using CubotRedManager.Domain.Enums
+@using CubotRedManager.Web.Components
 @inject IWhatsAppLineService LinesSvc
+@inject IYCloudApiClient YCloud
 @inject AuthenticationStateProvider AuthProvider
 
 <PageTitle>Lineas WhatsApp - CUBOT.redmanager</PageTitle>
@@ -17,7 +19,7 @@
             <span>Comunicacion e IA</span>
         </div>
         <h1 class="page-title" style="margin-top:12px;">Lineas WhatsApp</h1>
-        <p class="page-sub" style="margin-bottom:0;">Lineas del equipo de la agencia. La conexion real (QR) se integra con Evolution.</p>
+        <p class="page-sub" style="margin-bottom:0;">Lineas WhatsApp de la agencia. Soporta Evolution (QR), Meta Cloud API oficial y YCloud (BSP con coexistencia).</p>
     </div>
     <button class="btn btn-primary" @onclick="() => _showCreate = true">Nueva linea</button>
 </div>
@@ -33,7 +35,7 @@ else if (_lines.Count == 0)
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect width="14" height="20" x="5" y="2" rx="2"/><path d="M12 18h.01"/></svg>
         </div>
         <h3>Sin lineas todavia</h3>
-        <p>Crea la primera linea de WhatsApp para esta agencia.</p>
+        <p>Crea la primera linea de WhatsApp para esta agencia. Recomendamos YCloud para evitar bloqueos.</p>
     </div>
 }
 else
@@ -43,10 +45,30 @@ else
         {
             <div class="line-card">
                 <div class="line-top">
-                    <span class="line-name">@l.InstanceName</span>
+                    <div>
+                        <span class="line-name">@l.InstanceName</span>
+                        <span class="line-provider p-@l.Provider.ToString().ToLowerInvariant()">@ProviderLabel(l.Provider)</span>
+                    </div>
                     <span class="line-badge s-@l.Status.ToString().ToLowerInvariant()">@StatusLabel(l.Status)</span>
                 </div>
-                <div class="line-phone">@(string.IsNullOrWhiteSpace(l.PhoneNumber) ? "Sin numero" : l.PhoneNumber)</div>
+                <div class="line-phone">
+                    @if (l.Provider == WhatsAppProvider.YCloud && !string.IsNullOrEmpty(l.YCloudPhoneNumberId))
+                    {
+                        <span>@l.YCloudPhoneNumberId</span>
+                    }
+                    else if (l.Provider == WhatsAppProvider.Cloud && !string.IsNullOrEmpty(l.CloudPhoneNumberId))
+                    {
+                        <span>PhoneNumberId: @l.CloudPhoneNumberId</span>
+                    }
+                    else
+                    {
+                        <span>@(string.IsNullOrWhiteSpace(l.PhoneNumber) ? "Sin numero" : l.PhoneNumber)</span>
+                    }
+                </div>
+                @if (l.Provider == WhatsAppProvider.YCloud && !string.IsNullOrEmpty(l.YCloudWabaId))
+                {
+                    <div class="line-meta">WABA: @l.YCloudWabaId</div>
+                }
                 <div class="line-actions">
                     @if (l.Status == WhatsAppLineStatus.Connected)
                     {
@@ -56,6 +78,7 @@ else
                     {
                         <button class="btn btn-sm btn-primary" @onclick="() => ChangeStatus(l, WhatsAppLineStatus.Connected)">Conectar</button>
                     }
+                    <button class="btn btn-sm btn-outline-danger" @onclick="() => Delete(l)">Eliminar</button>
                 </div>
             </div>
         }
@@ -65,20 +88,99 @@ else
 @if (_showCreate)
 {
     <div class="modal-overlay" @onclick="() => _showCreate = false">
-        <div class="modal-dialog" @onclick:stopPropagation="true">
+        <div class="modal-dialog wide" @onclick:stopPropagation="true">
             <div class="modal-head">
                 <h3>Nueva linea WhatsApp</h3>
                 <button class="modal-close" @onclick="() => _showCreate = false">&times;</button>
             </div>
             <div class="modal-body">
                 <div class="field">
-                    <label class="form-label">Nombre de instancia</label>
-                    <input class="form-control" @bind="_newName" placeholder="ej. operacion-1" />
+                    <label class="form-label">Proveedor</label>
+                    <div class="provider-choice">
+                        <label class="prov-opt @(_newProvider == WhatsAppProvider.YCloud ? "on" : "")">
+                            <input type="radio" name="prov" checked="@(_newProvider == WhatsAppProvider.YCloud)" @onchange="() => _newProvider = WhatsAppProvider.YCloud" />
+                            <div>
+                                <strong>YCloud <span class="badge-reco">recomendado</span></strong>
+                                <small>BSP oficial con coexistencia. WhatsApp Business App + API en el mismo numero.</small>
+                            </div>
+                        </label>
+                        <label class="prov-opt @(_newProvider == WhatsAppProvider.Cloud ? "on" : "")">
+                            <input type="radio" name="prov" checked="@(_newProvider == WhatsAppProvider.Cloud)" @onchange="() => _newProvider = WhatsAppProvider.Cloud" />
+                            <div>
+                                <strong>Meta Cloud API</strong>
+                                <small>API oficial de Meta (developers.facebook.com). Rompe la app oficial en el celular.</small>
+                            </div>
+                        </label>
+                        <label class="prov-opt @(_newProvider == WhatsAppProvider.Evolution ? "on" : "")">
+                            <input type="radio" name="prov" checked="@(_newProvider == WhatsAppProvider.Evolution)" @onchange="() => _newProvider = WhatsAppProvider.Evolution" />
+                            <div>
+                                <strong>Evolution (QR)</strong>
+                                <small>Conexion no oficial via QR. Riesgo de bloqueo por Meta.</small>
+                            </div>
+                        </label>
+                    </div>
                 </div>
+
                 <div class="field">
-                    <label class="form-label">Numero (opcional)</label>
-                    <input class="form-control" @bind="_newPhone" placeholder="ej. +57..." />
+                    <label class="form-label">Nombre de la linea</label>
+                    <input class="form-control" @bind="_newName" placeholder="ej. ventas-marca-x" />
                 </div>
+
+                @if (_newProvider == WhatsAppProvider.Evolution)
+                {
+                    <div class="field">
+                        <label class="form-label">Numero (opcional)</label>
+                        <input class="form-control" @bind="_newPhone" placeholder="ej. +57..." />
+                    </div>
+                }
+
+                @if (_newProvider == WhatsAppProvider.Cloud)
+                {
+                    <div class="field">
+                        <label class="form-label">Phone Number ID (Meta)</label>
+                        <input class="form-control" @bind="_cloudPhoneId" placeholder="ej. 106540...." />
+                    </div>
+                    <div class="field">
+                        <label class="form-label">WhatsApp Business Account ID</label>
+                        <input class="form-control" @bind="_cloudWabaId" placeholder="ej. 175201...." />
+                    </div>
+                    <div class="field">
+                        <label class="form-label">Access token</label>
+                        <input class="form-control" type="password" @bind="_cloudToken" placeholder="System user o long-lived token" />
+                    </div>
+                    <div class="field">
+                        <label class="form-label">Verify token del webhook</label>
+                        <input class="form-control" @bind="_cloudVerify" placeholder="El mismo que registras en developers.facebook.com" />
+                    </div>
+                }
+
+                @if (_newProvider == WhatsAppProvider.YCloud)
+                {
+                    <div class="field">
+                        <label class="form-label">API Key de YCloud</label>
+                        <input class="form-control" type="password" @bind="_ycKey" placeholder="X-API-Key desde tu panel de YCloud" />
+                    </div>
+                    <div class="field">
+                        <label class="form-label">Numero / sender <small>(formato internacional sin +)</small></label>
+                        <input class="form-control" @bind="_ycPhone" placeholder="ej. 573001234567" />
+                    </div>
+                    <div class="field">
+                        <label class="form-label">WABA ID <small>(opcional; se detecta al verificar)</small></label>
+                        <input class="form-control" @bind="_ycWaba" placeholder="opcional" />
+                    </div>
+                    <div class="field">
+                        <label class="form-label">Secreto del webhook <small>(opcional)</small></label>
+                        <input class="form-control" type="password" @bind="_ycHookSecret" />
+                    </div>
+                    <button class="btn btn-sm btn-outline-primary" @onclick="CheckYCloud" disabled="@(_checking || string.IsNullOrWhiteSpace(_ycKey))">
+                        @(_checking ? "Verificando..." : "Verificar credenciales")
+                    </button>
+                    @if (!string.IsNullOrEmpty(_checkMsg))
+                    {
+                        <div class="check-msg @(_checkOk ? "ok" : "err")" style="margin-top:8px;">@_checkMsg</div>
+                    }
+                }
+
                 @if (!string.IsNullOrEmpty(_error))
                 {
                     <p style="color:var(--destructive);font-size:.85rem;">@_error</p>
@@ -93,16 +195,30 @@ else
 }
 
 <style>
-    .line-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 16px; max-width: 1040px; }
+    .line-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 16px; max-width: 1080px; }
     .line-card { border: 1px solid var(--border); border-radius: 14px; background: var(--card); padding: 16px 18px; box-shadow: var(--shadow-soft); }
-    .line-top { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
-    .line-name { font-weight: 700; font-size: 15px; }
-    .line-phone { font-size: 12.5px; color: var(--muted-foreground); margin-top: 4px; }
-    .line-actions { margin-top: 14px; }
+    .line-top { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; }
+    .line-name { font-weight: 700; font-size: 15px; margin-right: 8px; }
+    .line-provider { font-size: 10px; font-weight: 700; padding: 2px 7px; border-radius: 6px; background: var(--muted); color: var(--muted-foreground); text-transform: uppercase; letter-spacing: .03em; }
+    .line-provider.p-ycloud { background: oklch(0.72 0.15 285 / 0.15); color: var(--primary); }
+    .line-provider.p-cloud { background: oklch(0.55 0.2 245 / 0.15); color: oklch(0.55 0.2 245); }
+    .line-phone { font-size: 12.5px; color: var(--muted-foreground); margin-top: 6px; }
+    .line-meta { font-size: 11.5px; color: var(--muted-foreground); margin-top: 2px; font-family: ui-monospace, monospace; }
+    .line-actions { margin-top: 14px; display: flex; gap: 8px; flex-wrap: wrap; }
     .line-badge { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .03em; padding: 3px 9px; border-radius: 999px; background: var(--muted); color: var(--muted-foreground); }
     .line-badge.s-connected { background: oklch(0.62 0.16 155 / 0.15); color: var(--success); }
     .line-badge.s-failed, .line-badge.s-disconnected { background: oklch(0.6 0.22 22 / 0.12); color: var(--destructive); }
     .field { margin-bottom: 14px; }
+    .modal-dialog.wide { max-width: 620px; }
+    .provider-choice { display: flex; flex-direction: column; gap: 8px; }
+    .prov-opt { display: flex; align-items: flex-start; gap: 10px; padding: 10px 12px; border: 1.5px solid var(--border); border-radius: 10px; cursor: pointer; transition: all .15s; }
+    .prov-opt.on { border-color: var(--primary); background: oklch(0.72 0.15 285 / 0.06); }
+    .prov-opt input { margin-top: 3px; }
+    .prov-opt strong { display: block; font-size: 14px; }
+    .prov-opt small { display: block; color: var(--muted-foreground); font-size: 12px; margin-top: 2px; }
+    .badge-reco { font-size: 10px; font-weight: 600; padding: 2px 7px; border-radius: 6px; background: var(--primary); color: white; margin-left: 6px; }
+    .check-msg.ok { color: var(--success); font-size: 12.5px; }
+    .check-msg.err { color: var(--destructive); font-size: 12.5px; }
 </style>
 
 @code {
@@ -110,6 +226,21 @@ else
     private bool _showCreate;
     private string _newName = "";
     private string _newPhone = "";
+    private WhatsAppProvider _newProvider = WhatsAppProvider.YCloud;
+    // Cloud
+    private string _cloudPhoneId = "";
+    private string _cloudWabaId = "";
+    private string _cloudToken = "";
+    private string _cloudVerify = "";
+    // YCloud
+    private string _ycKey = "";
+    private string _ycPhone = "";
+    private string _ycWaba = "";
+    private string _ycHookSecret = "";
+    private bool _checking;
+    private bool _checkOk;
+    private string _checkMsg = "";
+    // General
     private string? _error;
     private Guid _actor;
     private IReadOnlyList<WhatsAppLineDto> _lines = [];
@@ -128,14 +259,48 @@ else
         _loading = false;
     }
 
+    private async Task CheckYCloud()
+    {
+        _checking = true; _checkMsg = "";
+        try
+        {
+            var res = await YCloud.CheckAsync(_ycKey.Trim(), string.IsNullOrWhiteSpace(_ycPhone) ? null : _ycPhone.Trim(), default);
+            _checkOk = res.IsValid;
+            if (res.IsValid)
+            {
+                _checkMsg = $"OK. Numero: {res.VerifiedPhone ?? "(sin numero registrado)"}. WABA: {res.WabaId ?? "(no detectada)"}";
+                if (string.IsNullOrWhiteSpace(_ycPhone) && !string.IsNullOrWhiteSpace(res.VerifiedPhone)) { _ycPhone = res.VerifiedPhone!.Replace("+", ""); }
+                if (string.IsNullOrWhiteSpace(_ycWaba) && !string.IsNullOrWhiteSpace(res.WabaId)) { _ycWaba = res.WabaId!; }
+            }
+            else
+            {
+                _checkMsg = $"Error: {res.Error}";
+            }
+        }
+        finally { _checking = false; }
+    }
+
     private async Task Create()
     {
         _error = null;
         try
         {
-            var dto = await LinesSvc.CreateAsync(new CreateWhatsAppLineRequest(_newName, _newPhone), _actor);
+            var req = new CreateWhatsAppLineRequest(
+                InstanceName: _newName,
+                PhoneNumber: string.IsNullOrWhiteSpace(_newPhone) ? null : _newPhone,
+                Provider: _newProvider,
+                CloudPhoneNumberId: _newProvider == WhatsAppProvider.Cloud ? _cloudPhoneId.NullIfBlank() : null,
+                CloudBusinessAccountId: _newProvider == WhatsAppProvider.Cloud ? _cloudWabaId.NullIfBlank() : null,
+                CloudAccessToken: _newProvider == WhatsAppProvider.Cloud ? _cloudToken.NullIfBlank() : null,
+                CloudWebhookVerifyToken: _newProvider == WhatsAppProvider.Cloud ? _cloudVerify.NullIfBlank() : null,
+                YCloudApiKey: _newProvider == WhatsAppProvider.YCloud ? _ycKey.NullIfBlank() : null,
+                YCloudPhoneNumberId: _newProvider == WhatsAppProvider.YCloud ? _ycPhone.NullIfBlank() : null,
+                YCloudWabaId: _newProvider == WhatsAppProvider.YCloud ? _ycWaba.NullIfBlank() : null,
+                YCloudWebhookSecret: _newProvider == WhatsAppProvider.YCloud ? _ycHookSecret.NullIfBlank() : null);
+            var dto = await LinesSvc.CreateAsync(req, _actor);
             if (dto is null) { _error = "No hay agencia activa."; return; }
-            _newName = ""; _newPhone = ""; _showCreate = false;
+            ResetForm();
+            _showCreate = false;
             await Reload();
         }
         catch (Exception ex)
@@ -144,9 +309,23 @@ else
         }
     }
 
+    private void ResetForm()
+    {
+        _newName = ""; _newPhone = "";
+        _cloudPhoneId = ""; _cloudWabaId = ""; _cloudToken = ""; _cloudVerify = "";
+        _ycKey = ""; _ycPhone = ""; _ycWaba = ""; _ycHookSecret = "";
+        _checkMsg = ""; _checkOk = false;
+    }
+
     private async Task ChangeStatus(WhatsAppLineDto line, WhatsAppLineStatus status)
     {
         await LinesSvc.ChangeStatusAsync(line.Id, status, _actor);
+        await Reload();
+    }
+
+    private async Task Delete(WhatsAppLineDto line)
+    {
+        await LinesSvc.DeleteAsync(line.Id, _actor);
         await Reload();
     }
 
@@ -159,4 +338,12 @@ else
         WhatsAppLineStatus.Disabled => "Deshabilitada",
         _ => "Creada"
     };
+
+    private static string ProviderLabel(WhatsAppProvider p) => p switch
+    {
+        WhatsAppProvider.YCloud => "YCloud",
+        WhatsAppProvider.Cloud => "Meta Cloud",
+        _ => "Evolution"
+    };
 }
+
