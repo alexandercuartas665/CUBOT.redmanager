@@ -5,6 +5,7 @@
 @using CubotRedManager.Domain.Enums
 @using CubotRedManager.Web.Components
 @inject IWhatsAppLineService LinesSvc
+@inject IWhatsAppConnectorService Connector
 @inject IYCloudApiClient YCloud
 @inject AuthenticationStateProvider AuthProvider
 
@@ -72,16 +73,65 @@ else
                 <div class="line-actions">
                     @if (l.Status == WhatsAppLineStatus.Connected)
                     {
-                        <button class="btn btn-sm btn-outline-secondary" @onclick="() => ChangeStatus(l, WhatsAppLineStatus.Disconnected)">Desconectar</button>
+                        <button class="btn btn-sm btn-outline-secondary" @onclick="() => Disconnect(l)">Desconectar</button>
+                    }
+                    else if (l.Provider == WhatsAppProvider.Evolution)
+                    {
+                        <button class="btn btn-sm btn-primary" @onclick="() => ConnectEvolution(l)">Conectar (QR)</button>
                     }
                     else
                     {
-                        <button class="btn btn-sm btn-primary" @onclick="() => ChangeStatus(l, WhatsAppLineStatus.Connected)">Conectar</button>
+                        <button class="btn btn-sm btn-primary" @onclick="() => ChangeStatus(l, WhatsAppLineStatus.Connected)">Marcar conectada</button>
                     }
                     <button class="btn btn-sm btn-outline-danger" @onclick="() => Delete(l)">Eliminar</button>
                 </div>
             </div>
         }
+    </div>
+}
+
+@if (_qrLine is not null)
+{
+    <div class="modal-overlay" @onclick="CloseQrModal">
+        <div class="modal-dialog" @onclick:stopPropagation="true">
+            <div class="modal-head">
+                <h3>Conectar @_qrLine.InstanceName por QR</h3>
+                <button class="modal-close" @onclick="CloseQrModal">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div class="qr-wrap">
+                    @if (_qrLine.Status == WhatsAppLineStatus.Connected)
+                    {
+                        <div style="font-size:48px;color:var(--success);">OK</div>
+                        <div class="qr-hint"><strong>Linea conectada.</strong> Puedes cerrar este modal.</div>
+                    }
+                    else if (_qrBusy && string.IsNullOrEmpty(_qrBase64))
+                    {
+                        <div class="qr-hint" style="padding:32px 0;">Preparando la instancia en Evolution...</div>
+                    }
+                    else if (!string.IsNullOrEmpty(_qrBase64))
+                    {
+                        <img class="qr-img" src="data:image/png;base64,@_qrBase64" alt="QR de conexion" />
+                        <div class="qr-hint">
+                            Abre <strong>WhatsApp</strong> en tu celular &rarr; <strong>Dispositivos vinculados</strong> &rarr;
+                            <strong>Vincular un dispositivo</strong> y escanea este codigo. El QR se refresca cada minuto;
+                            pulsa <em>Verificar estado</em> luego de escanear.
+                        </div>
+                    }
+                    @if (!string.IsNullOrEmpty(_qrError))
+                    {
+                        <div class="check-msg err">@_qrError</div>
+                    }
+                </div>
+            </div>
+            <div class="modal-foot">
+                <button class="btn btn-outline-secondary" @onclick="CloseQrModal">Cerrar</button>
+                <button class="btn btn-outline-primary" @onclick="RefreshQrLine" disabled="@_qrBusy">
+                    @(_qrBusy ? "Verificando..." : "Verificar estado")
+                </button>
+                <button class="btn btn-primary" @onclick="() => OpenQrForAsync(_qrLine!)" disabled="@_qrBusy">Regenerar QR</button>
+            </div>
+        </div>
     </div>
 }
 
@@ -219,6 +269,9 @@ else
     .badge-reco { font-size: 10px; font-weight: 600; padding: 2px 7px; border-radius: 6px; background: var(--primary); color: white; margin-left: 6px; }
     .check-msg.ok { color: var(--success); font-size: 12.5px; }
     .check-msg.err { color: var(--destructive); font-size: 12.5px; }
+    .qr-wrap { display: flex; flex-direction: column; align-items: center; gap: 12px; padding: 8px 0; }
+    .qr-img { width: 260px; height: 260px; border: 1px solid var(--border); border-radius: 10px; padding: 8px; background: #fff; }
+    .qr-hint { color: var(--muted-foreground); font-size: 12.5px; text-align: center; max-width: 360px; }
 </style>
 
 @code {
@@ -244,6 +297,12 @@ else
     private string? _error;
     private Guid _actor;
     private IReadOnlyList<WhatsAppLineDto> _lines = [];
+
+    // Modal de QR (Evolution)
+    private WhatsAppLineDto? _qrLine;
+    private string? _qrBase64;
+    private string? _qrError;
+    private bool _qrBusy;
 
     protected override async Task OnInitializedAsync()
     {
@@ -302,11 +361,81 @@ else
             ResetForm();
             _showCreate = false;
             await Reload();
+            // Para Evolution, tras persistir la fila, crear la instancia en el servidor y traer el
+            // QR para que el operador lo escanee desde el celular. Sin esto, la linea quedaba
+            // "Created" y nunca se conectaba.
+            if (dto.Provider == WhatsAppProvider.Evolution)
+            {
+                await OpenQrForAsync(dto);
+            }
         }
         catch (Exception ex)
         {
             _error = ex.Message;
         }
+    }
+
+    private async Task ConnectEvolution(WhatsAppLineDto line) => await OpenQrForAsync(line);
+
+    private async Task OpenQrForAsync(WhatsAppLineDto line)
+    {
+        _qrLine = line;
+        _qrError = null;
+        _qrBase64 = null;
+        _qrBusy = true;
+        StateHasChanged();
+        try
+        {
+            var res = await Connector.ConnectLineAsync(line.Id, _actor);
+            if (!res.Ok)
+            {
+                _qrError = res.Error ?? "No se pudo conectar con Evolution.";
+            }
+            else
+            {
+                _qrBase64 = res.QrBase64;
+                if (string.IsNullOrEmpty(_qrBase64))
+                {
+                    _qrError = "Evolution acepto la instancia pero no devolvio QR. Espera unos segundos y presiona 'Verificar estado'.";
+                }
+            }
+        }
+        catch (Exception ex) { _qrError = ex.Message; }
+        finally { _qrBusy = false; }
+        await Reload();
+    }
+
+    private async Task RefreshQrLine()
+    {
+        if (_qrLine is null) { return; }
+        _qrBusy = true;
+        try
+        {
+            var dto = await Connector.RefreshAsync(_qrLine.Id, _actor);
+            if (dto is not null) { _qrLine = dto; }
+            if (dto?.Status == WhatsAppLineStatus.Connected)
+            {
+                _qrError = null;
+                _qrBase64 = null;
+            }
+        }
+        finally { _qrBusy = false; }
+        await Reload();
+    }
+
+    private void CloseQrModal() { _qrLine = null; _qrBase64 = null; _qrError = null; }
+
+    private async Task Disconnect(WhatsAppLineDto line)
+    {
+        if (line.Provider == WhatsAppProvider.Evolution)
+        {
+            await Connector.DisconnectAsync(line.Id, _actor);
+        }
+        else
+        {
+            await LinesSvc.ChangeStatusAsync(line.Id, WhatsAppLineStatus.Disconnected, _actor);
+        }
+        await Reload();
     }
 
     private void ResetForm()
