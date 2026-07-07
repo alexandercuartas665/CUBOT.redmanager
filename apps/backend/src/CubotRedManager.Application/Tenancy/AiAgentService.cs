@@ -1,5 +1,8 @@
+using System.Text;
+using System.Text.Json;
 using CubotRedManager.Application.Abstractions;
 using CubotRedManager.Domain.Entities;
+using CubotRedManager.Domain.Enums;
 using Microsoft.EntityFrameworkCore;
 
 namespace CubotRedManager.Application.Tenancy;
@@ -191,6 +194,141 @@ public sealed class AiAgentService : IAiAgentService
         return true;
     }
 
+    public async Task<AgentExportResult?> ExportAsync(Guid agentId, CancellationToken cancellationToken = default)
+    {
+        if (_tenantContext.TenantId is null) { return null; }
+        var agent = await _db.AiAgents.AsNoTracking().FirstOrDefaultAsync(a => a.Id == agentId, cancellationToken);
+        if (agent is null) { return null; }
+        var resources = await _db.AiAgentResources.AsNoTracking()
+            .Where(r => r.AgentId == agentId).OrderBy(r => r.SortOrder).ToListAsync(cancellationToken);
+        var prompts = await _db.AiAgentPrompts.AsNoTracking()
+            .Where(p => p.AgentId == agentId).OrderBy(p => p.SortOrder).ToListAsync(cancellationToken);
+        var cacheFields = await _db.AiAgentCacheFields.AsNoTracking()
+            .Where(f => f.AgentId == agentId).OrderBy(f => f.SortOrder).ToListAsync(cancellationToken);
+
+        var payload = new AgentExportPayload(
+            Schema: 1,
+            Agent: new AgentExportAgent(
+                agent.Name, agent.Role, agent.Provider.ToString(), agent.Model,
+                agent.SystemPrompt, agent.IsActive, agent.EnableDataContainerMcp, agent.SortOrder),
+            Prompts: prompts.Select(p => new AgentExportPrompt(p.Name, p.Rule, p.Body, p.SortOrder)).ToList(),
+            Resources: resources.Select(r => new AgentExportResource(
+                r.Name, r.ResourceType.ToString(), r.Detail, r.FileUrl, r.FileName, r.SortOrder)).ToList(),
+            CacheFields: cacheFields.Select(f => new AgentExportCacheField(
+                f.FieldKey, f.Label, f.Description, f.SortOrder, f.IsUpdatable)).ToList());
+
+        var opts = new JsonSerializerOptions { WriteIndented = true };
+        var bytes = JsonSerializer.SerializeToUtf8Bytes(payload, opts);
+        return new AgentExportResult($"{Slugify(agent.Name)}.json", bytes);
+    }
+
+    public async Task<AgentImportResult> ImportAsync(byte[] jsonBytes, Guid actorUserId, CancellationToken cancellationToken = default)
+    {
+        if (_tenantContext.TenantId is not Guid tenantId) { return new AgentImportResult(false, null, "No hay agencia activa."); }
+        AgentExportPayload? payload;
+        try
+        {
+            var opts = new JsonSerializerOptions { PropertyNameCaseInsensitive = true };
+            payload = JsonSerializer.Deserialize<AgentExportPayload>(jsonBytes, opts);
+        }
+        catch (Exception ex) { return new AgentImportResult(false, null, $"JSON invalido: {ex.Message}"); }
+        if (payload is null || payload.Agent is null)
+        {
+            return new AgentImportResult(false, null, "El archivo no contiene un agente valido.");
+        }
+        if (payload.Schema != 1)
+        {
+            return new AgentImportResult(false, null, $"Version de schema no soportada ({payload.Schema}). Este sistema entiende schema 1.");
+        }
+
+        // Nombre unico por tenant (case-insensitive). Rechaza si existe.
+        var normalized = payload.Agent.Name?.Trim() ?? "";
+        if (string.IsNullOrWhiteSpace(normalized))
+        {
+            return new AgentImportResult(false, null, "El agente no tiene nombre.");
+        }
+        var exists = await _db.AiAgents.AsNoTracking()
+            .AnyAsync(a => a.Name.ToLower() == normalized.ToLower(), cancellationToken);
+        if (exists)
+        {
+            return new AgentImportResult(false, null, $"Ya existe un agente llamado '{normalized}' en esta agencia. Renombralo antes de importar.");
+        }
+
+        var nextOrder = (await _db.AiAgents.Select(a => (int?)a.SortOrder).MaxAsync(cancellationToken) ?? -1) + 1;
+        var agent = new AiAgent
+        {
+            TenantId = tenantId,
+            Name = normalized,
+            Role = payload.Agent.Role,
+            Provider = Enum.TryParse<AiProvider>(payload.Agent.Provider, ignoreCase: true, out var prov) ? prov : AiProvider.Claude,
+            Model = payload.Agent.Model,
+            SystemPrompt = payload.Agent.SystemPrompt ?? "",
+            IsActive = false, // Nunca se importa encendido: el operador debe revisarlo antes de activarlo.
+            EnableDataContainerMcp = payload.Agent.EnableDataContainerMcp,
+            SortOrder = nextOrder
+        };
+        _db.AiAgents.Add(agent);
+        await _db.SaveChangesAsync(cancellationToken);
+
+        if (payload.Prompts is not null)
+        {
+            foreach (var p in payload.Prompts)
+            {
+                _db.AiAgentPrompts.Add(new AiAgentPrompt
+                {
+                    TenantId = tenantId, AgentId = agent.Id,
+                    Name = p.Name ?? "", Rule = p.Rule, Body = p.Body ?? "", SortOrder = p.SortOrder
+                });
+            }
+        }
+        if (payload.Resources is not null)
+        {
+            foreach (var r in payload.Resources)
+            {
+                // FileUrl del origen puede no existir en este servidor; lo dejamos como referencia
+                // textual y el operador re-sube el archivo desde la UI si es necesario.
+                _db.AiAgentResources.Add(new AiAgentResource
+                {
+                    TenantId = tenantId, AgentId = agent.Id,
+                    Name = r.Name ?? "",
+                    ResourceType = Enum.TryParse<AgentResourceType>(r.ResourceType, ignoreCase: true, out var rt) ? rt : AgentResourceType.Text,
+                    Detail = r.Detail, FileUrl = null, FileName = r.FileName,
+                    SortOrder = r.SortOrder
+                });
+            }
+        }
+        if (payload.CacheFields is not null)
+        {
+            foreach (var f in payload.CacheFields)
+            {
+                _db.AiAgentCacheFields.Add(new AiAgentCacheField
+                {
+                    TenantId = tenantId, AgentId = agent.Id,
+                    FieldKey = f.FieldKey ?? "", Label = f.Label ?? "", Description = f.Description,
+                    SortOrder = f.SortOrder, IsUpdatable = f.IsUpdatable
+                });
+            }
+        }
+        await _db.SaveChangesAsync(cancellationToken);
+        _audit.Write(actorUserId, "ai-agent.import", nameof(AiAgent), agent.Id,
+            previousValue: null, newValue: new { agent.Name, PromptCount = payload.Prompts?.Count ?? 0, ResourceCount = payload.Resources?.Count ?? 0 },
+            tenantId: tenantId);
+        return new AgentImportResult(true, agent.Id, null);
+    }
+
+    private static string Slugify(string name)
+    {
+        var sb = new StringBuilder();
+        foreach (var ch in name.Trim().ToLowerInvariant())
+        {
+            if (char.IsLetterOrDigit(ch)) { sb.Append(ch); }
+            else if (ch is ' ' or '-' or '_') { sb.Append('-'); }
+        }
+        var slug = sb.ToString().Trim('-');
+        while (slug.Contains("--")) { slug = slug.Replace("--", "-"); }
+        return string.IsNullOrEmpty(slug) ? "agente" : slug;
+    }
+
     private static AiAgentDto Map(AiAgent a, int resourceCount) =>
         new(a.Id, a.Name, a.Role, a.Provider, a.Model, a.SystemPrompt, a.IsActive, a.EnableDataContainerMcp, a.SortOrder, resourceCount);
 
@@ -200,3 +338,23 @@ public sealed class AiAgentService : IAiAgentService
     private static AiAgentPromptDto MapPrompt(AiAgentPrompt p) =>
         new(p.Id, p.AgentId, p.Name, p.Rule, p.Body, p.SortOrder);
 }
+
+// --- Schema del JSON export/import (v1) ---
+internal sealed record AgentExportPayload(
+    int Schema,
+    AgentExportAgent? Agent,
+    List<AgentExportPrompt>? Prompts,
+    List<AgentExportResource>? Resources,
+    List<AgentExportCacheField>? CacheFields);
+
+internal sealed record AgentExportAgent(
+    string Name, string? Role, string Provider, string? Model, string SystemPrompt,
+    bool IsActive, bool EnableDataContainerMcp, int SortOrder);
+
+internal sealed record AgentExportPrompt(string Name, string? Rule, string Body, int SortOrder);
+
+internal sealed record AgentExportResource(
+    string Name, string ResourceType, string? Detail, string? FileUrl, string? FileName, int SortOrder);
+
+internal sealed record AgentExportCacheField(
+    string FieldKey, string Label, string? Description, int SortOrder, bool IsUpdatable);

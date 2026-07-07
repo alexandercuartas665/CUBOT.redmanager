@@ -28,7 +28,10 @@
         <h1 class="page-title" style="margin-top:12px;">Agentes <span>IA</span></h1>
         <p class="page-sub" style="margin-bottom:0;">Configura cada agente: elige el servicio de IA disponible, define su comportamiento, agrega recursos y ponlo en produccion o apagalo.</p>
     </div>
-    <button class="btn btn-primary" @onclick="OpenNew">+ Nuevo agente</button>
+    <div style="display:flex;gap:8px;">
+        <button class="btn btn-outline-secondary" @onclick="OpenImport" disabled="@_busy">Importar JSON</button>
+        <button class="btn btn-primary" @onclick="OpenNew">+ Nuevo agente</button>
+    </div>
 </div>
 
 @if (!_loading && _usage is not null)
@@ -87,6 +90,7 @@ else
                 <div class="ag-card-top">
                     <span class="ag-provider @ProviderClass(a.Provider)">@ProviderLabel(a.Provider)</span>
                     <span class="badge @(a.IsActive ? "bg-success" : "bg-secondary")">@(a.IsActive ? "En produccion" : "Apagado")</span>
+                    <button class="ag-card-del" title="Exportar JSON" @onclick="() => ExportAgentAsync(a)" disabled="@_busy" style="margin-right:2px;font-size:16px;">&darr;</button>
                     <button class="ag-card-del" title="Eliminar agente" @onclick="() => OpenDeleteAgent(a)" disabled="@_busy">&times;</button>
                 </div>
                 <div class="ag-name">@a.Name</div>
@@ -721,6 +725,49 @@ else
                 {
                     <button class="btn btn-danger" @onclick="ConfirmDeleteAgentAsync" disabled="@(_busy || !string.Equals(_delConfirmName, _deleteAgent.Name, StringComparison.Ordinal))">Eliminar definitivamente</button>
                 }
+            </div>
+        </div>
+    </div>
+}
+
+@* ===== Modal: importar agente desde JSON ===== *@
+@if (_importOpen)
+{
+    <div class="modal-overlay" @onclick="CloseImport">
+        <div class="modal-dialog" style="max-width:520px;" @onclick:stopPropagation="true">
+            <div class="modal-head">
+                <h3>Importar agente desde JSON</h3>
+                <button class="modal-close" @onclick="CloseImport">&times;</button>
+            </div>
+            <div class="modal-body">
+                <p class="text-muted" style="font-size:0.9rem;">
+                    Elige un archivo <code>.json</code> generado con "Exportar" desde otro tenant. El agente
+                    se creara <strong>apagado</strong> y con el mismo nombre. Si ya existe un agente con
+                    ese nombre en esta agencia, la importacion se rechaza.
+                </p>
+                <div class="field">
+                    <InputFile OnChange="OnImportFileSelected" accept=".json" class="form-control" />
+                    @if (_importFile is not null)
+                    {
+                        <div class="text-muted" style="font-size:11px;margin-top:6px;">
+                            Archivo: @_importFile.Name (@(_importFile.Size) bytes)
+                        </div>
+                    }
+                </div>
+                @if (_importError is not null)
+                {
+                    <div class="text-danger small">@_importError</div>
+                }
+                @if (_importOkMessage is not null)
+                {
+                    <div class="text-success small">@_importOkMessage</div>
+                }
+            </div>
+            <div class="modal-foot">
+                <button class="btn btn-outline-secondary" @onclick="CloseImport">Cerrar</button>
+                <button class="btn btn-primary" @onclick="ImportAgentAsync" disabled="@(_busy || _importFile is null)">
+                    @(_busy ? "Importando..." : "Importar")
+                </button>
             </div>
         </div>
     </div>
@@ -1426,4 +1473,73 @@ else
         _ => "Descripcion / cuando usarlo"
     };
     private static string Trim(string s, int n) => s.Length > n ? s[..n] + "..." : s;
+
+    // ===== Export / Import JSON de agentes =====
+
+    private bool _importOpen;
+    private Microsoft.AspNetCore.Components.Forms.IBrowserFile? _importFile;
+    private string? _importError;
+    private string? _importOkMessage;
+
+    private async Task ExportAgentAsync(AiAgentDto agent)
+    {
+        _busy = true;
+        try
+        {
+            var result = await AgentsSvc.ExportAsync(agent.Id);
+            if (result is null) { return; }
+            var base64 = Convert.ToBase64String(result.JsonBytes);
+            await JS.InvokeVoidAsync("cubotDownloadBase64", result.FileName, base64, "application/json");
+        }
+        finally { _busy = false; }
+    }
+
+    private void OpenImport()
+    {
+        _importOpen = true;
+        _importFile = null;
+        _importError = null;
+        _importOkMessage = null;
+    }
+
+    private void CloseImport()
+    {
+        _importOpen = false;
+        _importFile = null;
+        _importError = null;
+        _importOkMessage = null;
+    }
+
+    private void OnImportFileSelected(Microsoft.AspNetCore.Components.Forms.InputFileChangeEventArgs e)
+    {
+        _importFile = e.File;
+        _importError = null;
+        _importOkMessage = null;
+    }
+
+    private async Task ImportAgentAsync()
+    {
+        if (_importFile is null) { return; }
+        _importError = null;
+        _importOkMessage = null;
+        _busy = true;
+        try
+        {
+            var actor = await ActorAsync();
+            // Limite defensivo de 4 MB para el JSON de un agente (es texto).
+            await using var stream = _importFile.OpenReadStream(4 * 1024 * 1024);
+            using var memory = new MemoryStream();
+            await stream.CopyToAsync(memory);
+            var res = await AgentsSvc.ImportAsync(memory.ToArray(), actor);
+            if (!res.Ok)
+            {
+                _importError = res.Error ?? "No se pudo importar.";
+                return;
+            }
+            _importOkMessage = "Agente importado. Revisalo y activa la produccion cuando estes listo.";
+            await ReloadAsync();
+        }
+        catch (Exception ex) { _importError = ex.Message; }
+        finally { _busy = false; }
+    }
 }
