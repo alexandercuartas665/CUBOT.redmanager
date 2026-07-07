@@ -111,7 +111,7 @@ else
                     }
                     else if (!string.IsNullOrEmpty(_qrBase64))
                     {
-                        <img class="qr-img" src="data:image/png;base64,@_qrBase64" alt="QR de conexion" />
+                        <img class="qr-img" src="@QrSrc(_qrBase64)" alt="QR de conexion" />
                         <div class="qr-hint">
                             Abre <strong>WhatsApp</strong> en tu celular &rarr; <strong>Dispositivos vinculados</strong> &rarr;
                             <strong>Vincular un dispositivo</strong> y escanea este codigo. El QR se refresca cada minuto;
@@ -474,5 +474,11 @@ else
         WhatsAppProvider.Cloud => "Meta Cloud",
         _ => "Evolution"
     };
+
+    /// <summary>Normaliza el QR de Evolution: si viene como data URL lo dejamos tal cual;
+    /// si viene como base64 puro (sin prefijo) le anadimos "data:image/png;base64,". Sin esto,
+    /// concatenar el prefijo ciegamente produce un src duplicado que el navegador rechaza.</summary>
+    private static string QrSrc(string qr)
+        => qr.StartsWith("data:", StringComparison.OrdinalIgnoreCase) ? qr : $"data:image/png;base64,{qr}";
 }
 
