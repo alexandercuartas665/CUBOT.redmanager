@@ -85,6 +85,9 @@ else
             <button class="btn btn-outline-secondary dc-danger" @onclick="DeleteContainerAsync">Eliminar modelo</button>
             <button class="btn btn-primary" @onclick="OpenNewRow">+ Nueva fila</button>
             <button class="btn btn-outline-secondary" @onclick="OpenImport">Importar Excel</button>
+            <button class="btn btn-outline-secondary" @onclick="ExportExcelAsync" disabled="@_busy">
+                @(_busy ? "Exportando..." : "Exportar Excel")
+            </button>
         </div>
     </div>
 
@@ -622,6 +625,25 @@ else
         _importFile = e.File;
         _importError = null;
         _importResult = null;
+    }
+
+    private async Task ExportExcelAsync()
+    {
+        if (_selected is null) { return; }
+        _busy = true;
+        try
+        {
+            var result = await DataSvc.ExportToExcelAsync(_selected.Id);
+            if (result is null) { return; }
+            // Dispara la descarga en el navegador via un data URL (mismo mecanismo que ya usan
+            // otras paginas del proyecto para bajar archivos generados server-side).
+            var base64 = Convert.ToBase64String(result.Bytes);
+            await JS.InvokeVoidAsync("cubotDownloadBase64",
+                result.FileName,
+                base64,
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+        }
+        finally { _busy = false; }
     }
 
     private async Task ImportAsync()

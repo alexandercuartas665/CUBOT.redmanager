@@ -68,4 +68,11 @@ public interface IDataContainerService
     Task<DataContainerRowDto?> SaveRowAsync(SaveDataRowRequest req, Guid actorUserId, CancellationToken ct = default);
     Task<bool> DeleteRowAsync(Guid rowId, Guid actorUserId, CancellationToken ct = default);
     Task<DataImportResult> ImportFromExcelAsync(Guid containerId, Stream xlsxStream, Guid actorUserId, CancellationToken ct = default);
+
+    /// <summary>Genera un xlsx con las columnas del contenedor como encabezados y una fila por
+    /// cada registro. El formato producido es re-importable con <see cref="ImportFromExcelAsync"/>.
+    /// Devuelve null si el contenedor no existe o no hay tenant activo.</summary>
+    Task<DataExportResult?> ExportToExcelAsync(Guid containerId, CancellationToken ct = default);
 }
+
+public sealed record DataExportResult(string FileName, byte[] Bytes);
