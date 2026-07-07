@@ -28,7 +28,9 @@ public sealed class AutoReplyConfigService : IAutoReplyConfigService
             return new AutoReplyConfigDto(
                 null, socialAccountId, false, AutoReplyMode.Mixed, 20, 3, 10, null,
                 AutoReplyFrequency.Every30m, "*/30 * * * *", 0x1FFF00, 0x7F, null,
-                null, Array.Empty<AutoReplyTemplateDto>());
+                null,
+                false, null, AutoReplySummaryTargetType.Phone, null, null,
+                Array.Empty<AutoReplyTemplateDto>());
         }
         var templates = await _db.AutoReplyTemplates.AsNoTracking()
             .Where(t => t.ConfigId == cfg.Id)
@@ -72,6 +74,11 @@ public sealed class AutoReplyConfigService : IAutoReplyConfigService
         cfg.ActiveDaysOfWeekMask = request.ActiveDaysOfWeekMask;
         cfg.DefaultTemplate = string.IsNullOrWhiteSpace(request.DefaultTemplate) ? null : request.DefaultTemplate.Trim();
         cfg.AiAgentId = request.AiAgentId;
+        cfg.SummaryEnabled = request.SummaryEnabled;
+        cfg.SummaryLineId = request.SummaryLineId;
+        cfg.SummaryTargetType = request.SummaryTargetType;
+        cfg.SummaryTarget = string.IsNullOrWhiteSpace(request.SummaryTarget) ? null : request.SummaryTarget.Trim();
+        cfg.SummaryTemplate = string.IsNullOrWhiteSpace(request.SummaryTemplate) ? null : request.SummaryTemplate;
 
         // Reemplazar plantillas (full sync).
         foreach (var existing in cfg.Templates.ToList())
@@ -169,7 +176,9 @@ public sealed class AutoReplyConfigService : IAutoReplyConfigService
     private static AutoReplyConfigDto Map(AutoReplyConfig c, IReadOnlyList<AutoReplyTemplateDto> templates) =>
         new(c.Id, c.SocialAccountId, c.IsActive, c.Mode, c.MaxRepliesPerRun,
             c.DelayMinSeconds, c.DelayMaxSeconds, c.BlacklistKeywords, c.Frequency, c.CronCustom,
-            c.ActiveHoursMask, c.ActiveDaysOfWeekMask, c.DefaultTemplate, c.AiAgentId, templates);
+            c.ActiveHoursMask, c.ActiveDaysOfWeekMask, c.DefaultTemplate, c.AiAgentId,
+            c.SummaryEnabled, c.SummaryLineId, c.SummaryTargetType, c.SummaryTarget, c.SummaryTemplate,
+            templates);
 
     public async Task<IReadOnlyList<AutoReplyAgentOptionDto>> ListAgentOptionsAsync(CancellationToken cancellationToken = default)
     {

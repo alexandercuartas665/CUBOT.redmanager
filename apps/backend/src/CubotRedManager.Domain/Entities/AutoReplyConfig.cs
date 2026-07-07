@@ -52,4 +52,22 @@ public class AutoReplyConfig : TenantEntity
     public AiAgent? AiAgent { get; set; }
 
     public ICollection<AutoReplyTemplate> Templates { get; set; } = new List<AutoReplyTemplate>();
+
+    // === Resumen por WhatsApp al terminar cada corrida (solo Evolution en el corte actual) ===
+    /// <summary>Si esta encendido, el worker envia un mensaje resumen al finalizar cada ejecucion.</summary>
+    public bool SummaryEnabled { get; set; }
+
+    /// <summary>Linea WhatsApp Evolution del tenant a traves de la cual se envia el resumen.</summary>
+    public Guid? SummaryLineId { get; set; }
+    public WhatsAppLine? SummaryLine { get; set; }
+
+    /// <summary>Tipo del destinatario del resumen: telefono directo o grupo WhatsApp.</summary>
+    public AutoReplySummaryTargetType SummaryTargetType { get; set; } = AutoReplySummaryTargetType.Phone;
+
+    /// <summary>Destinatario: E.164 sin '+' si Phone; JID del grupo (xxxxxx@g.us) si Group.</summary>
+    public string? SummaryTarget { get; set; }
+
+    /// <summary>Plantilla del mensaje con placeholders: {{cuenta}}, {{ejecutado_a}}, {{revisados}},
+    /// {{respondidos}}, {{fallidos}}, {{comentarios}}.</summary>
+    public string? SummaryTemplate { get; set; }
 }

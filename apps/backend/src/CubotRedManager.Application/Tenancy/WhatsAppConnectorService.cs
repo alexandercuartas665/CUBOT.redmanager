@@ -271,6 +271,26 @@ public sealed class WhatsAppConnectorService : IWhatsAppConnectorService
         return (null!, (baseUrl, apiKey, EvoInstance(line), digits));
     }
 
+    public async Task<LineGroupsResult> FetchGroupsAsync(Guid lineId, CancellationToken cancellationToken = default)
+    {
+        var line = await _db.WhatsAppLines.FirstOrDefaultAsync(l => l.Id == lineId, cancellationToken);
+        if (line is null) { return new LineGroupsResult(false, Array.Empty<LineGroupDto>(), "La linea no existe."); }
+        if (line.Provider != WhatsAppProvider.Evolution)
+        {
+            return new LineGroupsResult(false, Array.Empty<LineGroupDto>(), "Solo se listan grupos de lineas Evolution.");
+        }
+        if (line.Status != WhatsAppLineStatus.Connected)
+        {
+            return new LineGroupsResult(false, Array.Empty<LineGroupDto>(), "La linea no esta conectada.");
+        }
+        var server = await ResolveServerAsync(cancellationToken);
+        if (server is null) { return new LineGroupsResult(false, Array.Empty<LineGroupDto>(), "No hay servidor Evolution configurado."); }
+        var (baseUrl, apiKey) = server.Value;
+        var res = await _client.FetchGroupsAsync(baseUrl, apiKey, EvoInstance(line), cancellationToken);
+        var mapped = res.Groups.Select(g => new LineGroupDto(g.Jid, g.Name, g.ParticipantCount)).ToList();
+        return new LineGroupsResult(res.Ok, mapped, res.Error);
+    }
+
     public async Task<int> ApplyWebhookToConnectedLinesAsync(Guid actorUserId, CancellationToken cancellationToken = default)
     {
         var (webhookUrl, webhookToken) = await EffectiveWebhookAsync(cancellationToken);

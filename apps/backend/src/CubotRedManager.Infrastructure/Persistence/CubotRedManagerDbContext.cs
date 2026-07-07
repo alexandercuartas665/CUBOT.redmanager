@@ -137,6 +137,7 @@ public class CubotRedManagerDbContext : DbContext, IApplicationDbContext, IDataP
         modelBuilder.Entity<AutoReplyConfig>().HasIndex(x => x.SocialAccountId).IsUnique();
         modelBuilder.Entity<AutoReplyConfig>().Property(x => x.Mode).HasConversion<string>();
         modelBuilder.Entity<AutoReplyConfig>().Property(x => x.Frequency).HasConversion<string>();
+        modelBuilder.Entity<AutoReplyConfig>().Property(x => x.SummaryTargetType).HasConversion<string>();
         modelBuilder.Entity<AutoReplyConfig>().HasMany(c => c.Templates).WithOne(t => t.Config!).HasForeignKey(t => t.ConfigId).OnDelete(DeleteBehavior.Cascade);
         modelBuilder.Entity<AutoReplyTemplate>().HasIndex(x => new { x.ConfigId, x.SortOrder });
         modelBuilder.Entity<AutoReplyJobLog>().Property(x => x.Status).HasConversion<string>();

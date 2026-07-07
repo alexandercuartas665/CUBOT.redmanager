@@ -173,6 +173,46 @@ public sealed class EvolutionApiClient : IEvolutionApiClient
         return await PostSendAsync(baseUrl, apiKey, $"/webhook/set/{Uri.EscapeDataString(instanceName)}", body, cancellationToken);
     }
 
+    public async Task<EvolutionGroupsResult> FetchGroupsAsync(string baseUrl, string apiKey, string instanceName, CancellationToken cancellationToken = default)
+    {
+        // Evolution API v2 expone /group/fetchAllGroups/{instance}?getParticipants=false
+        var path = $"/group/fetchAllGroups/{Uri.EscapeDataString(instanceName)}?getParticipants=false";
+        var groups = new List<EvolutionGroupInfo>();
+        try
+        {
+            using var resp = await SendAsync(HttpMethod.Get, baseUrl, path, apiKey, content: null, cancellationToken);
+            var json = await resp.Content.ReadAsStringAsync(cancellationToken);
+            if (!resp.IsSuccessStatusCode)
+            {
+                return new EvolutionGroupsResult(false, groups, $"HTTP {(int)resp.StatusCode}: {Trim(json)}");
+            }
+            using var doc = JsonDocument.Parse(json);
+            var root = doc.RootElement;
+            // La respuesta puede venir como arreglo directo o envuelto en {"groups":[...]}
+            JsonElement arr = default;
+            if (root.ValueKind == JsonValueKind.Array) { arr = root; }
+            else if (root.ValueKind == JsonValueKind.Object && root.TryGetProperty("groups", out var g) && g.ValueKind == JsonValueKind.Array) { arr = g; }
+            else { return new EvolutionGroupsResult(true, groups, null); }
+
+            foreach (var item in arr.EnumerateArray())
+            {
+                string? jid = TryStr(item, "id") ?? TryStr(item, "remoteJid");
+                if (string.IsNullOrWhiteSpace(jid) || !jid!.EndsWith("@g.us", StringComparison.OrdinalIgnoreCase)) { continue; }
+                string? name = TryStr(item, "subject") ?? TryStr(item, "name") ?? jid;
+                int? count = null;
+                if (item.TryGetProperty("size", out var sz) && sz.ValueKind == JsonValueKind.Number && sz.TryGetInt32(out var s)) { count = s; }
+                else if (item.TryGetProperty("participants", out var pp) && pp.ValueKind == JsonValueKind.Array) { count = pp.GetArrayLength(); }
+                groups.Add(new EvolutionGroupInfo(jid, name!, count));
+            }
+            return new EvolutionGroupsResult(true, groups, null);
+        }
+        catch (Exception ex) { return new EvolutionGroupsResult(false, groups, ex.Message); }
+    }
+
+    private static string? TryStr(JsonElement el, string prop)
+        => el.ValueKind == JsonValueKind.Object && el.TryGetProperty(prop, out var v) && v.ValueKind == JsonValueKind.String
+            ? v.GetString() : null;
+
     private async Task<EvolutionSendResult> PostSendAsync(string baseUrl, string apiKey, string path, object body, CancellationToken ct)
     {
         try

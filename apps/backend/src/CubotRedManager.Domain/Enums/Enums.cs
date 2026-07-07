@@ -194,6 +194,14 @@ public enum AutoReplyJobStatus
     Error
 }
 
+/// <summary>Destinatario del resumen WhatsApp que envia el worker de autorespuesta al terminar
+/// cada corrida: un telefono directo o un grupo de WhatsApp.</summary>
+public enum AutoReplySummaryTargetType
+{
+    Phone,
+    Group
+}
+
 /// <summary>Trigger que dispara una regla de automatizacion (Modulo Automatizaciones).</summary>
 public enum AutomationTrigger
 {

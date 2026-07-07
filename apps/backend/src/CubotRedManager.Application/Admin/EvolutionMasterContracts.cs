@@ -21,6 +21,10 @@ public sealed record EvolutionInstanceResult(bool Ok, string? QrBase64, string? 
 
 public sealed record EvolutionSendResult(bool Ok, string? Error);
 
+public sealed record EvolutionGroupInfo(string Jid, string Name, int? ParticipantCount);
+
+public sealed record EvolutionGroupsResult(bool Ok, IReadOnlyList<EvolutionGroupInfo> Groups, string? Error);
+
 /// <summary>Cliente HTTP del servidor Evolution API. Implementacion en Infrastructure.</summary>
 public interface IEvolutionApiClient
 {
@@ -34,6 +38,9 @@ public interface IEvolutionApiClient
     Task<EvolutionSendResult> SendAudioAsync(string baseUrl, string apiKey, string instanceName, string phone, string base64, CancellationToken cancellationToken = default);
     Task<EvolutionSendResult> SendLocationAsync(string baseUrl, string apiKey, string instanceName, string phone, double latitude, double longitude, string? name, string? address, CancellationToken cancellationToken = default);
     Task<EvolutionSendResult> SetWebhookAsync(string baseUrl, string apiKey, string instanceName, string webhookUrl, string token, CancellationToken cancellationToken = default);
+
+    /// <summary>Lista los grupos de WhatsApp de la instancia (dropdown de destinatarios de resumen).</summary>
+    Task<EvolutionGroupsResult> FetchGroupsAsync(string baseUrl, string apiKey, string instanceName, CancellationToken cancellationToken = default);
 }
 
 public interface IEvolutionMasterConfigService

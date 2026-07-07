@@ -105,7 +105,8 @@ public sealed class AutoReplyWorker : BackgroundService
                         c.Mode, c.MaxRepliesPerRun, c.DelayMinSeconds, c.DelayMaxSeconds,
                         c.BlacklistKeywords, c.DefaultTemplate, AccountId = a.Id,
                         AccountExternalId = a.ExternalId, AccountHandle = a.Handle,
-                        c.AiAgentId
+                        c.AiAgentId,
+                        c.SummaryEnabled, c.SummaryLineId, c.SummaryTargetType, c.SummaryTarget, c.SummaryTemplate
                     })
                 .ToListAsync(ct);
             targets = rows.Select(r => new AutoReplyTarget(
@@ -113,7 +114,8 @@ public sealed class AutoReplyWorker : BackgroundService
                     r.Frequency, r.CronCustom, r.ActiveHoursMask, r.ActiveDaysOfWeekMask,
                     r.Mode, r.MaxRepliesPerRun, r.DelayMinSeconds, r.DelayMaxSeconds,
                     r.BlacklistKeywords, r.DefaultTemplate,
-                    r.AccountExternalId, r.AccountHandle, r.AiAgentId))
+                    r.AccountExternalId, r.AccountHandle, r.AiAgentId,
+                    r.SummaryEnabled, r.SummaryLineId, r.SummaryTargetType, r.SummaryTarget, r.SummaryTemplate))
                 .ToList();
         }
 
@@ -194,6 +196,8 @@ public sealed class AutoReplyWorker : BackgroundService
         using var scopeTenant = _scopeFactory.CreateScope();
         var ambient = scopeTenant.ServiceProvider.GetRequiredService<IAmbientTenantOverride>();
         ambient.Set(t.TenantId, SystemUserId);
+        // Bitacora de esta corrida para el resumen WhatsApp (autor / comentario / respuesta).
+        var summaryEntries = new List<(string author, string comment, string reply)>();
         try
         {
             var db = scopeTenant.ServiceProvider.GetRequiredService<CubotRedManagerDbContext>();
@@ -470,6 +474,7 @@ public sealed class AutoReplyWorker : BackgroundService
                     tracked.Status = InboxStatus.Replied;
                 }
                 await db.SaveChangesAsync(ct);
+                summaryEntries.Add((msg.AuthorName ?? "(anon)", msg.Body ?? "", replyText));
                 replied++;
             }
 
@@ -478,9 +483,57 @@ public sealed class AutoReplyWorker : BackgroundService
                 : (replied > 0 ? AutoReplyJobStatus.Warning : AutoReplyJobStatus.Error);
             trace.AppendLine($"[INFO] Cierre: processed={processed} replied={replied} omitted={omitted} errors={errors}");
             await WriteLogAsync(db, t, finalStatus, startedAt, processed, replied, errors, omitted, trace, ct);
+
+            // 4) Resumen por WhatsApp (Evolution) — siempre que este habilitado. Best effort:
+            // errores aqui no propagan a la corrida principal, solo se logean en trace.
+            if (t.SummaryEnabled)
+            {
+                try { await SendSummaryAsync(scopeTenant.ServiceProvider, t, processed, replied, errors, summaryEntries, ct); }
+                catch (Exception summaryEx) { _logger.LogWarning(summaryEx, "Fallo enviando resumen WA de cuenta {acc}", t.SocialAccountId); }
+            }
         }
         finally { ambient.Set(null, null); }
     }
+
+    private async Task SendSummaryAsync(IServiceProvider sp, AutoReplyTarget t,
+        int processed, int replied, int errors,
+        List<(string author, string comment, string reply)> entries, CancellationToken ct)
+    {
+        if (t.SummaryLineId is null || string.IsNullOrWhiteSpace(t.SummaryTarget))
+        {
+            _logger.LogInformation("Resumen WA de cuenta {acc}: config incompleta (linea o destinatario vacios).", t.SocialAccountId);
+            return;
+        }
+        var connector = sp.GetRequiredService<CubotRedManager.Application.Tenancy.IWhatsAppConnectorService>();
+        var nowLocal = TimeZoneInfo.ConvertTime(DateTimeOffset.UtcNow, _tz);
+        var tpl = t.SummaryTemplate;
+        if (string.IsNullOrWhiteSpace(tpl))
+        {
+            tpl = "Resumen autorespuesta cuenta {{cuenta}}\nEjecutado: {{ejecutado_a}}\nRevisados: {{revisados}} - Respondidos: {{respondidos}} - Fallidos: {{fallidos}}\n\n{{comentarios}}";
+        }
+
+        var comentariosBlock = entries.Count == 0
+            ? "(ninguna respuesta enviada)"
+            : string.Join("\n", entries.Select(e => $"- {e.author}: {Truncate(e.comment, 80)} -> {Truncate(e.reply, 80)}"));
+
+        var msg = tpl
+            .Replace("{{cuenta}}", t.AccountHandle ?? t.AccountExternalId ?? "(cuenta)")
+            .Replace("{{ejecutado_a}}", nowLocal.ToString("yyyy-MM-dd HH:mm"))
+            .Replace("{{revisados}}", processed.ToString())
+            .Replace("{{respondidos}}", replied.ToString())
+            .Replace("{{fallidos}}", errors.ToString())
+            .Replace("{{comentarios}}", comentariosBlock);
+
+        // Para Phone: numero E.164 sin '+'. Para Group: el JID xxx@g.us (Evolution acepta el JID
+        // directamente como destino en el mismo endpoint sendText).
+        var target = t.SummaryTarget!.Trim();
+        var res = await connector.SendTestAsync(t.SummaryLineId.Value, target, msg, SystemUserId, ct);
+        if (!res.Ok)
+        {
+            _logger.LogWarning("Resumen WA de cuenta {acc}: envio fallo - {err}", t.SocialAccountId, res.Error);
+        }
+    }
+
 
     // ----------------- helpers -----------------
 
@@ -694,7 +747,9 @@ public sealed class AutoReplyWorker : BackgroundService
         SocialAccountStatus AccountStatus, AutoReplyFrequency Frequency, string? CronCustom,
         int ActiveHoursMask, byte ActiveDaysOfWeekMask, AutoReplyMode Mode, int MaxRepliesPerRun,
         int DelayMinSeconds, int DelayMaxSeconds, string? BlacklistKeywords, string? DefaultTemplate,
-        string? AccountExternalId, string? AccountHandle, Guid? AiAgentId);
+        string? AccountExternalId, string? AccountHandle, Guid? AiAgentId,
+        bool SummaryEnabled, Guid? SummaryLineId, AutoReplySummaryTargetType SummaryTargetType,
+        string? SummaryTarget, string? SummaryTemplate);
 
     private sealed record TemplateRow(string Keywords, string Body);
 }

@@ -19,6 +19,12 @@ public sealed record AutoReplyConfigDto(
     byte ActiveDaysOfWeekMask,
     string? DefaultTemplate,
     Guid? AiAgentId,
+    // Resumen WhatsApp (Evolution) tras cada corrida del worker.
+    bool SummaryEnabled,
+    Guid? SummaryLineId,
+    AutoReplySummaryTargetType SummaryTargetType,
+    string? SummaryTarget,
+    string? SummaryTemplate,
     IReadOnlyList<AutoReplyTemplateDto> Templates);
 
 /// <summary>Datos para guardar (upsert) la config + plantillas de una cuenta.</summary>
@@ -36,6 +42,11 @@ public sealed record SaveAutoReplyConfigRequest(
     byte ActiveDaysOfWeekMask,
     string? DefaultTemplate,
     Guid? AiAgentId,
+    bool SummaryEnabled,
+    Guid? SummaryLineId,
+    AutoReplySummaryTargetType SummaryTargetType,
+    string? SummaryTarget,
+    string? SummaryTemplate,
     IReadOnlyList<AutoReplyTemplateInput> Templates);
 
 /// <summary>Resumen breve de un agente IA del tenant para llenar el dropdown del modal.</summary>
