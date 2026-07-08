@@ -342,10 +342,10 @@ else
                     Al terminar cada corrida del worker, se envia un mensaje resumen por WhatsApp.
                     Solo se puede elegir una linea <strong>Evolution</strong>; para Cloud/YCloud es rechazado.
                 </p>
-                <div class="field">
-                    <label class="ag-switch" style="display:inline-flex;align-items:center;gap:8px;">
-                        <input type="checkbox" @bind="_arSummaryEnabled" />
-                        <span>Enviar resumen por WhatsApp</span>
+                <div class="field" style="margin-bottom:14px;">
+                    <label style="display:inline-flex;align-items:center;gap:10px;cursor:pointer;user-select:none;">
+                        <input type="checkbox" @bind="_arSummaryEnabled" style="width:18px;height:18px;cursor:pointer;" />
+                        <span style="font-weight:500;">Enviar resumen por WhatsApp</span>
                     </label>
                 </div>
                 @if (_arSummaryEnabled)
