@@ -35,6 +35,10 @@ public interface IWhatsAppConnectorService
 
     /// <summary>Envia una ubicacion desde la linea al numero.</summary>
     Task<LineSendResult> SendLocationAsync(Guid lineId, string phone, double latitude, double longitude, string? name, Guid actorUserId, CancellationToken cancellationToken = default);
+
+    /// <summary>Lista los grupos de WhatsApp visibles desde la instancia Evolution asociada a la
+    /// linea (para poblar dropdowns de destinatario). Devuelve lista vacia + error si aplica.</summary>
+    Task<LineGroupsResult> FetchGroupsAsync(Guid lineId, CancellationToken cancellationToken = default);
 }
 
 /// <summary>Configuracion de servidor Evolution de la agencia: maestro de la plataforma o propio.</summary>
@@ -56,3 +60,6 @@ public sealed record LineConnectResult(bool Ok, string? QrBase64, string? Error)
 
 /// <summary>Resultado de un envio de mensaje de prueba.</summary>
 public sealed record LineSendResult(bool Ok, string? Error);
+
+public sealed record LineGroupDto(string Jid, string Name, int? ParticipantCount);
+public sealed record LineGroupsResult(bool Ok, IReadOnlyList<LineGroupDto> Groups, string? Error);

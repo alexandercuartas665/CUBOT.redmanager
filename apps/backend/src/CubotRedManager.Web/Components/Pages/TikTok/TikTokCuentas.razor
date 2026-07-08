@@ -8,6 +8,8 @@
 @inject ITikTokConnectionService TikTokSvc
 @inject IClientService ClientsSvc
 @inject IAutoReplyConfigService AutoReplySvc
+@inject IWhatsAppLineService LinesSvc
+@inject IWhatsAppConnectorService Connector
 @inject AuthenticationStateProvider AuthProvider
 @inject IJSRuntime JS
 @inject NavigationManager Nav
@@ -172,6 +174,7 @@ else
             <button class="tk-ar-tab @(_arTab == "general" ? "tk-ar-tab-on" : "")" @onclick='() => _arTab = "general"'>General</button>
             <button class="tk-ar-tab @(_arTab == "plantillas" ? "tk-ar-tab-on" : "")" @onclick='() => _arTab = "plantillas"'>Plantillas (@_arTemplates.Count)</button>
             <button class="tk-ar-tab @(_arTab == "programacion" ? "tk-ar-tab-on" : "")" @onclick='() => _arTab = "programacion"'>Programacion</button>
+            <button class="tk-ar-tab @(_arTab == "resumenwa" ? "tk-ar-tab-on" : "")" @onclick='() => _arTab = "resumenwa"'>Resumen WA</button>
         </div>
 
         <div class="tk-modal-body" style="max-height:60vh; overflow-y:auto;">
@@ -332,6 +335,89 @@ else
                         }
                     </div>
                 </div>
+            }
+            else if (_arTab == "resumenwa")
+            {
+                <p class="text-muted" style="font-size:0.92rem;">
+                    Al terminar cada corrida del worker, se envia un mensaje resumen por WhatsApp.
+                    Solo se puede elegir una linea <strong>Evolution</strong>; para Cloud/YCloud es rechazado.
+                </p>
+                <div class="field">
+                    <label class="ag-switch" style="display:inline-flex;align-items:center;gap:8px;">
+                        <input type="checkbox" @bind="_arSummaryEnabled" />
+                        <span>Enviar resumen por WhatsApp</span>
+                    </label>
+                </div>
+                @if (_arSummaryEnabled)
+                {
+                    <div class="tk-ar-grid">
+                        <div class="field">
+                            <label class="form-label">Linea Evolution</label>
+                            <select class="form-control" @bind="_arSummaryLineId" @bind:after="LoadGroupsForSelectedLine">
+                                <option value="">(elige una linea)</option>
+                                @foreach (var l in _arWaLines)
+                                {
+                                    <option value="@l.Id">@l.InstanceName @(l.Status == WhatsAppLineStatus.Connected ? "" : "- desconectada")</option>
+                                }
+                            </select>
+                            @if (_arWaLines.Count == 0)
+                            {
+                                <small class="text-muted">No hay lineas Evolution. Crea una desde "Lineas WhatsApp".</small>
+                            }
+                        </div>
+                        <div class="field">
+                            <label class="form-label">Destinatario</label>
+                            <div style="display:flex;gap:12px;margin-bottom:8px;">
+                                <label style="display:flex;align-items:center;gap:4px;">
+                                    <input type="radio" name="arSTgt" checked="@(_arSummaryTargetType == AutoReplySummaryTargetType.Phone)"
+                                           @onchange="() => { _arSummaryTargetType = AutoReplySummaryTargetType.Phone; _arSummaryTarget = string.Empty; }" />
+                                    Telefono
+                                </label>
+                                <label style="display:flex;align-items:center;gap:4px;">
+                                    <input type="radio" name="arSTgt" checked="@(_arSummaryTargetType == AutoReplySummaryTargetType.Group)"
+                                           @onchange="() => { _arSummaryTargetType = AutoReplySummaryTargetType.Group; _arSummaryTarget = string.Empty; }" />
+                                    Grupo WhatsApp
+                                </label>
+                            </div>
+                            @if (_arSummaryTargetType == AutoReplySummaryTargetType.Phone)
+                            {
+                                <input class="form-control" @bind="_arSummaryTarget" placeholder="57 300 111 2233 (E.164 sin +)" />
+                            }
+                            else
+                            {
+                                <select class="form-control" @bind="_arSummaryTarget">
+                                    <option value="">@(_arSummaryLoadingGroups ? "Cargando grupos..." : "(elige un grupo)")</option>
+                                    @foreach (var g in _arWaGroups)
+                                    {
+                                        <option value="@g.Jid">@g.Name@(g.ParticipantCount is int c ? $" ({c} miembros)" : "")</option>
+                                    }
+                                </select>
+                                @if (_arWaGroups.Count == 0 && !_arSummaryLoadingGroups && !string.IsNullOrEmpty(_arSummaryLineId))
+                                {
+                                    <small class="text-muted">Sin grupos visibles. Confirma que la linea esta conectada.</small>
+                                }
+                            }
+                        </div>
+                    </div>
+                    <div class="field">
+                        <label class="form-label">Plantilla del mensaje</label>
+                        <textarea class="form-control" rows="6" @bind="_arSummaryTemplate"></textarea>
+                        <div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:6px;">
+                            @foreach (var v in new[] { "cuenta", "ejecutado_a", "revisados", "respondidos", "fallidos", "comentarios" })
+                            {
+                                var token = v;
+                                <button type="button" class="btn btn-sm btn-outline-secondary" @onclick="() => InsertSummaryVar(token)">+ @token</button>
+                            }
+                        </div>
+                        <small class="text-muted">
+                            <code>{{comentarios}}</code> se reemplaza por la lista bullet de "autor: comentario -&gt; respuesta".
+                        </small>
+                    </div>
+                    @if (_arSummaryError is not null)
+                    {
+                        <div class="text-danger small">@_arSummaryError</div>
+                    }
+                }
             }
 
             @if (_arError is not null) { <div class="text-danger small" style="margin-top:8px;">@_arError</div> }
@@ -526,6 +612,17 @@ else
     private readonly List<TemplateRow> _arTemplates = new();
     private string _arAgentId = "";
     private List<AutoReplyAgentOptionDto> _arAgentOptions = new();
+    // Resumen WhatsApp (Evolution). Placeholders: {{cuenta}}, {{ejecutado_a}}, {{revisados}},
+    // {{respondidos}}, {{fallidos}}, {{comentarios}}.
+    private bool _arSummaryEnabled;
+    private string _arSummaryLineId = "";
+    private AutoReplySummaryTargetType _arSummaryTargetType = AutoReplySummaryTargetType.Phone;
+    private string _arSummaryTarget = "";
+    private string _arSummaryTemplate = "";
+    private List<WhatsAppLineDto> _arWaLines = new();
+    private List<LineGroupDto> _arWaGroups = new();
+    private string? _arSummaryError;
+    private bool _arSummaryLoadingGroups;
     private string? _arError;
 
     private async Task OpenAutoReply(SocialAccountDto a)
@@ -548,11 +645,43 @@ else
             _arDefaultTpl = _arCfg.DefaultTemplate ?? "";
             _arAgentId = _arCfg.AiAgentId?.ToString() ?? "";
             _arAgentOptions = (await AutoReplySvc.ListAgentOptionsAsync()).ToList();
+            _arSummaryEnabled = _arCfg.SummaryEnabled;
+            _arSummaryLineId = _arCfg.SummaryLineId?.ToString() ?? "";
+            _arSummaryTargetType = _arCfg.SummaryTargetType;
+            _arSummaryTarget = _arCfg.SummaryTarget ?? "";
+            _arSummaryTemplate = string.IsNullOrEmpty(_arCfg.SummaryTemplate)
+                ? "Resumen autorespuesta cuenta {{cuenta}}\nEjecutado: {{ejecutado_a}}\nRevisados: {{revisados}} - Respondidos: {{respondidos}} - Fallidos: {{fallidos}}\n\n{{comentarios}}"
+                : _arCfg.SummaryTemplate;
+            _arWaGroups.Clear();
+            _arSummaryError = null;
+            // Solo lineas Evolution (regla del usuario). Filtrar en cliente.
+            var allLines = await LinesSvc.ListAsync();
+            _arWaLines = allLines.Where(l => l.Provider == WhatsAppProvider.Evolution).ToList();
             _arTemplates.Clear();
             foreach (var t in _arCfg.Templates) { _arTemplates.Add(new TemplateRow { Id = t.Id, Keywords = t.Keywords, Body = t.Body, SortOrder = t.SortOrder }); }
             _arOpen = true;
         }
         finally { _arBusy = false; }
+    }
+
+    private async Task LoadGroupsForSelectedLine()
+    {
+        _arSummaryError = null;
+        _arWaGroups.Clear();
+        if (!Guid.TryParse(_arSummaryLineId, out var lineId)) { return; }
+        _arSummaryLoadingGroups = true;
+        try
+        {
+            var res = await Connector.FetchGroupsAsync(lineId);
+            if (!res.Ok) { _arSummaryError = res.Error ?? "No se pudieron listar los grupos."; return; }
+            _arWaGroups = res.Groups.OrderBy(g => g.Name).ToList();
+        }
+        finally { _arSummaryLoadingGroups = false; }
+    }
+
+    private void InsertSummaryVar(string token)
+    {
+        _arSummaryTemplate = (_arSummaryTemplate ?? "") + "{{" + token + "}}";
     }
 
     private void CloseAutoReply() { _arOpen = false; _arAccount = null; _arCfg = null; _arTemplates.Clear(); }
@@ -589,9 +718,14 @@ else
         {
             var tpls = _arTemplates.Select((t, i) => new AutoReplyTemplateInput(t.Id, t.Keywords, t.Body, i)).ToList();
             Guid? agentId = Guid.TryParse(_arAgentId, out var gid) ? gid : null;
+            Guid? summaryLineId = Guid.TryParse(_arSummaryLineId, out var lgid) ? lgid : null;
             var req = new SaveAutoReplyConfigRequest(
                 _arAccount.Id, _arIsActive, _arMode, _arMaxReplies, _arDelayMin, _arDelayMax,
-                _arBlacklist, _arFrequency, _arCronCustom, _arHoursMask, _arDaysMask, _arDefaultTpl, agentId, tpls);
+                _arBlacklist, _arFrequency, _arCronCustom, _arHoursMask, _arDaysMask, _arDefaultTpl, agentId,
+                _arSummaryEnabled, summaryLineId, _arSummaryTargetType,
+                string.IsNullOrWhiteSpace(_arSummaryTarget) ? null : _arSummaryTarget.Trim(),
+                string.IsNullOrWhiteSpace(_arSummaryTemplate) ? null : _arSummaryTemplate,
+                tpls);
             var dto = await AutoReplySvc.SaveAsync(req, _actor);
             if (dto is null) { _arError = "No se pudo guardar."; return; }
             CloseAutoReply();

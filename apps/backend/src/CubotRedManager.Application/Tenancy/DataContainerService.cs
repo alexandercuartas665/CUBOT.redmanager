@@ -432,6 +432,95 @@ public sealed class DataContainerService : IDataContainerService
         }
     }
 
+    public async Task<DataExportResult?> ExportToExcelAsync(Guid containerId, CancellationToken ct = default)
+    {
+        if (_tenantContext.TenantId is null) { return null; }
+        var container = await _db.DataContainers.AsNoTracking().FirstOrDefaultAsync(c => c.Id == containerId, ct);
+        if (container is null) { return null; }
+
+        var columns = await _db.DataContainerColumns.AsNoTracking()
+            .Where(c => c.ContainerId == containerId)
+            .OrderBy(c => c.SortOrder)
+            .ToListAsync(ct);
+        var rows = await _db.DataContainerRows.AsNoTracking()
+            .Where(r => r.ContainerId == containerId)
+            .OrderBy(r => r.CreatedAt)
+            .ToListAsync(ct);
+        var rowIds = rows.Select(r => r.Id).ToList();
+        var cells = rowIds.Count == 0
+            ? new List<DataContainerCell>()
+            : await _db.DataContainerCells.AsNoTracking()
+                .Where(c => rowIds.Contains(c.RowId))
+                .ToListAsync(ct);
+        var cellsByRow = cells.GroupBy(c => c.RowId)
+            .ToDictionary(g => g.Key, g => g.ToDictionary(x => x.ColumnId, x => x.Value));
+
+        using var workbook = new XLWorkbook();
+        var sheet = workbook.Worksheets.Add(TrimSheetName(container.Name));
+
+        // Encabezados.
+        for (var i = 0; i < columns.Count; i++)
+        {
+            var cell = sheet.Cell(1, i + 1);
+            cell.Value = columns[i].Name;
+            cell.Style.Font.Bold = true;
+        }
+
+        // Filas.
+        for (var r = 0; r < rows.Count; r++)
+        {
+            cellsByRow.TryGetValue(rows[r].Id, out var byCol);
+            for (var c = 0; c < columns.Count; c++)
+            {
+                var col = columns[c];
+                var raw = byCol is not null && byCol.TryGetValue(col.Id, out var v) ? v : null;
+                if (string.IsNullOrEmpty(raw)) { continue; }
+                var target = sheet.Cell(r + 2, c + 1);
+                // Convertir a nativo cuando el tipo del modelo lo permite, para que Excel muestre
+                // el valor con el formato correcto (numero, fecha, booleano) al reabrir el archivo.
+                switch (col.Type)
+                {
+                    case DataColumnType.Number when long.TryParse(raw, out var l): target.Value = l; break;
+                    case DataColumnType.Decimal when decimal.TryParse(raw, System.Globalization.CultureInfo.InvariantCulture, out var d): target.Value = d; break;
+                    case DataColumnType.Date when DateTime.TryParse(raw, System.Globalization.CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.RoundtripKind, out var dt): target.Value = dt; break;
+                    case DataColumnType.Boolean when bool.TryParse(raw, out var b): target.Value = b; break;
+                    default: target.Value = raw; break;
+                }
+            }
+        }
+
+        if (columns.Count > 0)
+        {
+            sheet.Columns(1, columns.Count).AdjustToContents();
+        }
+
+        using var ms = new MemoryStream();
+        workbook.SaveAs(ms);
+        var slug = Slugify(container.Name);
+        return new DataExportResult($"{slug}.xlsx", ms.ToArray());
+    }
+
+    private static string TrimSheetName(string name)
+    {
+        // Excel limita el nombre de hoja a 31 chars y prohibe: : \ / ? * [ ]
+        var cleaned = new string(name.Where(c => !"[]:\\/?*".Contains(c)).ToArray()).Trim();
+        if (string.IsNullOrEmpty(cleaned)) { return "Datos"; }
+        return cleaned.Length > 31 ? cleaned[..31] : cleaned;
+    }
+
+    private static string Slugify(string name)
+    {
+        var sb = new StringBuilder();
+        foreach (var ch in name.Trim().ToLowerInvariant())
+        {
+            if (char.IsLetterOrDigit(ch)) { sb.Append(ch); }
+            else if (ch is ' ' or '-' or '_') { sb.Append('-'); }
+        }
+        var slug = sb.ToString().Trim('-');
+        while (slug.Contains("--")) { slug = slug.Replace("--", "-"); }
+        return string.IsNullOrEmpty(slug) ? "contenedor" : slug;
+    }
+
     private static DataContainerColumnDto MapColumn(DataContainerColumn c) =>
         new(c.Id, c.Name, c.Description, c.Type, c.SortOrder, c.IsRequired);
 
