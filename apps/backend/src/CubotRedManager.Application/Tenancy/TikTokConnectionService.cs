@@ -208,6 +208,14 @@ public sealed class TikTokConnectionService : ITikTokConnectionService
         account.TokenScope = cfg.Scope;
         account.ExpiresAt = result.ExpiresInSeconds is { } secs ? _time.GetUtcNow().AddSeconds(secs) : _time.GetUtcNow().AddDays(1);
         account.Status = SocialAccountStatus.Connected;
+        // Persistimos el flavor OAuth detectado por el proveedor. El refresh futuro golpea SOLO
+        // ese endpoint sin cascada (ver TikTokOAuthProvider.RefreshAsync).
+        if (result.OAuthFlavor is int flavorInt && Enum.IsDefined(typeof(TikTokOAuthFlavor), flavorInt))
+        {
+            account.OAuthFlavor = (TikTokOAuthFlavor)flavorInt;
+        }
+        // Cuenta acaba de reconectar: reseteamos el rastro de alerta previa (si alguna vez fallo).
+        account.LastRefreshFailureNotifiedAt = null;
 
         _audit.Write(actorUserId, "tiktok.connect", nameof(SocialAccount), account.Id,
             previousValue: null, newValue: new { account.ClientId, externalId }, tenantId: tenantId);
@@ -333,7 +341,7 @@ public sealed class TikTokConnectionService : ITikTokConnectionService
                 "El refresh token de esta cuenta no se puede descifrar. Reconecta la cuenta para regenerar credenciales.",
                 null);
         }
-        var result = await _tiktok.RefreshAsync(cfg.ClientKey, secret, refresh, cancellationToken);
+        var result = await _tiktok.RefreshAsync(cfg.ClientKey, secret, refresh, (int)account.OAuthFlavor, cancellationToken);
         if (!result.Success || string.IsNullOrEmpty(result.AccessToken))
         {
             // Refresh fallo. PERO: si el access_token original aun NO ha expirado, lo dejamos
@@ -357,6 +365,9 @@ public sealed class TikTokConnectionService : ITikTokConnectionService
         account.ExpiresAt = result.ExpiresInSeconds is { } secs ? _time.GetUtcNow().AddSeconds(secs) : _time.GetUtcNow().AddDays(1);
         account.Status = SocialAccountStatus.Connected;
         account.LastSyncError = null;
+        // Refresh exitoso -> limpiamos el marcador de alerta previa para que si vuelve a fallar
+        // en el futuro se notifique de nuevo (no una alerta cada dia perpetuamente).
+        account.LastRefreshFailureNotifiedAt = null;
 
         _audit.Write(actorUserId, "tiktok.refresh", nameof(SocialAccount), account.Id,
             previousValue: null, newValue: new { account.Id }, tenantId: tenantId);

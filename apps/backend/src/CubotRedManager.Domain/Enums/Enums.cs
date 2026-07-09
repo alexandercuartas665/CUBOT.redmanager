@@ -138,6 +138,19 @@ public enum AuditActorType { Human, System }
 /// <summary>Estado de una cuenta social conectada (Modulo 2.3).</summary>
 public enum SocialAccountStatus { Connected, Expired, Revoked, Disconnected }
 
+/// <summary>
+/// "Sabor" del flujo OAuth de TikTok con el que fue emitido el token. Sirve para dirigir el
+/// refresh al endpoint correcto (las dos rutas son incompatibles entre si). Detectado al canjear
+/// el auth_code, persistido en <see cref="CubotRedManager.Domain.Entities.SocialAccount"/>.
+/// </summary>
+public enum TikTokOAuthFlavor
+{
+    /// <summary>TikTok for Business (business-api.tiktok.com). Refresh en /oauth2/refresh_token/ con app_id + secret + refresh_token.</summary>
+    BusinessV13 = 0,
+    /// <summary>TikTok Open API v2 (open.tiktokapis.com). Refresh en /v2/oauth/token/ (form-encoded) con client_key + client_secret + grant_type=refresh_token.</summary>
+    OpenV2 = 1
+}
+
 /// <summary>Prioridad de una tarjeta del tablero Kanban (Modulo 2.7).</summary>
 public enum TaskPriority { Low, Normal, High, Urgent }
 

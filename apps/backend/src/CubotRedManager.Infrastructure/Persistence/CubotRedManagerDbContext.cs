@@ -89,6 +89,7 @@ public class CubotRedManagerDbContext : DbContext, IApplicationDbContext, IDataP
     public DbSet<WhatsAppLine> WhatsAppLines => Set<WhatsAppLine>();
     public DbSet<WhatsAppTemplate> WhatsAppTemplates => Set<WhatsAppTemplate>();
     public DbSet<TenantEvolutionConfig> TenantEvolutionConfigs => Set<TenantEvolutionConfig>();
+    public DbSet<TenantAlertConfig> TenantAlertConfigs => Set<TenantAlertConfig>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -125,6 +126,7 @@ public class CubotRedManagerDbContext : DbContext, IApplicationDbContext, IDataP
         // Redes y cuentas sociales (Modulo 2.2/2.3).
         modelBuilder.Entity<SocialNetwork>().HasIndex(x => x.Code).IsUnique();
         modelBuilder.Entity<SocialAccount>().Property(x => x.Status).HasConversion<string>();
+        modelBuilder.Entity<SocialAccount>().Property(x => x.OAuthFlavor).HasConversion<string>();
         modelBuilder.Entity<SocialAccount>()
             .HasIndex(x => new { x.TenantId, x.ClientId, x.NetworkCode, x.ExternalId }).IsUnique();
         // App de TikTok: una config por tenant (Modulo 2.2).
@@ -290,6 +292,10 @@ public class CubotRedManagerDbContext : DbContext, IApplicationDbContext, IDataP
             .IsUnique()
             .HasFilter("y_cloud_phone_number_id IS NOT NULL");
         modelBuilder.Entity<TenantEvolutionConfig>().HasIndex(x => x.TenantId).IsUnique();
+
+        // Alertas: una config por tenant.
+        modelBuilder.Entity<TenantAlertConfig>().HasIndex(x => x.TenantId).IsUnique();
+        modelBuilder.Entity<TenantAlertConfig>().Property(x => x.TargetType).HasConversion<string>();
 
         // WhatsApp Templates (HSM). Nombre + idioma unico por tenant (regla Meta).
         modelBuilder.Entity<WhatsAppTemplate>().Property(x => x.Provider).HasConversion<string>();

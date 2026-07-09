@@ -1,0 +1,179 @@
+@page "/alertas"
+@attribute [Authorize(Policy = AppPolicies.TenantMember)]
+@rendermode InteractiveServer
+@using CubotRedManager.Application.Tenancy
+@using CubotRedManager.Domain.Enums
+@inject ITenantAlertService AlertsSvc
+@inject IWhatsAppLineService LinesSvc
+@inject IWhatsAppConnectorService Connector
+@inject AuthenticationStateProvider AuthProvider
+
+<PageTitle>Alertas WhatsApp - CUBOT.redmanager</PageTitle>
+
+<div class="module-head">
+    <div>
+        <div class="module-eyebrow">
+            <div class="module-icon">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.268 21a2 2 0 0 0 3.464 0"/><path d="M3.262 15.326A1 1 0 0 0 4 17h16a1 1 0 0 0 .74-1.673C19.41 13.956 18 12.499 18 8A6 6 0 0 0 6 8c0 4.499-1.411 5.956-2.738 7.326"/></svg>
+            </div>
+            <span>Comunicacion e IA</span>
+        </div>
+        <h1 class="page-title" style="margin-top:12px;">Alertas por WhatsApp</h1>
+        <p class="page-sub" style="margin-bottom:0;">El sistema te avisa por WhatsApp cuando algo importante pasa (por ahora: refresh de token TikTok fallido). Elige la linea Evolution y el destinatario.</p>
+    </div>
+</div>
+
+@if (_loading)
+{
+    <p class="text-muted">Cargando...</p>
+}
+else
+{
+    <div class="card" style="max-width:640px; padding:20px;">
+        <div class="field" style="margin-bottom:14px;">
+            <label style="display:inline-flex;align-items:center;gap:10px;cursor:pointer;user-select:none;">
+                <input type="checkbox" @bind="_isActive" style="width:18px;height:18px;cursor:pointer;" />
+                <span style="font-weight:500;">Activar alertas por WhatsApp</span>
+            </label>
+        </div>
+
+        @if (_isActive)
+        {
+            <div class="field">
+                <label class="form-label">Linea Evolution</label>
+                <select class="form-control" @bind="_lineIdRaw" @bind:after="LoadGroupsAsync">
+                    <option value="">(elige una linea)</option>
+                    @foreach (var l in _lines)
+                    {
+                        <option value="@l.Id">@l.InstanceName @(l.Status == WhatsAppLineStatus.Connected ? "" : "- desconectada")</option>
+                    }
+                </select>
+                @if (_lines.Count == 0)
+                {
+                    <small class="text-muted">No hay lineas Evolution. Crea una desde "Lineas WhatsApp".</small>
+                }
+            </div>
+
+            <div class="field">
+                <label class="form-label">Destinatario</label>
+                <div style="display:flex;gap:16px;margin-bottom:8px;">
+                    <label style="display:flex;align-items:center;gap:4px;">
+                        <input type="radio" name="alTarget" checked="@(_targetType == AutoReplySummaryTargetType.Phone)"
+                               @onchange="() => { _targetType = AutoReplySummaryTargetType.Phone; _target = string.Empty; }" />
+                        Telefono
+                    </label>
+                    <label style="display:flex;align-items:center;gap:4px;">
+                        <input type="radio" name="alTarget" checked="@(_targetType == AutoReplySummaryTargetType.Group)"
+                               @onchange="() => { _targetType = AutoReplySummaryTargetType.Group; _target = string.Empty; }" />
+                        Grupo WhatsApp
+                    </label>
+                </div>
+                @if (_targetType == AutoReplySummaryTargetType.Phone)
+                {
+                    <input class="form-control" @bind="_target" placeholder="57 300 111 2233 (E.164 sin +)" />
+                }
+                else
+                {
+                    <select class="form-control" @bind="_target">
+                        <option value="">@(_loadingGroups ? "Cargando grupos..." : "(elige un grupo)")</option>
+                        @foreach (var g in _groups)
+                        {
+                            <option value="@g.Jid">@g.Name@(g.ParticipantCount is int c ? $" ({c} miembros)" : "")</option>
+                        }
+                    </select>
+                    @if (_groups.Count == 0 && !_loadingGroups && !string.IsNullOrEmpty(_lineIdRaw))
+                    {
+                        <small class="text-muted">Sin grupos visibles. Confirma que la linea esta conectada.</small>
+                    }
+                }
+                @if (_groupsError is not null)
+                {
+                    <div class="text-danger small">@_groupsError</div>
+                }
+            </div>
+        }
+
+        @if (_saveError is not null) { <div class="text-danger small">@_saveError</div> }
+        @if (_saveOk) { <div class="text-success small">Guardado.</div> }
+
+        <div style="display:flex;gap:8px;margin-top:12px;">
+            <button class="btn btn-primary" @onclick="SaveAsync" disabled="@_saving">@(_saving ? "Guardando..." : "Guardar")</button>
+        </div>
+    </div>
+
+    <div class="text-muted" style="max-width:640px;margin-top:16px;font-size:13px;">
+        <strong>Que alertas envia hoy?</strong>
+        <ul style="padding-left:22px;margin:6px 0 0;">
+            <li>Refresh de token TikTok fallido. 1 aviso por cuenta cada 24h (idempotente).</li>
+        </ul>
+    </div>
+}
+
+@code {
+    private bool _loading = true;
+    private bool _saving;
+    private bool _saveOk;
+    private string? _saveError;
+    private bool _loadingGroups;
+    private string? _groupsError;
+
+    private bool _isActive;
+    private string _lineIdRaw = "";
+    private AutoReplySummaryTargetType _targetType = AutoReplySummaryTargetType.Phone;
+    private string _target = "";
+
+    private List<WhatsAppLineDto> _lines = new();
+    private List<LineGroupDto> _groups = new();
+    private Guid _actor;
+
+    protected override async Task OnInitializedAsync()
+    {
+        var state = await AuthProvider.GetAuthenticationStateAsync();
+        Guid.TryParse(state.User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value, out _actor);
+
+        var cfg = await AlertsSvc.GetOrDefaultAsync();
+        _isActive = cfg.IsActive;
+        _lineIdRaw = cfg.WhatsAppLineId?.ToString() ?? "";
+        _targetType = cfg.TargetType;
+        _target = cfg.Target ?? "";
+
+        var all = await LinesSvc.ListAsync();
+        _lines = all.Where(l => l.Provider == WhatsAppProvider.Evolution).ToList();
+        if (_targetType == AutoReplySummaryTargetType.Group && !string.IsNullOrEmpty(_lineIdRaw))
+        {
+            await LoadGroupsAsync();
+        }
+        _loading = false;
+    }
+
+    private async Task LoadGroupsAsync()
+    {
+        _groupsError = null;
+        _groups.Clear();
+        if (!Guid.TryParse(_lineIdRaw, out var lineId)) { return; }
+        _loadingGroups = true;
+        try
+        {
+            var res = await Connector.FetchGroupsAsync(lineId);
+            if (!res.Ok) { _groupsError = res.Error ?? "No se pudieron listar los grupos."; return; }
+            _groups = res.Groups.OrderBy(g => g.Name).ToList();
+        }
+        finally { _loadingGroups = false; }
+    }
+
+    private async Task SaveAsync()
+    {
+        _saving = true; _saveError = null; _saveOk = false;
+        try
+        {
+            Guid? lineId = Guid.TryParse(_lineIdRaw, out var lg) ? lg : null;
+            var req = new SaveTenantAlertConfigRequest(_isActive, lineId, _targetType,
+                string.IsNullOrWhiteSpace(_target) ? null : _target.Trim());
+            var result = await AlertsSvc.SaveAsync(req, _actor);
+            if (result is null) { _saveError = "No hay agencia activa."; return; }
+            _saveOk = true;
+        }
+        catch (Exception ex) { _saveError = ex.Message; }
+        finally { _saving = false; }
+    }
+}

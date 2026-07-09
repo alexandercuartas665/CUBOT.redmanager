@@ -88,7 +88,12 @@ public sealed class TikTokMaintenanceWorker : BackgroundService
                     var tk = sp.GetRequiredService<ITikTokConnectionService>();
                     var r = await tk.RefreshAccountAsync(account.Id, SystemUserId, ct);
                     if (r.Success) { _logger.LogInformation("Refresh OK cuenta {Id}", account.Id); }
-                    else { _logger.LogWarning("Refresh fallido cuenta {Id}: {Err}", account.Id, r.Error); }
+                    else
+                    {
+                        _logger.LogWarning("Refresh fallido cuenta {Id}: {Err}", account.Id, r.Error);
+                        try { await NotifyRefreshFailureAsync(sp, account.Id, r.Error ?? "sin detalle", ct); }
+                        catch (Exception nfx) { _logger.LogWarning(nfx, "No se pudo enviar alerta WA para cuenta {Id}", account.Id); }
+                    }
                 });
             }
 
@@ -123,6 +128,48 @@ public sealed class TikTokMaintenanceWorker : BackgroundService
         ambient.Set(tenantId, SystemUserId);
         try { await action(scope.ServiceProvider); }
         finally { ambient.Set(null, null); }
+    }
+
+    /// <summary>
+    /// Envia una alerta al admin del tenant via WhatsApp (linea Evolution) informando que el
+    /// refresh de la cuenta TikTok fallo. Idempotente: no re-notifica si ya se envio en las
+    /// ultimas 24h (LastRefreshFailureNotifiedAt). Reset del marcador ocurre al reconectar la
+    /// cuenta (ver TikTokConnectionService.ExchangeCode / RefreshAccountAsync exitoso).
+    /// </summary>
+    private async Task NotifyRefreshFailureAsync(IServiceProvider sp, Guid accountId, string error, CancellationToken ct)
+    {
+        var db = sp.GetRequiredService<CubotRedManagerDbContext>();
+        var cfg = await db.TenantAlertConfigs.FirstOrDefaultAsync(ct);
+        if (cfg is null || !cfg.IsActive || cfg.WhatsAppLineId is null || string.IsNullOrWhiteSpace(cfg.Target))
+        {
+            return;
+        }
+
+        var acc = await db.SocialAccounts.FirstOrDefaultAsync(a => a.Id == accountId, ct);
+        if (acc is null) { return; }
+        var now = DateTimeOffset.UtcNow;
+        if (acc.LastRefreshFailureNotifiedAt is { } last && (now - last) < TimeSpan.FromHours(24))
+        {
+            return; // ya notificamos hace poco; anti-spam.
+        }
+
+        var handle = acc.Handle ?? acc.ExternalId ?? "(cuenta)";
+        var msg = $"[CUBOT.redmanager] Refresh de token TikTok fallido para la cuenta *{handle}*.\n" +
+                  $"Estado: {acc.Status}. Motivo: {error}\n" +
+                  "Reconecta la cuenta manualmente desde /cuentas-sociales para evitar que el access_token expire por completo.";
+
+        var connector = sp.GetRequiredService<CubotRedManager.Application.Tenancy.IWhatsAppConnectorService>();
+        var send = await connector.SendTestAsync(cfg.WhatsAppLineId.Value, cfg.Target!, msg, SystemUserId, ct);
+        if (send.Ok)
+        {
+            acc.LastRefreshFailureNotifiedAt = now;
+            await db.SaveChangesAsync(ct);
+            _logger.LogInformation("Alerta WA enviada por refresh fallido cuenta {Id}", accountId);
+        }
+        else
+        {
+            _logger.LogWarning("Alerta WA fallo cuenta {Id}: {Err}", accountId, send.Error);
+        }
     }
 }
 

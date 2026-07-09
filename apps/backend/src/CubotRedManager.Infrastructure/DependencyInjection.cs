@@ -43,6 +43,7 @@ public static class DependencyInjection
         services.AddScoped<IAutoReplyConfigService, AutoReplyConfigService>();
         services.AddScoped<IAutomationService, AutomationService>();
         services.AddScoped<ITenantMetricsService, TenantMetricsService>();
+        services.AddScoped<ITenantAlertService, TenantAlertService>();
         // Proveedores OAuth de redes sociales (Modulo 2.2). TikTok via HttpClient.
         services.AddHttpClient<ISocialOAuthProvider, CubotRedManager.Infrastructure.Social.TikTokOAuthProvider>();
         // Cliente HTTP de datos TikTok (Modulo 2.4 Sync).
