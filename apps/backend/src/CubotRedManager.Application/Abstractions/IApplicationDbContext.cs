@@ -70,5 +70,8 @@ public interface IApplicationDbContext
     DbSet<TenantEvolutionConfig> TenantEvolutionConfigs { get; }
     DbSet<EvolutionMasterConfig> EvolutionMasterConfigs { get; }
 
+    // Alertas operativas por WhatsApp (tenant-scoped, una por tenant).
+    DbSet<TenantAlertConfig> TenantAlertConfigs { get; }
+
     Task<int> SaveChangesAsync(CancellationToken cancellationToken = default);
 }

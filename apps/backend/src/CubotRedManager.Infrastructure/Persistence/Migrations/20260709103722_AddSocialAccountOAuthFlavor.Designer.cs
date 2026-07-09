@@ -3,6 +3,7 @@ using System;
 using CubotRedManager.Infrastructure.Persistence;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 
@@ -11,9 +12,11 @@ using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 namespace CubotRedManager.Infrastructure.Persistence.Migrations
 {
     [DbContext(typeof(CubotRedManagerDbContext))]
-    partial class CubotRedManagerDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260709103722_AddSocialAccountOAuthFlavor")]
+    partial class AddSocialAccountOAuthFlavor
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -2548,63 +2551,6 @@ namespace CubotRedManager.Infrastructure.Persistence.Migrations
                     b.ToTable("tenants", (string)null);
                 });
 
-            modelBuilder.Entity("CubotRedManager.Domain.Entities.TenantAlertConfig", b =>
-                {
-                    b.Property<Guid>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("uuid")
-                        .HasColumnName("id");
-
-                    b.Property<DateTimeOffset>("CreatedAt")
-                        .HasColumnType("timestamp with time zone")
-                        .HasColumnName("created_at");
-
-                    b.Property<Guid?>("CreatedBy")
-                        .HasColumnType("uuid")
-                        .HasColumnName("created_by");
-
-                    b.Property<bool>("IsActive")
-                        .HasColumnType("boolean")
-                        .HasColumnName("is_active");
-
-                    b.Property<string>("Target")
-                        .HasColumnType("text")
-                        .HasColumnName("target");
-
-                    b.Property<string>("TargetType")
-                        .IsRequired()
-                        .HasColumnType("text")
-                        .HasColumnName("target_type");
-
-                    b.Property<Guid>("TenantId")
-                        .HasColumnType("uuid")
-                        .HasColumnName("tenant_id");
-
-                    b.Property<DateTimeOffset?>("UpdatedAt")
-                        .HasColumnType("timestamp with time zone")
-                        .HasColumnName("updated_at");
-
-                    b.Property<Guid?>("UpdatedBy")
-                        .HasColumnType("uuid")
-                        .HasColumnName("updated_by");
-
-                    b.Property<Guid?>("WhatsAppLineId")
-                        .HasColumnType("uuid")
-                        .HasColumnName("whats_app_line_id");
-
-                    b.HasKey("Id")
-                        .HasName("pk_tenant_alert_configs");
-
-                    b.HasIndex("TenantId")
-                        .IsUnique()
-                        .HasDatabaseName("ix_tenant_alert_configs_tenant_id");
-
-                    b.HasIndex("WhatsAppLineId")
-                        .HasDatabaseName("ix_tenant_alert_configs_whats_app_line_id");
-
-                    b.ToTable("tenant_alert_configs", (string)null);
-                });
-
             modelBuilder.Entity("CubotRedManager.Domain.Entities.TenantEvolutionConfig", b =>
                 {
                     b.Property<Guid>("Id")
@@ -3795,16 +3741,6 @@ namespace CubotRedManager.Infrastructure.Persistence.Migrations
                     b.Navigation("Tag");
 
                     b.Navigation("TaskCard");
-                });
-
-            modelBuilder.Entity("CubotRedManager.Domain.Entities.TenantAlertConfig", b =>
-                {
-                    b.HasOne("CubotRedManager.Domain.Entities.WhatsAppLine", "WhatsAppLine")
-                        .WithMany()
-                        .HasForeignKey("WhatsAppLineId")
-                        .HasConstraintName("fk_tenant_alert_configs_whats_app_lines_whats_app_line_id");
-
-                    b.Navigation("WhatsAppLine");
                 });
 
             modelBuilder.Entity("CubotRedManager.Domain.Entities.TenantPayment", b =>

@@ -15,7 +15,11 @@ public sealed record OAuthTokenResult(
     string? OpenId,
     int? ExpiresInSeconds,
     string Trace,
-    string? Error);
+    string? Error,
+    /// <summary>Solo TikTok: familia OAuth (0=BusinessV13, 1=OpenV2) del endpoint que emitio el
+    /// token. Se persiste en SocialAccount para que futuros refresh usen el endpoint correcto sin
+    /// cascada (los dos flavors son incompatibles entre si). Nulo si el proveedor no aplica.</summary>
+    int? OAuthFlavor = null);
 
 /// <summary>Resultado de un sondeo de credenciales (sin canje real).</summary>
 /// <param name="CredentialsOk">true si client_key+secret fueron aceptados por el endpoint.</param>
@@ -39,9 +43,11 @@ public interface ISocialOAuthProvider
     Task<OAuthTokenResult> ExchangeCodeAsync(
         string clientKey, string clientSecret, string redirectUri, string authCode, CancellationToken cancellationToken = default);
 
-    /// <summary>Renueva el access token con el refresh token (cascada de endpoints).</summary>
+    /// <summary>Renueva el access token con el refresh token. El caller pasa el flavor guardado
+    /// en SocialAccount para dirigir el POST al endpoint correcto (sin cascada). Si el flavor es
+    /// null (cuentas historicas), se usa el default segun proveedor.</summary>
     Task<OAuthTokenResult> RefreshAsync(
-        string clientKey, string clientSecret, string refreshToken, CancellationToken cancellationToken = default);
+        string clientKey, string clientSecret, string refreshToken, int? oauthFlavor = null, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Sondea las credenciales (client_key + client_secret) sin necesidad de auth_code real.

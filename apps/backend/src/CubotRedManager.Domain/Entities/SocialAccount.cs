@@ -28,6 +28,15 @@ public class SocialAccount : TenantEntity
     public DateTimeOffset? LastSyncAt { get; set; }
     public string? LastSyncError { get; set; }
 
+    /// <summary>Solo TikTok: familia de endpoints OAuth con la que se canjeo el token. Determina
+    /// el endpoint de refresh (evita la cascada que corrompe el refresh_token). Default BusinessV13
+    /// para cuentas historicas (que es lo que el sistema usaba antes de este campo).</summary>
+    public TikTokOAuthFlavor OAuthFlavor { get; set; } = TikTokOAuthFlavor.BusinessV13;
+
+    /// <summary>Timestamp del ultimo aviso por WhatsApp al admin del tenant sobre un refresh
+    /// fallido de esta cuenta. Nulo si nunca se ha avisado. Sirve para evitar spam (1 aviso por dia).</summary>
+    public DateTimeOffset? LastRefreshFailureNotifiedAt { get; set; }
+
     /// <summary>Numero de seguidores conocido (snapshot del ultimo sync). Para KPIs.</summary>
     public long? FollowersCount { get; set; }
     /// <summary>Bio o descripcion publica de la cuenta.</summary>
