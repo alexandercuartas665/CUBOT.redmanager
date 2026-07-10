@@ -150,8 +150,12 @@ public sealed class TikTokOAuthProvider : ISocialOAuthProvider
                 trace.AppendLine("[OK] Token renovado.");
                 return BuildFromData(data!.Value, trace.ToString(), fallbackRefresh: refreshToken, oauthFlavor: FlavorBusinessV13);
             }
+            // Incluimos el code=X de TikTok en el error para poder distinguir
+            // "refresh_token invalidado por rotacion previa" (40105/40001) de "app_id/secret mal"
+            // (40100) o "cuota" (rate limit). Ayuda al diagnostico sin exponer secretos.
             trace.AppendLine($"[ERROR] /oauth2/refresh_token/ respondio code={code}: {San(msg)}");
-            return new OAuthTokenResult(false, null, null, null, null, San(trace.ToString())!, San(msg) ?? "Renovacion fallida");
+            var errorWithCode = $"code={code} {San(msg) ?? "Renovacion fallida"}";
+            return new OAuthTokenResult(false, null, null, null, null, San(trace.ToString())!, errorWithCode);
         }
         catch (Exception ex)
         {
