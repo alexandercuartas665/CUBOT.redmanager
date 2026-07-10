@@ -590,13 +590,24 @@ app.MapGet("/healthz", async (CubotRedManagerDbContext db) =>
     try
     {
         await db.Database.ExecuteSqlRawAsync("SELECT 1");
-        return Results.Ok(new { status = "ok", ts = DateTimeOffset.UtcNow });
+        return Results.Ok(new { status = "ok", ts = DateTimeOffset.UtcNow, version = CubotRedManager.Web.AppVersion.ShortSha });
     }
     catch (Exception ex)
     {
         return Results.Problem($"db down: {ex.Message}", statusCode: 503);
     }
 }).AllowAnonymous();
+
+// Endpoint de version (publico, sin secretos). Sirve al operador para verificar que el pod que
+// esta viendo es el ultimo deploy (SHA), no una cache de CDN. Usa RAILWAY_GIT_COMMIT_SHA que
+// Railway inyecta al contenedor en cada deploy.
+app.MapGet("/version", () => Results.Ok(new
+{
+    version = CubotRedManager.Web.AppVersion.ShortSha,
+    fullSha = CubotRedManager.Web.AppVersion.FullSha,
+    deploymentId = CubotRedManager.Web.AppVersion.DeploymentId,
+    startedAtUtc = CubotRedManager.Web.AppVersion.StartedAtUtc
+})).AllowAnonymous();
 
 app.Run();
 

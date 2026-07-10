@@ -146,6 +146,24 @@
     <span class="cubot-dot"></span>
 </div>
 
+@* Version del build en curso. Sirve al operador para saber si el pod que ve es el ultimo
+   deploy o una cache. En dev muestra "dev"; en Railway muestra el SHA corto del commit. *@
+<div class="cubot-version" title="@CubotRedManager.Web.AppVersion.FullSha">
+    v.@CubotRedManager.Web.AppVersion.Display
+</div>
+
+<style>
+    .cubot-version {
+        padding: 8px 14px;
+        font-size: 10.5px;
+        color: var(--muted-foreground);
+        font-family: ui-monospace, Consolas, monospace;
+        opacity: .55;
+        text-align: center;
+        letter-spacing: .04em;
+    }
+</style>
+
 @code {
     [CascadingParameter] private Task<AuthenticationState>? AuthState { get; set; }
 
