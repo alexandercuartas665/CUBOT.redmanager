@@ -41,6 +41,12 @@
 }
 else
 {
+    @if (_withProblem > 0)
+    {
+        <div class="cs-alert cs-alert-danger">
+            @_withProblem cuenta(s) marcadas <strong>Conectada</strong> pero cuyo ultimo refresh de token fallo. Aunque el sistema aun no las declara "expiradas", sincronizacion y publicacion pueden fallar. Reconectar para regenerar el token de forma segura.
+        </div>
+    }
     @if (_expiring > 0)
     {
         <div class="cs-alert">@_expiring cuenta(s) con token por expirar en menos de 7 dias. Reconectar para no interrumpir publicaciones.</div>
@@ -73,7 +79,14 @@ else
                                     @(string.IsNullOrWhiteSpace(a.Handle) ? "—" : "@" + a.Handle)
                                 </a>
                             </td>
-                            <td><span class="badge bg-@StatusColor(a.Status)">@StatusText(a.Status)</span> @if (a.ExpiringSoon) { <span class="badge bg-warning">por expirar</span> }</td>
+                            <td>
+                                <span class="badge bg-@StatusColor(a.Status)">@StatusText(a.Status)</span>
+                                @if (a.HasRefreshProblem)
+                                {
+                                    <span class="badge cs-badge-problem" title="@a.LastSyncError">Con problema (@a.RefreshFailureCount)</span>
+                                }
+                                @if (a.ExpiringSoon) { <span class="badge bg-warning">por expirar</span> }
+                            </td>
                             <td style="font-size:12px;color:var(--muted-foreground);">@(a.ExpiresAt is { } e ? e.LocalDateTime.ToString("dd MMM yyyy") : "—")</td>
                             <td style="text-align:right;padding-right:14px;display:flex;gap:6px;justify-content:flex-end;">
                                 <a class="btn btn-sm btn-outline-primary" href="/cuentas/@a.Id" title="Ver detalle">Abrir</a>
@@ -207,6 +220,8 @@ else
 <style>
     .cs-net { font-size: 11px; font-weight: 700; padding: 3px 9px; border-radius: 7px; }
     .cs-alert { max-width: 1100px; background: oklch(0.78 0.14 70 / 0.16); color: var(--gold-foreground); border: 1px solid oklch(0.78 0.14 70 / 0.4); border-radius: 10px; padding: 10px 14px; font-size: 13px; margin-bottom: 16px; }
+    .cs-alert-danger { background: oklch(0.9 0.1 25 / 0.15); color: var(--destructive); border-color: oklch(0.7 0.15 25 / 0.5); }
+    .cs-badge-problem { background: oklch(0.9 0.1 25 / 0.2); color: var(--destructive); border: 1px solid oklch(0.7 0.15 25 / 0.4); font-size: 10px; font-weight: 700; padding: 3px 8px; border-radius: 999px; margin-left: 4px; cursor: help; }
     .field { margin-bottom: 14px; }
 </style>
 
@@ -215,6 +230,7 @@ else
     private List<ClientDto>? _clients;
     private List<SocialNetworkDto>? _networks;
     private int _expiring;
+    private int _withProblem;
     private bool _connectOpen;
     private string? _error;
     private string _cNetwork = "tiktok";
@@ -246,6 +262,7 @@ else
     {
         _accounts = (await AccountsSvc.ListAsync()).ToList();
         _expiring = _accounts.Count(a => a.ExpiringSoon);
+        _withProblem = _accounts.Count(a => a.HasRefreshProblem);
     }
 
     private void OpenConnect()
