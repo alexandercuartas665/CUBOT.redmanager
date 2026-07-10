@@ -8,8 +8,22 @@ namespace CubotRedManager.Application.Tenancy;
 public sealed class TikTokConnectionService : ITikTokConnectionService
 {
     private const string TikTokNetwork = "tiktok";
-    private const string DefaultRedirect = "https://app.bitcode.com.co/Formularios/Modulos/RedirectURI/RedirectTiktok.aspx";
+    // Redirect nuevo (Modulo 2.2 - callback automatico): TikTok redirige aqui con ?code=X&state=Y
+    // y nuestro endpoint /oauth/tiktok/callback hace el exchange sin que el operador copie codigos.
+    // El usuario debe registrar EXACTAMENTE esta URL en developers.tiktok.com > Redirect URIs.
+    public const string DefaultRedirect = "https://red.cubot.com.co/oauth/tiktok/callback";
+    // URL del sistema anterior (VB.NET). Auto-detectada para forzar el redirect nuevo aunque la DB
+    // no se haya actualizado. Evita que un operador que solo actualiza developers.tiktok.com se
+    // encuentre con "redirect_uri mismatch" hasta que abra la pantalla de config.
+    private const string LegacyRedirectMarker = "bitcode.com.co";
     private const string DefaultScope = "user.info.basic,biz.creator.info,biz.creator.insights,video.list";
+
+    private static string EffectiveRedirect(string? stored)
+    {
+        if (string.IsNullOrWhiteSpace(stored)) { return DefaultRedirect; }
+        if (stored.Contains(LegacyRedirectMarker, StringComparison.OrdinalIgnoreCase)) { return DefaultRedirect; }
+        return stored;
+    }
 
     private readonly IApplicationDbContext _db;
     private readonly ITenantContext _tenantContext;
@@ -46,13 +60,11 @@ public sealed class TikTokConnectionService : ITikTokConnectionService
 
     public async Task<TikTokAppConfigDto> SaveAppConfigAsync(SaveTikTokAppConfigRequest request, Guid actorUserId, CancellationToken cancellationToken = default)
     {
-        if (_tenantContext.TenantId is not Guid tenantId) { throw new InvalidOperationException("Sin tenant activo."); }
-
+        // Config de plataforma: NO requiere tenant activo. La guarda el Super Admin.
         var cfg = await _db.TikTokAppConfigs.FirstOrDefaultAsync(cancellationToken);
-        var creating = cfg is null;
         if (cfg is null)
         {
-            cfg = new TikTokAppConfig { TenantId = tenantId };
+            cfg = new TikTokAppConfig();
             _db.TikTokAppConfigs.Add(cfg);
         }
 
@@ -65,8 +77,9 @@ public sealed class TikTokConnectionService : ITikTokConnectionService
             cfg.ClientSecretEncrypted = _protector.Protect(request.ClientSecret.Trim());
         }
 
+        // Auditoria a nivel plataforma (sin tenant): actor es el Super Admin.
         _audit.Write(actorUserId, "tiktok.app-config.save", nameof(TikTokAppConfig), cfg.Id,
-            previousValue: null, newValue: new { cfg.ClientKey, cfg.RedirectUri, cfg.Scope }, tenantId: tenantId);
+            previousValue: null, newValue: new { cfg.ClientKey, cfg.RedirectUri, cfg.Scope }, tenantId: null);
         await _db.SaveChangesAsync(cancellationToken);
 
         return new TikTokAppConfigDto(cfg.ClientKey, !string.IsNullOrEmpty(cfg.ClientSecretEncrypted), cfg.RedirectUri, cfg.Scope);
@@ -141,17 +154,25 @@ public sealed class TikTokConnectionService : ITikTokConnectionService
         return new TikTokValidationResult(overall, checks);
     }
 
-    public async Task<(string? Url, string State, string? Error)> BuildAuthorizeUrlAsync(CancellationToken cancellationToken = default)
+    public Task<(string? Url, string State, string? Error)> BuildAuthorizeUrlAsync(CancellationToken cancellationToken = default) =>
+        BuildAuthorizeUrlAsync(null, cancellationToken);
+
+    /// <summary>
+    /// Genera la URL de autorizacion de TikTok. Si <paramref name="stateOverride"/> viene, se usa tal
+    /// cual (lo firma el llamador con DataProtection para el callback automatico). Si no, genera un
+    /// state opaco corto (compatibilidad con el flujo antiguo de paste manual).
+    /// </summary>
+    public async Task<(string? Url, string State, string? Error)> BuildAuthorizeUrlAsync(string? stateOverride, CancellationToken cancellationToken = default)
     {
         var cfg = await _db.TikTokAppConfigs.AsNoTracking().FirstOrDefaultAsync(cancellationToken);
         if (cfg is null || string.IsNullOrWhiteSpace(cfg.ClientKey))
         {
             return (null, "", "Configura primero el App Key de TikTok.");
         }
-        var state = Guid.CreateVersion7().ToString("N")[..16];
+        var state = string.IsNullOrEmpty(stateOverride) ? Guid.CreateVersion7().ToString("N")[..16] : stateOverride;
         var url = _tiktok.BuildAuthorizeUrl(
             cfg.ClientKey,
-            string.IsNullOrWhiteSpace(cfg.RedirectUri) ? DefaultRedirect : cfg.RedirectUri,
+            EffectiveRedirect(cfg.RedirectUri),
             string.IsNullOrWhiteSpace(cfg.Scope) ? DefaultScope : cfg.Scope,
             state);
         return (url, state, null);
@@ -181,7 +202,7 @@ public sealed class TikTokConnectionService : ITikTokConnectionService
                 "El App Secret guardado no se puede descifrar (llave perdida). Vuelve a la seccion 1, re-pega el App Secret en 'App Secret (client_secret)' y pulsa 'Guardar configuracion'. Luego vuelve a Canjear Auth Code.",
                 null);
         }
-        var result = await _tiktok.ExchangeCodeAsync(cfg.ClientKey, secret, cfg.RedirectUri, authCode.Trim(), cancellationToken);
+        var result = await _tiktok.ExchangeCodeAsync(cfg.ClientKey, secret, EffectiveRedirect(cfg.RedirectUri), authCode.Trim(), cancellationToken);
         if (!result.Success || string.IsNullOrEmpty(result.AccessToken))
         {
             return new TikTokOpResult(false, result.Trace, result.Error ?? "Canje fallido.", null);

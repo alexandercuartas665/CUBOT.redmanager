@@ -51,6 +51,14 @@ else
         </div>
     </div>
 
+    @if (_justConnected)
+    {
+        <div class="cd-connected">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>
+            Cuenta conectada correctamente. El token quedo cifrado y guardado.
+        </div>
+    }
+
     <div class="cd-tabs">
         @foreach (var tab in _tabs)
         {
@@ -92,6 +100,8 @@ else
     .cd-tab:hover { color: var(--foreground); }
     .cd-tab-on { color: var(--primary); border-bottom-color: var(--primary); }
     .cd-tab-body { padding: 4px 0; }
+    .cd-connected { display: flex; align-items: center; gap: 10px; background: oklch(0.9 0.15 145 / 0.2); border: 1px solid oklch(0.65 0.15 145 / 0.4); color: oklch(0.35 0.12 145); border-radius: 10px; padding: 10px 14px; font-size: 13px; font-weight: 500; margin-bottom: 14px; }
+    .cd-connected svg { width: 18px; height: 18px; flex-shrink: 0; }
 </style>
 
 @code {
@@ -100,6 +110,7 @@ else
 
     private SocialAccountDto? _account;
     private bool _notFound;
+    private bool _justConnected;
     private string _currentTab = "resumen";
 
     private readonly (string key, string label)[] _tabs = new[]
@@ -115,6 +126,10 @@ else
     {
         _currentTab = (Tab ?? "resumen").ToLowerInvariant();
         if (_tabs.All(t => t.key != _currentTab)) { _currentTab = "resumen"; }
+        // Volviendo del callback OAuth (/oauth/tiktok/callback -> /cuentas/{id}?connected=1).
+        var uri = Nav.ToAbsoluteUri(Nav.Uri);
+        var q = Microsoft.AspNetCore.WebUtilities.QueryHelpers.ParseQuery(uri.Query);
+        _justConnected = q.TryGetValue("connected", out var v) && v == "1";
         await ReloadAsync();
     }
 

@@ -3,12 +3,14 @@ using CubotRedManager.Domain.Common;
 namespace CubotRedManager.Domain.Entities;
 
 /// <summary>
-/// Credenciales de la app de TikTok Business registradas por la agencia (tenant). Una por tenant.
-/// El secret se guarda cifrado con DataProtection (JAMAS en claro ni en logs). Equivale a los
-/// campos CLIENT_KEY / CLIENT_SECRET_ENC / REDIRECT_URI / OAUTH_SCOPE del control VB.NET de
-/// referencia (ctrlCuentasSociales). Origen del flujo OAuth de TikTok del Modulo 2.2.
+/// Credenciales de la app de TikTok Business del SaaS. Entidad GLOBAL de plataforma (singleton):
+/// UNA sola app de TikTok registrada por CUBOT.redmanager sirve el OAuth de todas las agencias.
+/// La administra el Super Admin (patron Buffer/Hootsuite/Later); las agencias solo conectan cuentas.
+///
+/// NO hereda de TenantEntity ni implementa ITenantScoped: no lleva TenantId ni HasQueryFilter.
+/// El secret se guarda cifrado con DataProtection (JAMAS en claro ni en logs).
 /// </summary>
-public class TikTokAppConfig : TenantEntity
+public class TikTokAppConfig : BaseEntity
 {
     /// <summary>client_key (App Key) de la app de TikTok for Business.</summary>
     public string ClientKey { get; set; } = "";
