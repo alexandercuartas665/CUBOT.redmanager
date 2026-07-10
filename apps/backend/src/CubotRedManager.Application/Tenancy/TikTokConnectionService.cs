@@ -240,8 +240,12 @@ public sealed class TikTokConnectionService : ITikTokConnectionService
         {
             account.OAuthFlavor = (TikTokOAuthFlavor)flavorInt;
         }
-        // Cuenta acaba de reconectar: reseteamos el rastro de alerta previa (si alguna vez fallo).
+        // Cuenta acaba de reconectar: reseteamos TODO el rastro de fallos previos. Sin esto el
+        // badge "Con problema (N)" y el mensaje LastSyncError persisten aunque la cuenta este sana
+        // ahora - engañoso al operador que acaba de renovar.
         account.LastRefreshFailureNotifiedAt = null;
+        account.LastSyncError = null;
+        account.RefreshFailureCount = 0;
 
         _audit.Write(actorUserId, "tiktok.connect", nameof(SocialAccount), account.Id,
             previousValue: null, newValue: new { account.ClientId, externalId }, tenantId: tenantId);
