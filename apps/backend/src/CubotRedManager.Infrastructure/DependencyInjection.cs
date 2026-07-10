@@ -38,6 +38,7 @@ public static class DependencyInjection
         services.AddScoped<IClientService, ClientService>();
         services.AddScoped<ISocialAccountService, SocialAccountService>();
         services.AddScoped<ITikTokConnectionService, TikTokConnectionService>();
+        services.AddScoped<ITokenRefreshLogService, TokenRefreshLogService>();
         services.AddScoped<ITikTokSyncService, TikTokSyncService>();
         services.AddScoped<IPublicationExecutorService, PublicationExecutorService>();
         services.AddScoped<IAutoReplyConfigService, AutoReplyConfigService>();

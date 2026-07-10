@@ -52,6 +52,7 @@ public class CubotRedManagerDbContext : DbContext, IApplicationDbContext, IDataP
     public DbSet<SocialAccount> SocialAccounts => Set<SocialAccount>();
     public DbSet<TikTokAppConfig> TikTokAppConfigs => Set<TikTokAppConfig>();
     public DbSet<TikTokVideo> TikTokVideos => Set<TikTokVideo>();
+    public DbSet<TokenRefreshLog> TokenRefreshLogs => Set<TokenRefreshLog>();
     public DbSet<AutoReplyConfig> AutoReplyConfigs => Set<AutoReplyConfig>();
     public DbSet<AutoReplyTemplate> AutoReplyTemplates => Set<AutoReplyTemplate>();
     public DbSet<AutoReplyJobLog> AutoReplyJobLogs => Set<AutoReplyJobLog>();
@@ -131,6 +132,13 @@ public class CubotRedManagerDbContext : DbContext, IApplicationDbContext, IDataP
             .HasIndex(x => new { x.TenantId, x.ClientId, x.NetworkCode, x.ExternalId }).IsUnique();
         // App de TikTok: singleton de plataforma (una sola fila para todo el SaaS). El servicio
         // garantiza que solo exista una via First-or-create; no aplica indice por tenant.
+
+        // Log de intentos de refresh (diagnostico por cuenta). Indice por (cuenta, fecha DESC)
+        // para la vista historica del detalle. Cascade delete al borrar la cuenta.
+        modelBuilder.Entity<TokenRefreshLog>().HasIndex(x => new { x.SocialAccountId, x.AttemptedAt });
+        modelBuilder.Entity<TokenRefreshLog>()
+            .HasOne(x => x.SocialAccount).WithMany().HasForeignKey(x => x.SocialAccountId)
+            .OnDelete(DeleteBehavior.Cascade);
         // Videos TikTok: idempotencia por cuenta + external_id (Modulo 2.4 Sync).
         modelBuilder.Entity<TikTokVideo>().HasIndex(x => new { x.TenantId, x.SocialAccountId, x.ExternalId }).IsUnique();
         modelBuilder.Entity<TikTokVideo>().HasIndex(x => new { x.SocialAccountId, x.PublishedAt });

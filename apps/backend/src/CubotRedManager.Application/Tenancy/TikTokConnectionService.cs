@@ -202,9 +202,14 @@ public sealed class TikTokConnectionService : ITikTokConnectionService
                 "El App Secret guardado no se puede descifrar (llave perdida). Vuelve a la seccion 1, re-pega el App Secret en 'App Secret (client_secret)' y pulsa 'Guardar configuracion'. Luego vuelve a Canjear Auth Code.",
                 null);
         }
+        var swExchange = System.Diagnostics.Stopwatch.StartNew();
         var result = await _tiktok.ExchangeCodeAsync(cfg.ClientKey, secret, EffectiveRedirect(cfg.RedirectUri), authCode.Trim(), cancellationToken);
+        swExchange.Stop();
         if (!result.Success || string.IsNullOrEmpty(result.AccessToken))
         {
+            // Log del intento fallido — accountId NULL porque aun no existe la cuenta. Persistimos
+            // asociado al clientId para diagnostico. Skipeamos si el service todavia no tiene tenant.
+            await TryWriteExchangeLogAsync(clientId, tenantId, result, swExchange.ElapsedMilliseconds, cancellationToken);
             return new TikTokOpResult(false, result.Trace, result.Error ?? "Canje fallido.", null);
         }
 
@@ -242,6 +247,24 @@ public sealed class TikTokConnectionService : ITikTokConnectionService
             previousValue: null, newValue: new { account.ClientId, externalId }, tenantId: tenantId);
         await _db.SaveChangesAsync(cancellationToken);
 
+        // Log persistente del exchange exitoso (endpoint golpeado, flavor detectado, duracion).
+        _db.TokenRefreshLogs.Add(new TokenRefreshLog
+        {
+            TenantId = tenantId,
+            SocialAccountId = account.Id,
+            AttemptedAt = _time.GetUtcNow(),
+            Operation = "exchange",
+            Endpoint = result.EndpointUsed ?? "unknown",
+            Flavor = account.OAuthFlavor.ToString(),
+            Success = true,
+            HttpStatus = result.HttpStatus,
+            ResponseCode = result.ResponseCode,
+            ErrorMessage = null,
+            DurationMs = (int)swExchange.ElapsedMilliseconds,
+            FailureCountAfter = 0
+        });
+        await _db.SaveChangesAsync(cancellationToken);
+
         // Tras el canje OAuth, intentamos rellenar el perfil. NO bloqueamos si falla:
         // ya tenemos token+open_id y eso basta para sync/publish; el handle es solo UX.
         try { await FetchAndApplyProfileAsync(account.Id, result.AccessToken!, cancellationToken); }
@@ -249,6 +272,41 @@ public sealed class TikTokConnectionService : ITikTokConnectionService
 
         var dto = await LoadDtoAsync(account.Id, cancellationToken);
         return new TikTokOpResult(true, result.Trace, null, dto);
+    }
+
+    /// <summary>
+    /// Registra un intento de exchange que fallo antes de crear cuenta. Como no hay account.Id,
+    /// buscamos si ya existe una cuenta para este cliente (cualquiera) y asociamos ahi. Si tampoco
+    /// existe, saltamos el log (no hay a que asociarlo). Silencioso: nunca bloquea el flujo.
+    /// </summary>
+    private async Task TryWriteExchangeLogAsync(Guid clientId, Guid tenantId, OAuthTokenResult result,
+        long elapsedMs, CancellationToken ct)
+    {
+        try
+        {
+            var probe = await _db.SocialAccounts
+                .Where(a => a.ClientId == clientId && a.NetworkCode == TikTokNetwork)
+                .Select(a => new { a.Id })
+                .FirstOrDefaultAsync(ct);
+            if (probe is null) { return; }
+            _db.TokenRefreshLogs.Add(new TokenRefreshLog
+            {
+                TenantId = tenantId,
+                SocialAccountId = probe.Id,
+                AttemptedAt = _time.GetUtcNow(),
+                Operation = "exchange",
+                Endpoint = result.EndpointUsed ?? "unknown",
+                Flavor = "unknown",
+                Success = false,
+                HttpStatus = result.HttpStatus,
+                ResponseCode = result.ResponseCode,
+                ErrorMessage = result.Error,
+                DurationMs = (int)elapsedMs,
+                FailureCountAfter = 0
+            });
+            await _db.SaveChangesAsync(ct);
+        }
+        catch { /* diagnostico — nunca bloquea */ }
     }
 
     public async Task<TikTokOpResult> RefreshProfileAsync(Guid accountId, Guid actorUserId, CancellationToken cancellationToken = default)
@@ -362,7 +420,9 @@ public sealed class TikTokConnectionService : ITikTokConnectionService
                 "El refresh token de esta cuenta no se puede descifrar. Reconecta la cuenta para regenerar credenciales.",
                 null);
         }
+        var swRefresh = System.Diagnostics.Stopwatch.StartNew();
         var result = await _tiktok.RefreshAsync(cfg.ClientKey, secret, refresh, (int)account.OAuthFlavor, cancellationToken);
+        swRefresh.Stop();
         if (!result.Success || string.IsNullOrEmpty(result.AccessToken))
         {
             // Refresh fallo. Decidimos si dejar Status=Connected (dando el beneficio de la duda al
@@ -384,6 +444,22 @@ public sealed class TikTokConnectionService : ITikTokConnectionService
                 account.Status = SocialAccountStatus.Expired;
             }
             // (si no debe expirar, mantenemos Status Connected pero LastSyncError disparara badge)
+
+            _db.TokenRefreshLogs.Add(new TokenRefreshLog
+            {
+                TenantId = tenantId,
+                SocialAccountId = account.Id,
+                AttemptedAt = _time.GetUtcNow(),
+                Operation = "refresh",
+                Endpoint = result.EndpointUsed ?? "unknown",
+                Flavor = account.OAuthFlavor.ToString(),
+                Success = false,
+                HttpStatus = result.HttpStatus,
+                ResponseCode = result.ResponseCode,
+                ErrorMessage = result.Error,
+                DurationMs = (int)swRefresh.ElapsedMilliseconds,
+                FailureCountAfter = account.RefreshFailureCount
+            });
             await _db.SaveChangesAsync(cancellationToken);
             return new TikTokOpResult(false, result.Trace, result.Error ?? "Renovacion fallida.", null);
         }
@@ -401,6 +477,21 @@ public sealed class TikTokConnectionService : ITikTokConnectionService
 
         _audit.Write(actorUserId, "tiktok.refresh", nameof(SocialAccount), account.Id,
             previousValue: null, newValue: new { account.Id }, tenantId: tenantId);
+        _db.TokenRefreshLogs.Add(new TokenRefreshLog
+        {
+            TenantId = tenantId,
+            SocialAccountId = account.Id,
+            AttemptedAt = _time.GetUtcNow(),
+            Operation = "refresh",
+            Endpoint = result.EndpointUsed ?? "unknown",
+            Flavor = account.OAuthFlavor.ToString(),
+            Success = true,
+            HttpStatus = result.HttpStatus,
+            ResponseCode = result.ResponseCode,
+            ErrorMessage = null,
+            DurationMs = (int)swRefresh.ElapsedMilliseconds,
+            FailureCountAfter = 0
+        });
         await _db.SaveChangesAsync(cancellationToken);
 
         // Oportunistico: si la cuenta no tenia handle, intentamos llenarlo con el token nuevo.

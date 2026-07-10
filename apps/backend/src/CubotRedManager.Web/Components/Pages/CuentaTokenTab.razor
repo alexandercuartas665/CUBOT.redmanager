@@ -1,0 +1,111 @@
+@using CubotRedManager.Application.Tenancy
+@inject ITokenRefreshLogService LogsSvc
+@rendermode InteractiveServer
+
+<div class="ctt-head">
+    <h3>Historial de tokens</h3>
+    <p class="text-muted small">Cada intento de canje (OAuth inicial) o refresh (worker cada ~10 min) queda registrado con el endpoint golpeado, la respuesta de TikTok y la duracion. Retencion 7 dias.</p>
+    <button class="btn btn-sm btn-outline-secondary" @onclick="ReloadAsync">Actualizar</button>
+</div>
+
+@if (_loading)
+{
+    <p class="text-muted">Cargando historial...</p>
+}
+else if (_logs.Count == 0)
+{
+    <div class="ctt-empty">
+        <p class="text-muted">No hay intentos registrados aun. Al proximo ciclo del worker (o al reconectar) apareceran aqui.</p>
+    </div>
+}
+else
+{
+    <div class="ctt-wrap">
+        <table class="table ctt-table">
+            <thead>
+                <tr>
+                    <th>Fecha</th>
+                    <th>Op</th>
+                    <th>Endpoint</th>
+                    <th>Flavor</th>
+                    <th>Resultado</th>
+                    <th>HTTP</th>
+                    <th>Code</th>
+                    <th>Detalle</th>
+                    <th>Duracion</th>
+                </tr>
+            </thead>
+            <tbody>
+                @foreach (var l in _logs)
+                {
+                    <tr class="@(l.Success ? "" : "ctt-row-fail")">
+                        <td>@l.AttemptedAt.LocalDateTime.ToString("dd MMM HH:mm:ss")</td>
+                        <td><span class="ctt-op ctt-op-@l.Operation">@l.Operation</span></td>
+                        <td style="font-family:ui-monospace,Consolas,monospace;font-size:11.5px;">@ShortEndpoint(l.Endpoint)</td>
+                        <td>@l.Flavor</td>
+                        <td>
+                            @if (l.Success)
+                            {
+                                <span class="ctt-ok">OK</span>
+                            }
+                            else
+                            {
+                                <span class="ctt-fail">FAIL (@l.FailureCountAfter)</span>
+                            }
+                        </td>
+                        <td>@(l.HttpStatus?.ToString() ?? "-")</td>
+                        <td>@(l.ResponseCode ?? "-")</td>
+                        <td style="max-width:300px;overflow-wrap:anywhere;font-size:11.5px;color:var(--muted-foreground);">@(l.ErrorMessage ?? "-")</td>
+                        <td>@l.DurationMs ms</td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+    </div>
+}
+
+<style>
+    .ctt-head { max-width: 1200px; margin-bottom: 12px; }
+    .ctt-head h3 { margin: 0 0 4px; font-size: 15px; font-weight: 700; }
+    .ctt-wrap { max-width: 1200px; overflow-x: auto; }
+    .ctt-table { margin: 0; }
+    .ctt-table th { background: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .04em; }
+    .ctt-table td { font-size: 12.5px; vertical-align: middle; padding: 8px 10px; }
+    .ctt-row-fail { background: oklch(0.9 0.1 25 / 0.06); }
+    .ctt-op { font-size: 10.5px; font-weight: 700; padding: 2px 7px; border-radius: 5px; text-transform: uppercase; }
+    .ctt-op-exchange { background: oklch(0.85 0.1 285 / 0.2); color: oklch(0.45 0.15 285); }
+    .ctt-op-refresh { background: oklch(0.85 0.1 200 / 0.2); color: oklch(0.45 0.15 200); }
+    .ctt-ok { font-size: 10.5px; font-weight: 700; padding: 2px 8px; border-radius: 999px; background: oklch(0.85 0.15 145 / 0.25); color: var(--success); }
+    .ctt-fail { font-size: 10.5px; font-weight: 700; padding: 2px 8px; border-radius: 999px; background: oklch(0.85 0.15 25 / 0.2); color: var(--destructive); }
+    .ctt-empty { max-width: 520px; margin: 30px auto; padding: 24px; text-align: center; border: 1px dashed var(--border); border-radius: 12px; background: var(--card); }
+</style>
+
+@code {
+    [Parameter, EditorRequired] public Guid AccountId { get; set; }
+
+    private bool _loading = true;
+    private List<TokenRefreshLogDto> _logs = new();
+
+    protected override async Task OnParametersSetAsync()
+    {
+        await ReloadAsync();
+    }
+
+    private async Task ReloadAsync()
+    {
+        _loading = true;
+        _logs = (await LogsSvc.ListForAccountAsync(AccountId, 30)).ToList();
+        _loading = false;
+    }
+
+    /// <summary>
+    /// Muestra solo el path del endpoint (sin scheme+host) para que la tabla no se estire. Ej:
+    /// "https://open.tiktokapis.com/v2/oauth/token/" -> "open.tiktokapis.com/v2/oauth/token/".
+    /// </summary>
+    private static string ShortEndpoint(string url)
+    {
+        if (string.IsNullOrEmpty(url)) { return "-"; }
+        if (Uri.TryCreate(url, UriKind.Absolute, out var u)) { return u.Host + u.AbsolutePath; }
+        return url;
+    }
+}
