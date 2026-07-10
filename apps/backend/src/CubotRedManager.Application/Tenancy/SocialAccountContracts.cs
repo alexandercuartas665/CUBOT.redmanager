@@ -35,6 +35,8 @@ public interface ISocialAccountService
 {
     Task<IReadOnlyList<SocialNetworkDto>> ListNetworksAsync(CancellationToken cancellationToken = default);
     Task<IReadOnlyList<SocialAccountDto>> ListAsync(Guid? clientId = null, CancellationToken cancellationToken = default);
+    /// <summary>Trae una cuenta por su Id (tenant-scoped). Null si no existe o no pertenece al tenant activo.</summary>
+    Task<SocialAccountDto?> GetAsync(Guid id, CancellationToken cancellationToken = default);
     Task<SocialAccountDto?> ConnectDemoAsync(ConnectSocialAccountRequest request, Guid actorUserId, CancellationToken cancellationToken = default);
     Task<SocialAccountDto?> ChangeStatusAsync(Guid id, SocialAccountStatus status, Guid actorUserId, CancellationToken cancellationToken = default);
     Task<bool> DeleteAsync(Guid id, Guid actorUserId, CancellationToken cancellationToken = default);

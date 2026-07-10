@@ -1,0 +1,36 @@
+@* Placeholder de tab que aun no esta implementado como vista embebida — envia al operador a la
+   pagina completa (vieja) con el filtro de cuenta ya aplicado. Iteracion 2: reemplazar por el
+   componente real. *@
+
+<div class="clo-wrap">
+    <div class="clo-ic">
+        @if (Icon == "videos")
+        {
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="23 7 16 12 23 17 23 7"/><rect x="1" y="5" width="15" height="14" rx="2"/></svg>
+        }
+        else if (Icon == "pipeline")
+        {
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 3v18h18"/><rect x="6" y="14" width="3" height="5"/><rect x="11" y="9" width="3" height="10"/><rect x="16" y="5" width="3" height="14"/></svg>
+        }
+        else if (Icon == "autoreply")
+        {
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 8V4H8"/><rect width="16" height="12" x="4" y="8" rx="2"/><path d="M2 14h2"/><path d="M20 14h2"/><path d="M15 13v2"/><path d="M9 13v2"/></svg>
+        }
+    </div>
+    <h3>@Label</h3>
+    <p>Esta seccion abre la vista completa donde puedes gestionar los detalles. Los filtros de esta cuenta se aplican automaticamente.</p>
+    <a class="btn btn-primary" href="@Href">Abrir vista completa &rarr;</a>
+</div>
+
+<style>
+    .clo-wrap { max-width: 520px; margin: 40px auto; text-align: center; padding: 32px 24px; border: 1px dashed var(--border); border-radius: 14px; background: var(--card); }
+    .clo-ic { width: 56px; height: 56px; margin: 0 auto 16px; padding: 12px; border-radius: 14px; background: oklch(0.72 0.15 285 / 0.1); color: var(--primary); }
+    .clo-wrap h3 { margin: 0 0 8px; font-size: 18px; font-weight: 700; }
+    .clo-wrap p { color: var(--muted-foreground); font-size: 13.5px; margin-bottom: 18px; }
+</style>
+
+@code {
+    [Parameter, EditorRequired] public string Href { get; set; } = "";
+    [Parameter, EditorRequired] public string Label { get; set; } = "";
+    [Parameter] public string Icon { get; set; } = "";
+}

@@ -1,0 +1,150 @@
+@using CubotRedManager.Application.Tenancy
+@using CubotRedManager.Domain.Enums
+@inject ITikTokConnectionService TikTokSvc
+@inject ISocialAccountService AccountsSvc
+@inject AuthenticationStateProvider AuthProvider
+@rendermode InteractiveServer
+
+<div class="crt-grid">
+    <div class="crt-kpi">
+        <div class="crt-kpi-lbl">Seguidores</div>
+        <div class="crt-kpi-val">@FormatFollowers(Account.FollowersCount)</div>
+    </div>
+    <div class="crt-kpi">
+        <div class="crt-kpi-lbl">Estado del token</div>
+        <div class="crt-kpi-val">
+            @if (Account.Status == SocialAccountStatus.Connected)
+            {
+                <span style="color:var(--success);">Conectado</span>
+            }
+            else if (Account.Status == SocialAccountStatus.Expired)
+            {
+                <span style="color:oklch(0.55 0.15 65);">Expirado</span>
+            }
+            else
+            {
+                <span style="color:var(--destructive);">@Account.Status</span>
+            }
+        </div>
+        <div class="crt-kpi-hint">
+            @if (Account.ExpiresAt is { } e)
+            {
+                var days = (int)(e - DateTimeOffset.UtcNow).TotalDays;
+                if (days > 0) { <span>Expira en @days dia@(days == 1 ? "" : "s") (@e.LocalDateTime.ToString("dd MMM yyyy HH:mm"))</span> }
+                else { <span>Vencio el @e.LocalDateTime.ToString("dd MMM yyyy HH:mm")</span> }
+            }
+            else
+            {
+                <span>Sin fecha de expiracion conocida</span>
+            }
+        </div>
+    </div>
+    <div class="crt-kpi">
+        <div class="crt-kpi-lbl">Ultima sincronizacion</div>
+        <div class="crt-kpi-val">@(Account.LastSyncAt?.LocalDateTime.ToString("dd MMM HH:mm") ?? "Nunca")</div>
+    </div>
+</div>
+
+<div class="crt-actions">
+    @if (Account.Status == SocialAccountStatus.Connected)
+    {
+        <button class="btn btn-outline-secondary" @onclick="RenewTokenAsync" disabled="@_busy">@(_busy ? "Renovando..." : "Renovar token")</button>
+        <button class="btn btn-outline-secondary" @onclick="RefreshProfileAsync" disabled="@_busy">Actualizar perfil</button>
+        <button class="btn btn-outline-secondary" @onclick="ChangeToDisconnectedAsync" disabled="@_busy">Desconectar</button>
+    }
+    else
+    {
+        <a class="btn btn-primary" href="/cuentas-sociales">Reconectar via OAuth</a>
+    }
+</div>
+
+@if (_msg is not null) { <div class="text-success small">@_msg</div> }
+@if (_error is not null) { <div class="text-danger small">@_error</div> }
+@if (!string.IsNullOrEmpty(_trace)) { <pre class="crt-trace">@_trace</pre> }
+
+@if (Account.Bio is { } bio && !string.IsNullOrWhiteSpace(bio))
+{
+    <div class="crt-bio">
+        <div class="crt-bio-lbl">Bio</div>
+        <div class="crt-bio-val">@bio</div>
+    </div>
+}
+
+<style>
+    .crt-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; max-width: 1000px; margin-bottom: 20px; }
+    .crt-kpi { border: 1px solid var(--border); border-radius: 12px; padding: 16px; background: var(--card); }
+    .crt-kpi-lbl { font-size: 11px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted-foreground); font-weight: 600; }
+    .crt-kpi-val { font-size: 22px; font-weight: 700; margin-top: 4px; }
+    .crt-kpi-hint { font-size: 11.5px; color: var(--muted-foreground); margin-top: 4px; }
+    .crt-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 12px; }
+    .crt-trace { background: #0f172a; color: #86efac; padding: 12px; border-radius: 10px; font-size: 11.5px; font-family: ui-monospace, Consolas, monospace; max-height: 260px; overflow: auto; margin-top: 10px; }
+    .crt-bio { max-width: 700px; margin-top: 16px; padding: 12px 16px; background: var(--muted); border-radius: 10px; }
+    .crt-bio-lbl { font-size: 11px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted-foreground); font-weight: 600; margin-bottom: 4px; }
+    .crt-bio-val { font-size: 13.5px; line-height: 1.4; }
+</style>
+
+@code {
+    [Parameter, EditorRequired] public SocialAccountDto Account { get; set; } = null!;
+    [Parameter] public EventCallback OnRefreshedAsync { get; set; }
+
+    private bool _busy;
+    private string? _msg;
+    private string? _error;
+    private string? _trace;
+
+    private async Task<Guid> ActorAsync()
+    {
+        var state = await AuthProvider.GetAuthenticationStateAsync();
+        return Guid.TryParse(state.User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value, out var id) ? id : Guid.Empty;
+    }
+
+    private async Task RenewTokenAsync()
+    {
+        _busy = true; _msg = null; _error = null; _trace = null;
+        try
+        {
+            var actor = await ActorAsync();
+            var res = await TikTokSvc.RefreshAccountAsync(Account.Id, actor);
+            _trace = res.Trace;
+            if (res.Success) { _msg = "Token renovado."; }
+            else { _error = res.Error ?? "Renovacion fallida."; }
+            if (OnRefreshedAsync.HasDelegate) { await OnRefreshedAsync.InvokeAsync(); }
+        }
+        finally { _busy = false; }
+    }
+
+    private async Task RefreshProfileAsync()
+    {
+        _busy = true; _msg = null; _error = null;
+        try
+        {
+            var actor = await ActorAsync();
+            var res = await TikTokSvc.RefreshProfileAsync(Account.Id, actor);
+            if (res.Success) { _msg = "Perfil actualizado."; }
+            else { _error = res.Error ?? "No se pudo actualizar el perfil."; }
+            if (OnRefreshedAsync.HasDelegate) { await OnRefreshedAsync.InvokeAsync(); }
+        }
+        finally { _busy = false; }
+    }
+
+    private async Task ChangeToDisconnectedAsync()
+    {
+        _busy = true; _msg = null; _error = null;
+        try
+        {
+            var actor = await ActorAsync();
+            await AccountsSvc.ChangeStatusAsync(Account.Id, SocialAccountStatus.Disconnected, actor);
+            _msg = "Cuenta marcada como desconectada.";
+            if (OnRefreshedAsync.HasDelegate) { await OnRefreshedAsync.InvokeAsync(); }
+        }
+        finally { _busy = false; }
+    }
+
+    private static string FormatFollowers(long? n) => n switch
+    {
+        null => "—",
+        < 1_000 => n.Value.ToString(),
+        < 1_000_000 => (n.Value / 1_000d).ToString("0.#") + "k",
+        _ => (n.Value / 1_000_000d).ToString("0.#") + "M"
+    };
+}
