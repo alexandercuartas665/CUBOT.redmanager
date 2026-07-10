@@ -10,6 +10,7 @@
 @inject IAutoReplyConfigService AutoReplySvc
 @inject IWhatsAppLineService LinesSvc
 @inject IWhatsAppConnectorService Connector
+@inject CubotRedManager.Web.Auth.TikTokOAuthStateService OAuthState
 @inject AuthenticationStateProvider AuthProvider
 @inject IJSRuntime JS
 @inject NavigationManager Nav
@@ -25,7 +26,7 @@
             <span>TikTok Manager</span>
         </div>
         <h1 class="page-title" style="margin-top:12px;">Gestion de Cuentas</h1>
-        <p class="page-sub" style="margin-bottom:0;">Conecta cuentas TikTok de tus clientes via OAuth oficial. La configuracion tecnica de la app esta en <a href="/conexiones">Conexiones</a>.</p>
+        <p class="page-sub" style="margin-bottom:0;">Conecta cuentas TikTok de tus clientes via OAuth oficial. La app de TikTok la administra el equipo de plataforma; tu solo conectas cuentas.</p>
     </div>
     <button class="btn btn-primary" @onclick="OpenConnect" disabled="@(_clients.Count == 0)">+ Conectar Cuenta</button>
 </div>
@@ -99,58 +100,30 @@ else
             <button class="tk-modal-close" @onclick="CloseModal">&times;</button>
         </div>
         <div class="tk-modal-body">
-            @if (_step == 1)
-            {
-                <p class="tk-modal-help">Selecciona el cliente (marca) y la red social.</p>
-                <div class="field">
-                    <label class="form-label">Cliente (marca)</label>
-                    <select class="form-control" @bind="_clientId">
-                        <option value="">Selecciona...</option>
-                        @foreach (var c in _clients) { <option value="@c.Id">@c.Name</option> }
-                    </select>
-                </div>
-                <div class="tk-net-grid">
-                    <button class="tk-net-btn @(_selectedNet == "tiktok" ? "tk-net-sel-tk" : "")" @onclick='() => _selectedNet = "tiktok"'>
-                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 12a4 4 0 1 0 4 4V4a5 5 0 0 0 5 5"/></svg>
-                        <span>TikTok</span>
-                    </button>
-                    <button class="tk-net-btn @(_selectedNet == "meta_instagram" ? "tk-net-sel-ig" : "")" disabled title="Proximamente">
-                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="2" width="20" height="20" rx="5"/><path d="M16 11.37A4 4 0 1 1 12.63 8 4 4 0 0 1 16 11.37z"/><line x1="17.5" y1="6.5" x2="17.51" y2="6.5"/></svg>
-                        <span>Instagram</span>
-                    </button>
-                    <button class="tk-net-btn @(_selectedNet == "youtube" ? "tk-net-sel-yt" : "")" disabled title="Proximamente">
-                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22.54 6.42a2.78 2.78 0 0 0-1.94-2C18.88 4 12 4 12 4s-6.88 0-8.6.46a2.78 2.78 0 0 0-1.94 2A29 29 0 0 0 1 11.75a29 29 0 0 0 .46 5.33A2.78 2.78 0 0 0 3.4 19c1.72.46 8.6.46 8.6.46s6.88 0 8.6-.46a2.78 2.78 0 0 0 1.94-2 29 29 0 0 0 .46-5.25 29 29 0 0 0-.46-5.33z"/><polygon points="9.75 15.02 15.5 11.75 9.75 8.48 9.75 15.02"/></svg>
-                        <span>YouTube</span>
-                    </button>
-                </div>
-                <button class="btn btn-primary tk-modal-cta" @onclick="GoAuthorize" disabled="@(_busy || string.IsNullOrWhiteSpace(_clientId))">Autorizar conexion</button>
-                @if (_error is not null) { <div class="text-danger small" style="margin-top:8px;">@_error</div> }
-            }
-            else if (_step == 2)
-            {
-                <p class="tk-modal-help">Se abrio TikTok en una pestana nueva. Autoriza y pega aqui el codigo <code>code</code> de la URL de retorno.</p>
-                <div class="field">
-                    <label class="form-label">Auth Code</label>
-                    <input class="form-control" @bind="_authCode" placeholder="Pega el code de la URL de retorno" />
-                </div>
-                <div style="display:flex; gap:8px; justify-content:flex-end;">
-                    <button class="btn btn-outline-secondary" @onclick="() => _step = 1" disabled="@_busy">Atras</button>
-                    <button class="btn btn-primary" @onclick="ExchangeCode" disabled="@(_busy || string.IsNullOrWhiteSpace(_authCode))">@(_busy ? "Canjeando..." : "Confirmar conexion")</button>
-                </div>
-                @if (_error is not null) { <div class="text-danger small" style="margin-top:8px;">@_error</div> }
-                @if (!string.IsNullOrEmpty(_trace)) { <pre class="tk-trace">@_trace</pre> }
-            }
-            else if (_step == 3)
-            {
-                <div class="tk-success">
-                    <div class="tk-success-ic">
-                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>
-                    </div>
-                    <h4>Cuenta conectada</h4>
-                    <p>La cuenta de TikTok ya esta operativa. Puedes ver sus comentarios en el <a href="/tiktok/pipeline">Pipeline</a>.</p>
-                </div>
-                <button class="btn btn-primary tk-modal-cta" @onclick="CloseModal">Listo</button>
-            }
+            <p class="tk-modal-help">Selecciona el cliente (marca) y la red social. Te llevaremos a TikTok, autorizas y TikTok nos devuelve al detalle de la cuenta con el token ya guardado. No hay que copiar codigos.</p>
+            <div class="field">
+                <label class="form-label">Cliente (marca)</label>
+                <select class="form-control" @bind="_clientId">
+                    <option value="">Selecciona...</option>
+                    @foreach (var c in _clients) { <option value="@c.Id">@c.Name</option> }
+                </select>
+            </div>
+            <div class="tk-net-grid">
+                <button class="tk-net-btn @(_selectedNet == "tiktok" ? "tk-net-sel-tk" : "")" @onclick='() => _selectedNet = "tiktok"'>
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 12a4 4 0 1 0 4 4V4a5 5 0 0 0 5 5"/></svg>
+                    <span>TikTok</span>
+                </button>
+                <button class="tk-net-btn @(_selectedNet == "meta_instagram" ? "tk-net-sel-ig" : "")" disabled title="Proximamente">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="2" width="20" height="20" rx="5"/><path d="M16 11.37A4 4 0 1 1 12.63 8 4 4 0 0 1 16 11.37z"/><line x1="17.5" y1="6.5" x2="17.51" y2="6.5"/></svg>
+                    <span>Instagram</span>
+                </button>
+                <button class="tk-net-btn @(_selectedNet == "youtube" ? "tk-net-sel-yt" : "")" disabled title="Proximamente">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22.54 6.42a2.78 2.78 0 0 0-1.94-2C18.88 4 12 4 12 4s-6.88 0-8.6.46a2.78 2.78 0 0 0-1.94 2A29 29 0 0 0 1 11.75a29 29 0 0 0 .46 5.33A2.78 2.78 0 0 0 3.4 19c1.72.46 8.6.46 8.6.46s6.88 0 8.6-.46a2.78 2.78 0 0 0 1.94-2 29 29 0 0 0 .46-5.25 29 29 0 0 0-.46-5.33z"/><polygon points="9.75 15.02 15.5 11.75 9.75 8.48 9.75 15.02"/></svg>
+                    <span>YouTube</span>
+                </button>
+            </div>
+            <button class="btn btn-primary tk-modal-cta" @onclick="GoAuthorize" disabled="@(_busy || string.IsNullOrWhiteSpace(_clientId))">@(_busy ? "Abriendo TikTok..." : "Autorizar conexion")</button>
+            @if (_error is not null) { <div class="text-danger small" style="margin-top:8px;">@_error</div> }
         </div>
     </div>
 </div>
@@ -503,17 +476,18 @@ else
 
 @code {
     private bool _loading = true, _busy, _modalOpen;
-    private int _step = 1;
     private Guid _actor;
+    private Guid _tenantId;
     private List<ClientDto> _clients = new();
     private List<SocialAccountDto> _accounts = new();
-    private string _clientId = "", _selectedNet = "tiktok", _authCode = "", _trace = "";
+    private string _clientId = "", _selectedNet = "tiktok";
     private string? _error;
 
     protected override async Task OnInitializedAsync()
     {
         var st = await AuthProvider.GetAuthenticationStateAsync();
         Guid.TryParse(st.User.FindFirst(ClaimTypes.NameIdentifier)?.Value, out _actor);
+        Guid.TryParse(st.User.FindFirst("tenant_id")?.Value, out _tenantId);
         _clients = (await ClientsSvc.ListAsync()).ToList();
         await Reload();
         _loading = false;
@@ -524,42 +498,34 @@ else
 
     private void OpenConnect()
     {
-        _error = null; _step = 1; _clientId = ""; _authCode = ""; _trace = ""; _modalOpen = true;
+        _error = null; _clientId = ""; _modalOpen = true;
     }
 
     private void CloseModal() { _modalOpen = false; }
 
+    /// <summary>
+    /// Redirige a TikTok con state firmado (tenant/cliente/actor). TikTok vuelve a
+    /// /oauth/tiktok/callback que hace el exchange y redirige a /cuentas/{id}. El operador
+    /// no pega codigos.
+    /// </summary>
     private async Task GoAuthorize()
     {
         _busy = true; _error = null;
         try
         {
+            if (!Guid.TryParse(_clientId, out var clientId)) { _error = "Cliente invalido."; return; }
+            if (_tenantId == Guid.Empty) { _error = "Sesion sin tenant activo."; return; }
+
             var cfg = await TikTokSvc.GetAppConfigAsync();
             if (cfg is null || !cfg.HasSecret)
             {
-                _error = "Falta configurar la app de TikTok. Pide al admin que lo haga en Conexiones.";
+                _error = "La app de TikTok de la plataforma no esta configurada. Contacta al equipo de CUBOT.redmanager.";
                 return;
             }
-            var (url, _, err) = await TikTokSvc.BuildAuthorizeUrlAsync();
-            if (err is not null) { _error = err; return; }
-            await JS.InvokeVoidAsync("open", url, "_blank");
-            _step = 2;
-        }
-        catch (Exception ex) { _error = ex.Message; }
-        finally { _busy = false; }
-    }
-
-    private async Task ExchangeCode()
-    {
-        _busy = true; _error = null;
-        try
-        {
-            if (!Guid.TryParse(_clientId, out var clientId)) { _error = "Cliente invalido."; return; }
-            var r = await TikTokSvc.ExchangeCodeAsync(clientId, _authCode, _actor);
-            _trace = r.Trace;
-            if (!r.Success) { _error = r.Error; return; }
-            await Reload();
-            _step = 3;
+            var signedState = OAuthState.Generate(_tenantId, clientId, _actor);
+            var (url, _, err) = await TikTokSvc.BuildAuthorizeUrlAsync(signedState);
+            if (err is not null || string.IsNullOrEmpty(url)) { _error = err ?? "No se pudo generar la URL."; return; }
+            Nav.NavigateTo(url, forceLoad: true);
         }
         catch (Exception ex) { _error = ex.Message; }
         finally { _busy = false; }

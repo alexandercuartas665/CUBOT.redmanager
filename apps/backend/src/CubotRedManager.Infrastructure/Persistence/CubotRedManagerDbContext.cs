@@ -129,8 +129,8 @@ public class CubotRedManagerDbContext : DbContext, IApplicationDbContext, IDataP
         modelBuilder.Entity<SocialAccount>().Property(x => x.OAuthFlavor).HasConversion<string>();
         modelBuilder.Entity<SocialAccount>()
             .HasIndex(x => new { x.TenantId, x.ClientId, x.NetworkCode, x.ExternalId }).IsUnique();
-        // App de TikTok: una config por tenant (Modulo 2.2).
-        modelBuilder.Entity<TikTokAppConfig>().HasIndex(x => x.TenantId).IsUnique();
+        // App de TikTok: singleton de plataforma (una sola fila para todo el SaaS). El servicio
+        // garantiza que solo exista una via First-or-create; no aplica indice por tenant.
         // Videos TikTok: idempotencia por cuenta + external_id (Modulo 2.4 Sync).
         modelBuilder.Entity<TikTokVideo>().HasIndex(x => new { x.TenantId, x.SocialAccountId, x.ExternalId }).IsUnique();
         modelBuilder.Entity<TikTokVideo>().HasIndex(x => new { x.SocialAccountId, x.PublishedAt });

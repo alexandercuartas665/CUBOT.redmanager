@@ -2,7 +2,9 @@
 @using CubotRedManager.Domain.Enums
 @inject ITikTokConnectionService TikTokSvc
 @inject ISocialAccountService AccountsSvc
+@inject CubotRedManager.Web.Auth.TikTokOAuthStateService OAuthState
 @inject AuthenticationStateProvider AuthProvider
+@inject NavigationManager Nav
 @rendermode InteractiveServer
 
 <div class="crt-grid">
@@ -54,7 +56,7 @@
     }
     else
     {
-        <a class="btn btn-primary" href="/cuentas-sociales">Reconectar via OAuth</a>
+        <button class="btn btn-primary" @onclick="ReconnectViaOAuthAsync" disabled="@_busy">@(_busy ? "Abriendo TikTok..." : "Reconectar via OAuth")</button>
     }
 </div>
 
@@ -96,6 +98,30 @@
     {
         var state = await AuthProvider.GetAuthenticationStateAsync();
         return Guid.TryParse(state.User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value, out var id) ? id : Guid.Empty;
+    }
+
+    /// <summary>
+    /// Cuenta expirada / desconectada -> disparar OAuth con state firmado (tenant + cliente + actor).
+    /// TikTok vuelve al callback y este componente se recarga con el token nuevo.
+    /// </summary>
+    private async Task ReconnectViaOAuthAsync()
+    {
+        _busy = true; _error = null;
+        try
+        {
+            var st = await AuthProvider.GetAuthenticationStateAsync();
+            if (!Guid.TryParse(st.User.FindFirst("tenant_id")?.Value, out var tenantId) || tenantId == Guid.Empty)
+            {
+                _error = "Sesion sin tenant activo."; return;
+            }
+            var actor = await ActorAsync();
+            var signedState = OAuthState.Generate(tenantId, Account.ClientId, actor);
+            var (url, _, err) = await TikTokSvc.BuildAuthorizeUrlAsync(signedState);
+            if (err is not null || string.IsNullOrEmpty(url)) { _error = err ?? "No se pudo generar la URL."; return; }
+            Nav.NavigateTo(url, forceLoad: true);
+        }
+        catch (Exception ex) { _error = ex.Message; }
+        finally { _busy = false; }
     }
 
     private async Task RenewTokenAsync()

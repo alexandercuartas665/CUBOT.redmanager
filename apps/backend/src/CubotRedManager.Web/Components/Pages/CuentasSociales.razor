@@ -7,6 +7,7 @@
 @inject ISocialAccountService AccountsSvc
 @inject IClientService ClientsSvc
 @inject ITikTokConnectionService TikTokSvc
+@inject CubotRedManager.Web.Auth.TikTokOAuthStateService OAuthState
 @inject AuthenticationStateProvider AuthProvider
 @inject IJSRuntime JS
 @inject NavigationManager Nav
@@ -26,6 +27,13 @@
     </div>
     <button class="btn btn-primary" @onclick="OpenConnect" disabled="@(_clients is null || _clients.Count == 0)">+ Conectar cuenta</button>
 </div>
+
+@if (!string.IsNullOrEmpty(_callbackError))
+{
+    <div class="cs-alert" style="background:oklch(0.9 0.1 25 / 0.15); color: var(--destructive); border-color: oklch(0.7 0.15 25 / 0.5);">
+        No se completo la conexion con TikTok: @_callbackError
+    </div>
+}
 
 @if (_accounts is null)
 {
@@ -137,27 +145,13 @@ else
                 @if (_reconnectStep == 1)
                 {
                     <ol style="font-size:13px;line-height:1.7;padding-left:18px;margin-bottom:14px;">
-                        <li>Click en <strong>Autorizar en TikTok</strong>: se abre una pestana nueva.</li>
+                        <li>Click en <strong>Autorizar en TikTok</strong>: te llevamos a TikTok.</li>
                         <li>Inicia sesion con la cuenta <strong>@_reconnectAccount.Handle</strong> y acepta los permisos.</li>
-                        <li>TikTok te devolvera a una URL con un parametro <code>code=...</code>. Copia ese codigo y pegalo en el siguiente paso.</li>
+                        <li>TikTok te devolvera automaticamente al detalle de la cuenta con el token renovado. No tienes que copiar nada.</li>
                     </ol>
                     <button class="btn btn-primary" @onclick="ReconnectAuthorize" disabled="@_reconnectBusy">
                         @(_reconnectBusy ? "Abriendo..." : "Autorizar en TikTok")
                     </button>
-                }
-                else if (_reconnectStep == 2)
-                {
-                    <div class="field">
-                        <label class="form-label">Pega aqui el <code>code</code> que TikTok te devolvio</label>
-                        <input class="form-control" @bind="_reconnectCode" placeholder="ej. abc123..." />
-                        <div class="text-muted" style="font-size:11px;margin-top:6px;">Lo encuentras en la URL despues de autorizar, como <code>?code=XYZ&amp;state=...</code></div>
-                    </div>
-                }
-                else if (_reconnectStep == 3)
-                {
-                    <div style="background:oklch(0.85 0.15 145 / 0.2);border:1px solid oklch(0.65 0.15 145 / 0.5);color:oklch(0.35 0.1 145);border-radius:8px;padding:12px;font-size:13px;">
-                        Cuenta reconectada correctamente. Token nuevo cifrado con las llaves actuales.
-                    </div>
                 }
 
                 @if (_reconnectError is not null)
@@ -173,13 +167,7 @@ else
                 }
             </div>
             <div class="modal-foot">
-                <button class="btn btn-outline-secondary" @onclick="CloseReconnect">@(_reconnectStep == 3 ? "Cerrar" : "Cancelar")</button>
-                @if (_reconnectStep == 2)
-                {
-                    <button class="btn btn-primary" @onclick="ReconnectExchange" disabled="@(_reconnectBusy || string.IsNullOrWhiteSpace(_reconnectCode))">
-                        @(_reconnectBusy ? "Renovando..." : "Renovar conexion")
-                    </button>
-                }
+                <button class="btn btn-outline-secondary" @onclick="CloseReconnect">Cancelar</button>
             </div>
         </div>
     </div>
@@ -231,13 +219,26 @@ else
     private string? _error;
     private string _cNetwork = "tiktok";
     private Guid _actor;
+    private Guid _tenantId;
+    private string? _callbackError;
 
     protected override async Task OnInitializedAsync()
     {
         var st = await AuthProvider.GetAuthenticationStateAsync();
         Guid.TryParse(st.User.FindFirst(ClaimTypes.NameIdentifier)?.Value, out _actor);
+        Guid.TryParse(st.User.FindFirst("tenant_id")?.Value, out _tenantId);
         _clients = (await ClientsSvc.ListAsync()).ToList();
         _networks = (await AccountsSvc.ListNetworksAsync()).ToList();
+
+        // Volviendo del callback OAuth: mostramos toast si TikTok rebota. El caso exito redirige
+        // al detalle /cuentas/{id}, asi que aqui solo capturamos el error.
+        var uri = Nav.ToAbsoluteUri(Nav.Uri);
+        var q = Microsoft.AspNetCore.WebUtilities.QueryHelpers.ParseQuery(uri.Query);
+        if (q.TryGetValue("tkerr", out var err) && !string.IsNullOrWhiteSpace(err))
+        {
+            _callbackError = err.ToString();
+        }
+
         await Reload();
     }
 
@@ -283,10 +284,12 @@ else
     }
 
     // ===== Reconexion inline (Modulo 2.2 OAuth real, no stub) =====
+    // El flujo es redirect firmado -> TikTok -> /oauth/tiktok/callback -> /cuentas/{id}. Aqui solo
+    // se muestra el paso 1 (boton "Autorizar en TikTok"); el resultado llega en la nueva pagina.
     private SocialAccountDto? _reconnectAccount;
     private int _reconnectStep;
-    private string _reconnectCode = "";
     private string? _reconnectError;
+    // Reservado para mostrar traza tecnica del paso 1 si el usuario abre "Detalles" en el error.
     private string? _reconnectTrace;
     private bool _reconnectBusy;
 
@@ -300,7 +303,6 @@ else
     {
         _reconnectError = null;
         _reconnectTrace = null;
-        _reconnectCode = "";
         _reconnectStep = 1;
         _reconnectBusy = false;
 
@@ -320,7 +322,6 @@ else
         _reconnectStep = 0;
         _reconnectError = null;
         _reconnectTrace = null;
-        _reconnectCode = "";
     }
 
     private async Task ReconnectAuthorize()
@@ -333,44 +334,27 @@ else
             var cfg = await TikTokSvc.GetAppConfigAsync();
             if (cfg is null || !cfg.HasSecret)
             {
-                _reconnectError = "Falta configurar App Key + Secret de TikTok. Pide al Super Admin que lo haga en Servidores / TikTok.";
+                _reconnectError = "La app de TikTok de la plataforma no esta configurada. Contacta al equipo de CUBOT.redmanager.";
                 return;
             }
-            var (url, _, err) = await TikTokSvc.BuildAuthorizeUrlAsync();
+            if (_tenantId == Guid.Empty)
+            {
+                _reconnectError = "Sesion sin tenant activo. Vuelve a iniciar sesion.";
+                return;
+            }
+            // Firmamos el state con (tenant, cliente, actor). TikTok lo devuelve tal cual al
+            // callback y ahi decodificamos sin depender de cookies (por si el usuario autoriza
+            // desde otro dispositivo).
+            var signedState = OAuthState.Generate(_tenantId, _reconnectAccount.ClientId, _actor);
+            var (url, _, err) = await TikTokSvc.BuildAuthorizeUrlAsync(signedState);
             if (err is not null || string.IsNullOrEmpty(url))
             {
                 _reconnectError = err ?? "No se pudo construir la URL de autorizacion.";
                 return;
             }
-            await JS.InvokeVoidAsync("open", url, "_blank");
-            _reconnectStep = 2;
-        }
-        catch (Exception ex) { _reconnectError = ex.Message; }
-        finally { _reconnectBusy = false; }
-    }
-
-    private async Task ReconnectExchange()
-    {
-        if (_reconnectAccount is null) { return; }
-        _reconnectBusy = true;
-        _reconnectError = null;
-        _reconnectTrace = null;
-        try
-        {
-            var code = (_reconnectCode ?? "").Trim();
-            if (code.Length == 0) { _reconnectError = "Pega el code antes de continuar."; return; }
-
-            // El backend UPDATEa la cuenta existente (busca por ClientId + NetworkCode='tiktok')
-            // y reemplaza el access_token con uno nuevo cifrado con las llaves actuales.
-            var r = await TikTokSvc.ExchangeCodeAsync(_reconnectAccount.ClientId, code, _actor);
-            _reconnectTrace = r.Trace;
-            if (!r.Success)
-            {
-                _reconnectError = $"TikTok rechazo el code: {r.Error}";
-                return;
-            }
-            _reconnectStep = 3;
-            await Reload(); // refresca la fila de la cuenta con el nuevo expires_at + Status=Connected
+            // Redirigimos en la misma pestana. TikTok volvera a /oauth/tiktok/callback y ese
+            // endpoint redirige al /cuentas/{id}?connected=1. El operador nunca pega codigos.
+            Nav.NavigateTo(url, forceLoad: true);
         }
         catch (Exception ex) { _reconnectError = ex.Message; }
         finally { _reconnectBusy = false; }

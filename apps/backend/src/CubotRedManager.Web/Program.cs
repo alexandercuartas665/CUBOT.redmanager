@@ -32,6 +32,10 @@ builder.Services.AddScoped<ITenantContext>(sp => sp.GetRequiredService<HttpTenan
 builder.Services.AddSingleton<IUploadPathResolver>(_ =>
     new CubotRedManager.Infrastructure.Storage.StaticPathUploadPathResolver(builder.Environment.WebRootPath));
 
+// Servicio de state OAuth para TikTok (firma tenant/cliente/actor en el state que viaja por TikTok
+// y que /oauth/tiktok/callback recibe). Sin este servicio el operador tendria que pegar el code.
+builder.Services.AddScoped<CubotRedManager.Web.Auth.TikTokOAuthStateService>();
+
 // Worker periodico: refresh proactivo de tokens + sync TikTok cada N minutos.
 // Configurable via appsettings BackgroundJobs:TikTokMaintenance:Enabled (default: true).
 var tkOpts = builder.Configuration.GetSection("BackgroundJobs:TikTokMaintenance").Get<CubotRedManager.Web.BackgroundJobs.TikTokMaintenanceOptions>()
@@ -582,6 +586,60 @@ app.MapPost("/webhooks/ycloud/{tenantId:guid}", async (
     await db.SaveChangesAsync();
     return Results.Ok();
 }).AllowAnonymous().DisableAntiforgery();
+
+// ===== Callback OAuth TikTok =====
+// TikTok redirige aqui despues de que el usuario autoriza. El state va firmado con DataProtection
+// y contiene tenant/cliente/actor. Nosotros:
+//   1. Descifra el state (rechaza si expiro >15 min o firma no valida).
+//   2. Fija el ambient tenant.
+//   3. Llama a ExchangeCodeAsync -> crea/actualiza SocialAccount y guarda tokens cifrados.
+//   4. Redirige al detalle de la cuenta con toast de exito, o vuelta a la lista con error.
+// SEGURIDAD:
+//   - El code de TikTok viaja por la URL. NUNCA se loguea (regla CLAUDE.md).
+//   - El state expira a los 15 min (TTL corto).
+//   - No aceptamos code sin state valido (CSRF).
+app.MapGet("/oauth/tiktok/callback", async (
+    HttpContext http,
+    [FromQuery] string? code,
+    [FromQuery] string? state,
+    [FromQuery] string? error,
+    [FromQuery(Name = "error_description")] string? errorDescription,
+    IServiceScopeFactory scopeFactory) =>
+{
+    // 1) TikTok reporto un error propio (usuario cancelo, scope denegado, etc.).
+    if (!string.IsNullOrEmpty(error))
+    {
+        var msg = string.IsNullOrWhiteSpace(errorDescription) ? error : errorDescription;
+        return Results.Redirect("/cuentas-sociales?tkerr=" + Uri.EscapeDataString(msg));
+    }
+    if (string.IsNullOrEmpty(code) || string.IsNullOrEmpty(state))
+    {
+        return Results.Redirect("/cuentas-sociales?tkerr=" + Uri.EscapeDataString("TikTok no devolvio code o state."));
+    }
+
+    // 2) Descifrar el state para conocer tenant/cliente/actor sin tocar cookies del navegador (por
+    //    si el usuario autorizo desde un dispositivo distinto al que abrio la conexion).
+    using var scope = scopeFactory.CreateScope();
+    var stateSvc = scope.ServiceProvider.GetRequiredService<CubotRedManager.Web.Auth.TikTokOAuthStateService>();
+    if (!stateSvc.TryDecode(state, out var tenantId, out var clientId, out var actorUserId, out var stateErr))
+    {
+        return Results.Redirect("/cuentas-sociales?tkerr=" + Uri.EscapeDataString($"state invalido: {stateErr}"));
+    }
+
+    // 3) Fijar tenant y ejecutar el exchange.
+    scope.ServiceProvider.GetRequiredService<IAmbientTenantOverride>().Set(tenantId, null);
+    var tiktok = scope.ServiceProvider.GetRequiredService<CubotRedManager.Application.Tenancy.ITikTokConnectionService>();
+    var result = await tiktok.ExchangeCodeAsync(clientId, code, actorUserId);
+
+    if (!result.Success || result.Account is null)
+    {
+        return Results.Redirect("/cuentas-sociales?tkerr=" + Uri.EscapeDataString(result.Error ?? "TikTok rechazo el code."));
+    }
+
+    // 4) Redirigir al detalle de la cuenta reciente. Preferimos /cuentas/{id} porque muestra el
+    //    Resumen con estado del token, KPIs y siguiente accion sugerida.
+    return Results.Redirect($"/cuentas/{result.Account.Id}?connected=1");
+}).AllowAnonymous();
 
 // Healthcheck para Railway: verifica que la app responde y que Postgres esta accesible.
 // Railway lo consulta tras cada deploy; si falla, el deploy se marca unhealthy y no rota trafico.

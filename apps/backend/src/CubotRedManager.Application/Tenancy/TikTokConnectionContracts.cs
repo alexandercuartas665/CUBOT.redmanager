@@ -43,6 +43,13 @@ public interface ITikTokConnectionService
     /// <summary>Genera la URL de autorizacion y devuelve (url, state). Requiere config de app.</summary>
     Task<(string? Url, string State, string? Error)> BuildAuthorizeUrlAsync(CancellationToken cancellationToken = default);
 
+    /// <summary>
+    /// Genera la URL de autorizacion usando un <paramref name="stateOverride"/> firmado por el llamador.
+    /// El callback (/oauth/tiktok/callback) recibe ese state, lo valida y ejecuta el exchange sin
+    /// que el operador tenga que pegar el auth_code manualmente.
+    /// </summary>
+    Task<(string? Url, string State, string? Error)> BuildAuthorizeUrlAsync(string? stateOverride, CancellationToken cancellationToken = default);
+
     /// <summary>Canjea el auth_code y crea/actualiza la cuenta social del cliente indicado.</summary>
     Task<TikTokOpResult> ExchangeCodeAsync(Guid clientId, string authCode, Guid actorUserId, CancellationToken cancellationToken = default);
 
