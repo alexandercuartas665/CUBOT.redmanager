@@ -1,0 +1,76 @@
+@using CubotRedManager.Application.Tenancy
+@using CubotRedManager.Domain.Enums
+@inject IAutoReplyConfigService AutoReplySvc
+@rendermode InteractiveServer
+
+@if (_loading)
+{
+    <p class="text-muted">Cargando logs...</p>
+}
+else if (_logs.Count == 0)
+{
+    <div class="clt-empty">
+        <p class="text-muted">No hay ejecuciones del worker de autorespuesta para esta cuenta aun.</p>
+        <p class="text-muted" style="font-size:12px;">Los logs se retienen 5 dias por defecto.</p>
+    </div>
+}
+else
+{
+    <div class="clt-wrap">
+        <table class="table clt-table">
+            <thead>
+                <tr>
+                    <th>Estado</th>
+                    <th>Ejecutado</th>
+                    <th>Duracion</th>
+                    <th>Revisados</th>
+                    <th>Respondidos</th>
+                    <th>Fallidos</th>
+                    <th>Omitidos</th>
+                </tr>
+            </thead>
+            <tbody>
+                @foreach (var l in _logs)
+                {
+                    <tr>
+                        <td><span class="clt-badge clt-@l.Status.ToString().ToLowerInvariant()">@l.Status</span></td>
+                        <td>@l.StartedAt.LocalDateTime.ToString("dd MMM HH:mm:ss")</td>
+                        <td>@l.DurationMs ms</td>
+                        <td>@l.Processed</td>
+                        <td>@l.Replied</td>
+                        <td>@l.Errors</td>
+                        <td>@l.Omitted</td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+        <div style="margin-top:12px;">
+            <a href="/tiktok/autorespuesta-logs" class="btn btn-sm btn-outline-secondary">Ver logs de todas las cuentas &rarr;</a>
+        </div>
+    </div>
+}
+
+<style>
+    .clt-wrap { max-width: 1000px; }
+    .clt-table th { background: var(--muted); font-size: 11.5px; text-transform: uppercase; letter-spacing: .04em; }
+    .clt-table td { font-size: 13px; vertical-align: middle; }
+    .clt-badge { font-size: 10.5px; font-weight: 700; padding: 3px 8px; border-radius: 999px; text-transform: uppercase; letter-spacing: .03em; }
+    .clt-badge.clt-ok { background: oklch(0.62 0.16 155 / 0.15); color: var(--success); }
+    .clt-badge.clt-warning { background: oklch(0.65 0.18 90 / 0.15); color: oklch(0.5 0.18 85); }
+    .clt-badge.clt-error { background: oklch(0.6 0.22 22 / 0.12); color: var(--destructive); }
+    .clt-empty { max-width: 520px; margin: 40px auto; text-align: center; padding: 32px 24px; border: 1px dashed var(--border); border-radius: 14px; background: var(--card); }
+</style>
+
+@code {
+    [Parameter, EditorRequired] public Guid AccountId { get; set; }
+
+    private bool _loading = true;
+    private List<AutoReplyJobLogDto> _logs = new();
+
+    protected override async Task OnParametersSetAsync()
+    {
+        _loading = true;
+        _logs = (await AutoReplySvc.ListLogsAsync(socialAccountId: AccountId, take: 50)).ToList();
+        _loading = false;
+    }
+}

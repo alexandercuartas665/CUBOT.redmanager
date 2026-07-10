@@ -1,0 +1,143 @@
+@page "/cuentas/{Id:guid}"
+@page "/cuentas/{Id:guid}/{Tab}"
+@attribute [Authorize(Policy = AppPolicies.TenantMember)]
+@rendermode InteractiveServer
+@using System.Security.Claims
+@using CubotRedManager.Application.Tenancy
+@using CubotRedManager.Domain.Enums
+@using CubotRedManager.Web.Authorization
+@inject ISocialAccountService AccountsSvc
+@inject ITikTokConnectionService TikTokSvc
+@inject IAutoReplyConfigService AutoReplySvc
+@inject AuthenticationStateProvider AuthProvider
+@inject NavigationManager Nav
+
+<PageTitle>Cuenta - CUBOT.redmanager</PageTitle>
+
+@if (_account is null && !_notFound)
+{
+    <p class="text-muted">Cargando...</p>
+}
+else if (_notFound)
+{
+    <div class="coming-soon">
+        <h3>Cuenta no encontrada</h3>
+        <p>La cuenta que buscas no existe o no pertenece a esta agencia.</p>
+        <a class="btn btn-primary" href="/cuentas-sociales">Volver a la lista</a>
+    </div>
+}
+else
+{
+    <div class="cd-header">
+        <a href="/cuentas-sociales" class="cd-back" title="Volver a cuentas">&larr;</a>
+        <div class="cd-avatar" style="background:@_account!.ColorHex;">
+            @(string.IsNullOrWhiteSpace(_account.Handle) ? "?" : _account.Handle![..1].ToUpperInvariant())
+        </div>
+        <div class="cd-title">
+            <div class="cd-name">@(_account.DisplayName ?? _account.ClientName)</div>
+            <div class="cd-sub">
+                <span class="cd-net" style="background:@(_account.ColorHex)22;color:@_account.ColorHex;">@_account.NetworkDisplay</span>
+                <span>@(string.IsNullOrWhiteSpace(_account.Handle) ? "sin handle" : "@" + _account.Handle)</span>
+                <span>&middot; @_account.ClientName</span>
+            </div>
+        </div>
+        <div class="cd-status">
+            <span class="cd-dot cd-dot-@StatusClass(_account.Status)"></span>
+            <span>@StatusLabel(_account.Status)</span>
+            @if (_account.ExpiringSoon)
+            {
+                <span class="cd-badge cd-badge-warn">Por expirar</span>
+            }
+        </div>
+    </div>
+
+    <div class="cd-tabs">
+        @foreach (var tab in _tabs)
+        {
+            var active = string.Equals(_currentTab, tab.key, StringComparison.OrdinalIgnoreCase);
+            var css = active ? "cd-tab cd-tab-on" : "cd-tab";
+            <NavLink class="@css" href="@TabHref(tab.key)" Match="NavLinkMatch.All">
+                @tab.label
+            </NavLink>
+        }
+    </div>
+
+    <div class="cd-tab-body">
+        @if (_currentTab == "resumen") { <CuentaResumenTab Account="_account" OnRefreshedAsync="ReloadAsync" /> }
+        else if (_currentTab == "videos") { <CuentaLinkOutTab Href="@($"/tiktok/videos?account={Id}")" Label="Ver videos sincronizados" Icon="videos" /> }
+        else if (_currentTab == "pipeline") { <CuentaLinkOutTab Href="@($"/tiktok/pipeline?account={Id}")" Label="Ver pipeline de comentarios" Icon="pipeline" /> }
+        else if (_currentTab == "autorespuesta") { <CuentaLinkOutTab Href="@($"/tiktok/cuentas?account={Id}")" Label="Configurar autorespuesta" Icon="autoreply" /> }
+        else if (_currentTab == "logs") { <CuentaLogsTab AccountId="Id" /> }
+    </div>
+}
+
+<style>
+    .cd-header { display: flex; align-items: center; gap: 16px; margin-bottom: 22px; }
+    .cd-back { font-size: 20px; color: var(--muted-foreground); text-decoration: none; padding: 4px 8px; border-radius: 8px; }
+    .cd-back:hover { background: var(--muted); }
+    .cd-avatar { width: 56px; height: 56px; border-radius: 50%; color: white; display: flex; align-items: center; justify-content: center; font-weight: 700; font-size: 22px; }
+    .cd-title { flex: 1; min-width: 0; }
+    .cd-name { font-weight: 700; font-size: 20px; }
+    .cd-sub { display: flex; align-items: center; gap: 10px; font-size: 13px; color: var(--muted-foreground); }
+    .cd-net { font-size: 10.5px; font-weight: 700; padding: 3px 8px; border-radius: 6px; text-transform: uppercase; letter-spacing: .03em; }
+    .cd-status { display: flex; align-items: center; gap: 8px; font-size: 13px; }
+    .cd-dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
+    .cd-dot-ok { background: var(--success); }
+    .cd-dot-warn { background: oklch(0.72 0.15 65); }
+    .cd-dot-off { background: var(--destructive); }
+    .cd-badge { font-size: 10px; font-weight: 700; padding: 2px 7px; border-radius: 999px; }
+    .cd-badge-warn { background: oklch(0.72 0.15 65 / 0.15); color: oklch(0.55 0.15 65); }
+    .cd-tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--border); margin-bottom: 20px; overflow-x: auto; }
+    .cd-tab { padding: 10px 16px; text-decoration: none; color: var(--muted-foreground); font-weight: 600; font-size: 14px; border-bottom: 2px solid transparent; white-space: nowrap; }
+    .cd-tab:hover { color: var(--foreground); }
+    .cd-tab-on { color: var(--primary); border-bottom-color: var(--primary); }
+    .cd-tab-body { padding: 4px 0; }
+</style>
+
+@code {
+    [Parameter] public Guid Id { get; set; }
+    [Parameter] public string? Tab { get; set; }
+
+    private SocialAccountDto? _account;
+    private bool _notFound;
+    private string _currentTab = "resumen";
+
+    private readonly (string key, string label)[] _tabs = new[]
+    {
+        ("resumen", "Resumen"),
+        ("videos", "Videos"),
+        ("pipeline", "Pipeline"),
+        ("autorespuesta", "Autorespuesta"),
+        ("logs", "Logs")
+    };
+
+    protected override async Task OnParametersSetAsync()
+    {
+        _currentTab = (Tab ?? "resumen").ToLowerInvariant();
+        if (_tabs.All(t => t.key != _currentTab)) { _currentTab = "resumen"; }
+        await ReloadAsync();
+    }
+
+    private async Task ReloadAsync()
+    {
+        _account = await AccountsSvc.GetAsync(Id);
+        _notFound = _account is null;
+    }
+
+    private string TabHref(string key) => key == "resumen" ? $"/cuentas/{Id}" : $"/cuentas/{Id}/{key}";
+
+    private static string StatusClass(SocialAccountStatus s) => s switch
+    {
+        SocialAccountStatus.Connected => "ok",
+        SocialAccountStatus.Expired => "warn",
+        _ => "off"
+    };
+
+    private static string StatusLabel(SocialAccountStatus s) => s switch
+    {
+        SocialAccountStatus.Connected => "Conectada",
+        SocialAccountStatus.Expired => "Token expirado",
+        SocialAccountStatus.Revoked => "Revocada",
+        _ => "Desconectada"
+    };
+}

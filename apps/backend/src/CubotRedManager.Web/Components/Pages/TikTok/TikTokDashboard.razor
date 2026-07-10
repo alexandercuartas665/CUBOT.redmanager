@@ -7,6 +7,16 @@
 @inject IInboxService InboxSvc
 @inject NavigationManager Nav
 
+@code {
+    // Ruta legacy /tiktok -> lista de cuentas sociales filtrada por red. El "TikTok Dashboard"
+    // como tal desaparecio; los KPIs se absorben en el Dashboard general (U5). El bookmark viejo
+    // sigue funcionando via este redirect.
+    protected override void OnInitialized()
+    {
+        Nav.NavigateTo("/cuentas-sociales?net=tiktok", replace: true);
+    }
+}
+
 <PageTitle>TikTok Manager - CUBOT.redmanager</PageTitle>
 
 <div class="module-head">

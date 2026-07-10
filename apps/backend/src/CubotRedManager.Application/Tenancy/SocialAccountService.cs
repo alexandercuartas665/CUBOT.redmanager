@@ -69,6 +69,21 @@ public sealed class SocialAccountService : ISocialAccountService
         }).ToList();
     }
 
+    public async Task<SocialAccountDto?> GetAsync(Guid id, CancellationToken cancellationToken = default)
+    {
+        var networks = (await ListNetworksAsync(cancellationToken)).ToDictionary(n => n.Code);
+        var row = await (from a in _db.SocialAccounts.AsNoTracking()
+                         join c in _db.Clients.AsNoTracking() on a.ClientId equals c.Id
+                         where a.Id == id
+                         select new { a, ClientName = c.Name }).FirstOrDefaultAsync(cancellationToken);
+        if (row is null) { return null; }
+        networks.TryGetValue(row.a.NetworkCode, out var net);
+        return new SocialAccountDto(row.a.Id, row.a.ClientId, row.ClientName, row.a.NetworkCode,
+            net?.DisplayName ?? row.a.NetworkCode, net?.ColorHex ?? "#A03DC9",
+            row.a.Handle, row.a.DisplayName, row.a.Status, row.a.ExpiresAt, row.a.LastSyncAt,
+            row.a.FollowersCount, row.a.AvatarUrl, row.a.Bio);
+    }
+
     public async Task<bool> DeleteAsync(Guid id, Guid actorUserId, CancellationToken cancellationToken = default)
     {
         var account = await _db.SocialAccounts.FirstOrDefaultAsync(a => a.Id == id, cancellationToken);
