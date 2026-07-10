@@ -19,6 +19,7 @@ public interface IApplicationDbContext
     DbSet<SocialAccount> SocialAccounts { get; }
     DbSet<TikTokAppConfig> TikTokAppConfigs { get; }
     DbSet<TikTokVideo> TikTokVideos { get; }
+    DbSet<TokenRefreshLog> TokenRefreshLogs { get; }
     DbSet<AutoReplyConfig> AutoReplyConfigs { get; }
     DbSet<AutoReplyTemplate> AutoReplyTemplates { get; }
     DbSet<AutoReplyJobLog> AutoReplyJobLogs { get; }

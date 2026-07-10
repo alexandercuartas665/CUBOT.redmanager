@@ -19,7 +19,13 @@ public sealed record OAuthTokenResult(
     /// <summary>Solo TikTok: familia OAuth (0=BusinessV13, 1=OpenV2) del endpoint que emitio el
     /// token. Se persiste en SocialAccount para que futuros refresh usen el endpoint correcto sin
     /// cascada (los dos flavors son incompatibles entre si). Nulo si el proveedor no aplica.</summary>
-    int? OAuthFlavor = null);
+    int? OAuthFlavor = null,
+    /// <summary>URL exacta del endpoint golpeado en el ultimo intento (para persistir en el log).</summary>
+    string? EndpointUsed = null,
+    /// <summary>Codigo de estado HTTP recibido. 0 si no llego a haber respuesta (excepcion / timeout).</summary>
+    int? HttpStatus = null,
+    /// <summary>Codigo de negocio de la respuesta (ej. TikTok Business code=X). Nulo si no aplica.</summary>
+    string? ResponseCode = null);
 
 /// <summary>Resultado de un sondeo de credenciales (sin canje real).</summary>
 /// <param name="CredentialsOk">true si client_key+secret fueron aceptados por el endpoint.</param>

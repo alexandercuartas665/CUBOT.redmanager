@@ -80,6 +80,7 @@ else
         else if (_currentTab == "pipeline") { <CuentaLinkOutTab Href="@($"/tiktok/pipeline?account={Id}")" Label="Ver pipeline de comentarios" Icon="pipeline" /> }
         else if (_currentTab == "autorespuesta") { <CuentaLinkOutTab Href="@($"/tiktok/cuentas?account={Id}")" Label="Configurar autorespuesta" Icon="autoreply" /> }
         else if (_currentTab == "logs") { <CuentaLogsTab AccountId="Id" /> }
+        else if (_currentTab == "token") { <CuentaTokenTab AccountId="Id" /> }
     </div>
 }
 
@@ -124,7 +125,8 @@ else
         ("videos", "Videos"),
         ("pipeline", "Pipeline"),
         ("autorespuesta", "Autorespuesta"),
-        ("logs", "Logs")
+        ("logs", "Logs"),
+        ("token", "Token")
     };
 
     protected override async Task OnParametersSetAsync()

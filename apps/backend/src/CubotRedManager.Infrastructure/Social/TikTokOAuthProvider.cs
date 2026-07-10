@@ -27,8 +27,13 @@ namespace CubotRedManager.Infrastructure.Social;
 public sealed class TikTokOAuthProvider : ISocialOAuthProvider
 {
     private const string AuthorizeBase = "https://www.tiktok.com/v2/auth/authorize";
-    private const string ExchangePrimary = "https://business-api.tiktok.com/open_api/v1.3/tt_user/oauth2/token/";
-    private const string ExchangeFallback = "https://business-api.tiktok.com/open_api/v1.3/oauth2/access_token/";
+    // Exchange: preferimos SIEMPRE Open v2 (open.tiktokapis.com/v2/oauth/token/) porque casa con
+    // el authorize (www.tiktok.com/v2/auth/authorize) y su refresh_token SI es aceptado por el
+    // refresh endpoint de Open v2. Si Open v2 rechaza el code (app registrada como Business en
+    // developers.tiktok.com), caemos a Business v1.3 como respaldo.
+    private const string ExchangeOpenV2 = "https://open.tiktokapis.com/v2/oauth/token/";
+    private const string ExchangeBusinessV13 = "https://business-api.tiktok.com/open_api/v1.3/tt_user/oauth2/token/";
+    private const string ExchangeBusinessV13Fallback = "https://business-api.tiktok.com/open_api/v1.3/oauth2/access_token/";
     // Refresh: un solo endpoint por flavor. No hay cascada — si el flavor esta mal, se falla y se
     // notifica al operador para que reconecte manualmente. Un fallback silencioso puede invalidar
     // el refresh_token en el server side (rotacion) y dejar la cuenta inrecuperable.
@@ -77,10 +82,50 @@ public sealed class TikTokOAuthProvider : ISocialOAuthProvider
         string clientKey, string clientSecret, string redirectUri, string authCode, CancellationToken cancellationToken = default)
     {
         var trace = new StringBuilder();
+        int lastHttpStatus = 0;
+        string? lastEndpoint = null;
+        string? lastResponseCode = null;
         try
         {
-            // Endpoint primario: /tt_user/oauth2/token/ (BusinessV13)
-            trace.AppendLine("[INFO] Canjeando auth_code en /tt_user/oauth2/token/ ...");
+            // ===== Endpoint primario: Open v2 (open.tiktokapis.com/v2/oauth/token/) =====
+            // Es el que casa con el authorize (www.tiktok.com/v2/auth/authorize). Su refresh_token
+            // SI es aceptado por el refresh endpoint de Open v2. Antes se pegaba a Business v1.3
+            // que aceptaba el code pero devolvia un refresh_token que /oauth2/refresh_token/ luego
+            // rechazaba con "code=40002 Invalid refresh_token".
+            trace.AppendLine("[INFO] Canjeando auth_code en open.tiktokapis.com/v2/oauth/token/ ...");
+            var openForm =
+                "client_key=" + Uri.EscapeDataString(clientKey) +
+                "&client_secret=" + Uri.EscapeDataString(clientSecret) +
+                "&code=" + Uri.EscapeDataString(authCode) +
+                "&grant_type=authorization_code" +
+                "&redirect_uri=" + Uri.EscapeDataString(redirectUri);
+            var openResp = await PostFormWithStatusAsync(ExchangeOpenV2, openForm, cancellationToken);
+            lastEndpoint = ExchangeOpenV2;
+            lastHttpStatus = openResp.Status;
+            try
+            {
+                using var doc = JsonDocument.Parse(openResp.Body);
+                var root = doc.RootElement;
+                var at = GetString(root, "access_token");
+                if (!string.IsNullOrEmpty(at))
+                {
+                    trace.AppendLine("[OK] Token obtenido en Open v2 (flavor=OpenV2).");
+                    var rt = GetString(root, "refresh_token");
+                    return new OAuthTokenResult(true, at, rt, GetString(root, "open_id"),
+                        GetInt(root, "expires_in"), trace.ToString(), null,
+                        FlavorOpenV2, ExchangeOpenV2, openResp.Status, "0");
+                }
+                var openErr = GetString(root, "error") ?? GetString(root, "error_description") ?? "sin detalle";
+                lastResponseCode = GetString(root, "error") ?? "unknown";
+                trace.AppendLine($"[INFO] Open v2 rechazo: {San(openErr)}. Probando fallback Business v1.3 ...");
+            }
+            catch (Exception parseEx)
+            {
+                trace.AppendLine($"[INFO] Open v2 respondio no-JSON (HTTP {openResp.Status}): {San(parseEx.Message)}. Probando Business v1.3 ...");
+            }
+
+            // ===== Fallback 1: Business v1.3 /tt_user/oauth2/token/ =====
+            trace.AppendLine("[INFO] Canjeando en /tt_user/oauth2/token/ (Business v1.3) ...");
             var bodyPrimary = JsonSerializer.Serialize(new
             {
                 client_id = clientKey,
@@ -89,33 +134,43 @@ public sealed class TikTokOAuthProvider : ISocialOAuthProvider
                 auth_code = authCode,
                 redirect_uri = redirectUri
             });
-            var respPrimary = await PostJsonAsync(ExchangePrimary, bodyPrimary, cancellationToken);
-
-            // Si trae code != 0, intentar fallback /oauth2/access_token/
-            var (okP, dataP, codeP, msgP) = ParseBusiness(respPrimary);
+            var respPrimary = await PostJsonWithStatusAsync(ExchangeBusinessV13, bodyPrimary, cancellationToken);
+            lastEndpoint = ExchangeBusinessV13;
+            lastHttpStatus = respPrimary.Status;
+            var (okP, dataP, codeP, msgP) = ParseBusiness(respPrimary.Body);
+            lastResponseCode = codeP.ToString();
             if (okP)
             {
-                trace.AppendLine("[OK] Token obtenido en endpoint primario (flavor=BusinessV13).");
-                return BuildFromData(dataP!.Value, trace.ToString(), oauthFlavor: FlavorBusinessV13);
+                trace.AppendLine("[OK] Token obtenido en /tt_user/oauth2/token/ (flavor=BusinessV13).");
+                return BuildFromData(dataP!.Value, trace.ToString(), oauthFlavor: FlavorBusinessV13,
+                    endpoint: ExchangeBusinessV13, httpStatus: respPrimary.Status);
             }
 
-            trace.AppendLine($"[INFO] Primario respondio code={codeP} ({San(msgP)}). Probando /oauth2/access_token/ ...");
+            // ===== Fallback 2: Business v1.3 /oauth2/access_token/ =====
+            trace.AppendLine($"[INFO] /tt_user/... respondio code={codeP} ({San(msgP)}). Probando /oauth2/access_token/ ...");
             var bodyFallback = JsonSerializer.Serialize(new { app_id = clientKey, secret = clientSecret, auth_code = authCode });
-            var respFallback = await PostJsonAsync(ExchangeFallback, bodyFallback, cancellationToken);
-            var (okF, dataF, codeF, msgF) = ParseBusiness(respFallback);
+            var respFallback = await PostJsonWithStatusAsync(ExchangeBusinessV13Fallback, bodyFallback, cancellationToken);
+            lastEndpoint = ExchangeBusinessV13Fallback;
+            lastHttpStatus = respFallback.Status;
+            var (okF, dataF, codeF, msgF) = ParseBusiness(respFallback.Body);
+            lastResponseCode = codeF.ToString();
             if (okF)
             {
-                trace.AppendLine("[OK] Token obtenido en endpoint fallback (flavor=BusinessV13).");
-                return BuildFromData(dataF!.Value, trace.ToString(), oauthFlavor: FlavorBusinessV13);
+                trace.AppendLine("[OK] Token obtenido en /oauth2/access_token/ (flavor=BusinessV13).");
+                return BuildFromData(dataF!.Value, trace.ToString(), oauthFlavor: FlavorBusinessV13,
+                    endpoint: ExchangeBusinessV13Fallback, httpStatus: respFallback.Status);
             }
 
-            trace.AppendLine($"[ERROR] Fallback respondio code={codeF}: {San(msgF)}");
-            return new OAuthTokenResult(false, null, null, null, null, San(trace.ToString())!, San(msgF) ?? San(msgP) ?? "Error desconocido");
+            trace.AppendLine($"[ERROR] Todos los endpoints rechazaron el auth_code. Ultimo: code={codeF}: {San(msgF)}");
+            return new OAuthTokenResult(false, null, null, null, null, San(trace.ToString())!,
+                San(msgF) ?? San(msgP) ?? "Error desconocido", null,
+                lastEndpoint, lastHttpStatus, lastResponseCode);
         }
         catch (Exception ex)
         {
             trace.AppendLine("[ERROR] " + San(ex.Message));
-            return new OAuthTokenResult(false, null, null, null, null, San(trace.ToString())!, San(ex.Message));
+            return new OAuthTokenResult(false, null, null, null, null, San(trace.ToString())!, San(ex.Message),
+                null, lastEndpoint, lastHttpStatus, lastResponseCode);
         }
     }
 
@@ -143,24 +198,27 @@ public sealed class TikTokOAuthProvider : ISocialOAuthProvider
         {
             trace.AppendLine("[INFO] Renovando (flavor=BusinessV13) en /oauth2/refresh_token/ ...");
             var body = JsonSerializer.Serialize(new { app_id = clientKey, secret = clientSecret, refresh_token = refreshToken });
-            var resp = await PostJsonAsync(RefreshBusinessV13, body, ct);
-            var (ok, data, code, msg) = ParseBusiness(resp);
+            var resp = await PostJsonWithStatusAsync(RefreshBusinessV13, body, ct);
+            var (ok, data, code, msg) = ParseBusiness(resp.Body);
             if (ok)
             {
                 trace.AppendLine("[OK] Token renovado.");
-                return BuildFromData(data!.Value, trace.ToString(), fallbackRefresh: refreshToken, oauthFlavor: FlavorBusinessV13);
+                return BuildFromData(data!.Value, trace.ToString(), fallbackRefresh: refreshToken,
+                    oauthFlavor: FlavorBusinessV13, endpoint: RefreshBusinessV13, httpStatus: resp.Status);
             }
             // Incluimos el code=X de TikTok en el error para poder distinguir
             // "refresh_token invalidado por rotacion previa" (40105/40001) de "app_id/secret mal"
             // (40100) o "cuota" (rate limit). Ayuda al diagnostico sin exponer secretos.
             trace.AppendLine($"[ERROR] /oauth2/refresh_token/ respondio code={code}: {San(msg)}");
             var errorWithCode = $"code={code} {San(msg) ?? "Renovacion fallida"}";
-            return new OAuthTokenResult(false, null, null, null, null, San(trace.ToString())!, errorWithCode);
+            return new OAuthTokenResult(false, null, null, null, null, San(trace.ToString())!, errorWithCode,
+                null, RefreshBusinessV13, resp.Status, code.ToString());
         }
         catch (Exception ex)
         {
             trace.AppendLine("[ERROR] " + San(ex.Message));
-            return new OAuthTokenResult(false, null, null, null, null, San(trace.ToString())!, San(ex.Message));
+            return new OAuthTokenResult(false, null, null, null, null, San(trace.ToString())!, San(ex.Message),
+                null, RefreshBusinessV13, 0, null);
         }
     }
 
@@ -175,8 +233,8 @@ public sealed class TikTokOAuthProvider : ISocialOAuthProvider
                 "&client_secret=" + Uri.EscapeDataString(clientSecret) +
                 "&grant_type=refresh_token" +
                 "&refresh_token=" + Uri.EscapeDataString(refreshToken);
-            var respBody = await PostFormAsync(RefreshOpenV2, form, ct);
-            using var doc = JsonDocument.Parse(respBody);
+            var resp = await PostFormWithStatusAsync(RefreshOpenV2, form, ct);
+            using var doc = JsonDocument.Parse(resp.Body);
             var root = doc.RootElement;
             var at = GetString(root, "access_token");
             if (!string.IsNullOrEmpty(at))
@@ -184,16 +242,20 @@ public sealed class TikTokOAuthProvider : ISocialOAuthProvider
                 trace.AppendLine("[OK] Token renovado.");
                 var rt = GetString(root, "refresh_token");
                 return new OAuthTokenResult(true, at, string.IsNullOrEmpty(rt) ? refreshToken : rt,
-                    GetString(root, "open_id"), GetInt(root, "expires_in"), trace.ToString(), null, FlavorOpenV2);
+                    GetString(root, "open_id"), GetInt(root, "expires_in"), trace.ToString(), null,
+                    FlavorOpenV2, RefreshOpenV2, resp.Status, "0");
             }
             var err = GetString(root, "error") ?? GetString(root, "error_description") ?? "sin detalle";
+            var errCode = GetString(root, "error");
             trace.AppendLine($"[ERROR] v2 respondio sin access_token: {San(err)}");
-            return new OAuthTokenResult(false, null, null, null, null, San(trace.ToString())!, San(err));
+            return new OAuthTokenResult(false, null, null, null, null, San(trace.ToString())!, San(err),
+                null, RefreshOpenV2, resp.Status, errCode);
         }
         catch (Exception ex)
         {
             trace.AppendLine("[ERROR] " + San(ex.Message));
-            return new OAuthTokenResult(false, null, null, null, null, San(trace.ToString())!, San(ex.Message));
+            return new OAuthTokenResult(false, null, null, null, null, San(trace.ToString())!, San(ex.Message),
+                null, RefreshOpenV2, 0, null);
         }
     }
 
@@ -284,7 +346,8 @@ public sealed class TikTokOAuthProvider : ISocialOAuthProvider
         }
     }
 
-    private static OAuthTokenResult BuildFromData(JsonElement data, string trace, string? fallbackRefresh = null, int? oauthFlavor = null)
+    private static OAuthTokenResult BuildFromData(JsonElement data, string trace, string? fallbackRefresh = null,
+        int? oauthFlavor = null, string? endpoint = null, int? httpStatus = null)
     {
         var at = GetString(data, "access_token");
         var rt = GetString(data, "refresh_token");
@@ -296,7 +359,10 @@ public sealed class TikTokOAuthProvider : ISocialOAuthProvider
             GetInt(data, "expires_in"),
             trace,
             null,
-            oauthFlavor);
+            oauthFlavor,
+            endpoint,
+            httpStatus,
+            "0");
     }
 
     private static string? GetString(JsonElement el, string name)
@@ -337,12 +403,30 @@ public sealed class TikTokOAuthProvider : ISocialOAuthProvider
 
     private async Task<string> PostAsync(string url, HttpContent content, CancellationToken ct)
     {
+        var (body, _) = await PostWithStatusAsync(url, content, ct);
+        return body;
+    }
+
+    private async Task<(string Body, int Status)> PostJsonWithStatusAsync(string url, string json, CancellationToken ct)
+    {
+        using var content = new StringContent(json, Encoding.UTF8, "application/json");
+        return await PostWithStatusAsync(url, content, ct);
+    }
+
+    private async Task<(string Body, int Status)> PostFormWithStatusAsync(string url, string form, CancellationToken ct)
+    {
+        using var content = new StringContent(form, Encoding.UTF8, "application/x-www-form-urlencoded");
+        return await PostWithStatusAsync(url, content, ct);
+    }
+
+    private async Task<(string Body, int Status)> PostWithStatusAsync(string url, HttpContent content, CancellationToken ct)
+    {
         using var req = new HttpRequestMessage(HttpMethod.Post, url) { Content = content };
         req.Headers.TryAddWithoutValidation("Accept", "application/json");
         using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
         cts.CancelAfter(TimeSpan.FromSeconds(30));
-        // Devuelve el cuerpo aunque sea error HTTP (TikTok manda el detalle en el body).
         using var resp = await _http.SendAsync(req, cts.Token);
-        return await resp.Content.ReadAsStringAsync(cts.Token);
+        var body = await resp.Content.ReadAsStringAsync(cts.Token);
+        return (body, (int)resp.StatusCode);
     }
 }
