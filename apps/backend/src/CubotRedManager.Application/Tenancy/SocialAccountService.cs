@@ -65,7 +65,7 @@ public sealed class SocialAccountService : ISocialAccountService
             return new SocialAccountDto(x.a.Id, x.a.ClientId, x.ClientName, x.a.NetworkCode,
                 net?.DisplayName ?? x.a.NetworkCode, net?.ColorHex ?? "#A03DC9",
                 x.a.Handle, x.a.DisplayName, x.a.Status, x.a.ExpiresAt, x.a.LastSyncAt,
-                x.a.FollowersCount, x.a.AvatarUrl, x.a.Bio);
+                x.a.FollowersCount, x.a.AvatarUrl, x.a.Bio, x.a.LastSyncError, x.a.RefreshFailureCount);
         }).ToList();
     }
 
@@ -81,7 +81,7 @@ public sealed class SocialAccountService : ISocialAccountService
         return new SocialAccountDto(row.a.Id, row.a.ClientId, row.ClientName, row.a.NetworkCode,
             net?.DisplayName ?? row.a.NetworkCode, net?.ColorHex ?? "#A03DC9",
             row.a.Handle, row.a.DisplayName, row.a.Status, row.a.ExpiresAt, row.a.LastSyncAt,
-            row.a.FollowersCount, row.a.AvatarUrl, row.a.Bio);
+            row.a.FollowersCount, row.a.AvatarUrl, row.a.Bio, row.a.LastSyncError, row.a.RefreshFailureCount);
     }
 
     public async Task<bool> DeleteAsync(Guid id, Guid actorUserId, CancellationToken cancellationToken = default)

@@ -365,17 +365,25 @@ public sealed class TikTokConnectionService : ITikTokConnectionService
         var result = await _tiktok.RefreshAsync(cfg.ClientKey, secret, refresh, (int)account.OAuthFlavor, cancellationToken);
         if (!result.Success || string.IsNullOrEmpty(result.AccessToken))
         {
-            // Refresh fallo. PERO: si el access_token original aun NO ha expirado, lo dejamos
-            // funcional (los endpoints reales siguen aceptandolo). Solo registramos el error.
-            // Recien marcamos Expired cuando el access_token de verdad ha vencido.
+            // Refresh fallo. Decidimos si dejar Status=Connected (dando el beneficio de la duda al
+            // access_token vigente) o marcar Expired de inmediato. Tres criterios que MARCAN Expired:
+            //   (1) Error terminal reconocido por texto/codigo -> refresh_token muerto en TikTok
+            //   (2) Contador de fallos consecutivos >= 3 -> algo cronico, ya no es glitch transient
+            //   (3) access_token ya expiro segun ExpiresAt (regla previa)
+            // Si no cae en ninguno -> lo dejamos Connected pero anotamos LastSyncError para que el
+            // UI muestre "Con problema" y el operador no vea un badge verde enganoso.
             var now = _time.GetUtcNow();
             var accessStillAlive = account.ExpiresAt is { } expiresAt && expiresAt > now;
+            var isTerminal = IsTerminalRefreshError(result.Error);
             account.LastSyncError = result.Error;
-            if (!accessStillAlive)
+            account.RefreshFailureCount += 1;
+
+            var shouldExpire = isTerminal || account.RefreshFailureCount >= 3 || !accessStillAlive;
+            if (shouldExpire)
             {
                 account.Status = SocialAccountStatus.Expired;
             }
-            // (si esta vivo, mantenemos Status anterior — normalmente Connected)
+            // (si no debe expirar, mantenemos Status Connected pero LastSyncError disparara badge)
             await _db.SaveChangesAsync(cancellationToken);
             return new TikTokOpResult(false, result.Trace, result.Error ?? "Renovacion fallida.", null);
         }
@@ -386,6 +394,7 @@ public sealed class TikTokConnectionService : ITikTokConnectionService
         account.ExpiresAt = result.ExpiresInSeconds is { } secs ? _time.GetUtcNow().AddSeconds(secs) : _time.GetUtcNow().AddDays(1);
         account.Status = SocialAccountStatus.Connected;
         account.LastSyncError = null;
+        account.RefreshFailureCount = 0;
         // Refresh exitoso -> limpiamos el marcador de alerta previa para que si vuelve a fallar
         // en el futuro se notifique de nuevo (no una alerta cada dia perpetuamente).
         account.LastRefreshFailureNotifiedAt = null;
@@ -413,6 +422,35 @@ public sealed class TikTokConnectionService : ITikTokConnectionService
                          select new { a, c.Name }).FirstOrDefaultAsync(ct);
         if (row is null) { return null; }
         return new SocialAccountDto(row.a.Id, row.a.ClientId, row.Name, row.a.NetworkCode, "TikTok", "#010101",
-            row.a.Handle, row.a.DisplayName, row.a.Status, row.a.ExpiresAt, row.a.LastSyncAt);
+            row.a.Handle, row.a.DisplayName, row.a.Status, row.a.ExpiresAt, row.a.LastSyncAt,
+            row.a.FollowersCount, row.a.AvatarUrl, row.a.Bio, row.a.LastSyncError, row.a.RefreshFailureCount);
+    }
+
+    /// <summary>
+    /// Un error de refresh es TERMINAL cuando TikTok comunica de forma explicita que el
+    /// refresh_token quedo invalidado (revocado, expirado del lado de TikTok, o simplemente
+    /// desconocido). En esos casos no tiene sentido esperar a que access_token venza para
+    /// marcar la cuenta como Expired: ya no hay forma de renovar sin OAuth manual.
+    /// Errores por red, HTTP 5xx, o codigos de rate-limit NO son terminales; el contador
+    /// consecutivo (>=3) los captura como cronicos si persisten.
+    /// </summary>
+    private static bool IsTerminalRefreshError(string? error)
+    {
+        if (string.IsNullOrWhiteSpace(error)) { return false; }
+        var lower = error.ToLowerInvariant();
+        // Marcadores explicitos de TikTok / OAuth2 estandar
+        if (lower.Contains("invalid_grant")) { return true; }
+        if (lower.Contains("invalid refresh_token")) { return true; }
+        if (lower.Contains("invalid_refresh_token")) { return true; }
+        if (lower.Contains("refresh token invalid")) { return true; }
+        if (lower.Contains("refresh_token expired")) { return true; }
+        if (lower.Contains("token has been revoked")) { return true; }
+        if (lower.Contains("token_revoked")) { return true; }
+        if (lower.Contains("access_denied")) { return true; }
+        // Codigo TikTok Business (parte del mensaje "code=X ..."): 40105 = access_token invalid,
+        // 40106 = refresh_token invalid. En OpenV2 son numeros distintos, pero los mensajes
+        // ya contienen los textos "invalid refresh_token" o "expired" cubiertos arriba.
+        if (lower.Contains("code=40106")) { return true; }
+        return false;
     }
 }

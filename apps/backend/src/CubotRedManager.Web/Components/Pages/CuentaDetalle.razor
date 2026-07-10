@@ -44,6 +44,10 @@ else
         <div class="cd-status">
             <span class="cd-dot cd-dot-@StatusClass(_account.Status)"></span>
             <span>@StatusLabel(_account.Status)</span>
+            @if (_account.HasRefreshProblem)
+            {
+                <span class="cd-badge cd-badge-danger" title="@_account.LastSyncError">Con problema (@_account.RefreshFailureCount)</span>
+            }
             @if (_account.ExpiringSoon)
             {
                 <span class="cd-badge cd-badge-warn">Por expirar</span>
@@ -95,6 +99,7 @@ else
     .cd-dot-off { background: var(--destructive); }
     .cd-badge { font-size: 10px; font-weight: 700; padding: 2px 7px; border-radius: 999px; }
     .cd-badge-warn { background: oklch(0.72 0.15 65 / 0.15); color: oklch(0.55 0.15 65); }
+    .cd-badge-danger { background: oklch(0.9 0.1 25 / 0.2); color: var(--destructive); border: 1px solid oklch(0.7 0.15 25 / 0.4); cursor: help; }
     .cd-tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--border); margin-bottom: 20px; overflow-x: auto; }
     .cd-tab { padding: 10px 16px; text-decoration: none; color: var(--muted-foreground); font-weight: 600; font-size: 14px; border-bottom: 2px solid transparent; white-space: nowrap; }
     .cd-tab:hover { color: var(--foreground); }

@@ -19,10 +19,16 @@ public sealed record SocialAccountDto(
     DateTimeOffset? LastSyncAt,
     long? FollowersCount = null,
     string? AvatarUrl = null,
-    string? Bio = null)
+    string? Bio = null,
+    string? LastSyncError = null,
+    int RefreshFailureCount = 0)
 {
     /// <summary>Token por expirar (menos de 7 dias) y cuenta conectada.</summary>
     public bool ExpiringSoon => Status == SocialAccountStatus.Connected && ExpiresAt is { } e && e <= DateTimeOffset.UtcNow.AddDays(7);
+
+    /// <summary>Cuenta marcada como Connected pero con error de refresh pendiente. El operador ve
+    /// un badge "Con problema" para no confiar ciegamente en el estado.</summary>
+    public bool HasRefreshProblem => Status == SocialAccountStatus.Connected && !string.IsNullOrWhiteSpace(LastSyncError);
 }
 
 public sealed record ConnectSocialAccountRequest(Guid ClientId, string NetworkCode, string? Handle);
