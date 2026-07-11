@@ -1,11 +1,18 @@
+@using System.Security.Claims
 @using CubotRedManager.Application.Tenancy
 @inject ITokenRefreshLogService LogsSvc
+@inject AuthenticationStateProvider AuthProvider
+@inject IJSRuntime JS
 @rendermode InteractiveServer
 
 <div class="ctt-head">
     <h3>Historial de tokens</h3>
     <p class="text-muted small">Cada intento de canje (OAuth inicial) o refresh (worker cada ~10 min) queda registrado con el endpoint golpeado, la respuesta de TikTok y la duracion. Retencion 7 dias.</p>
-    <button class="btn btn-sm btn-outline-secondary" @onclick="ReloadAsync">Actualizar</button>
+    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+        <button class="btn btn-sm btn-outline-secondary" @onclick="ReloadAsync" disabled="@_busy">Actualizar</button>
+        <button class="btn btn-sm btn-outline-danger" @onclick="ClearAsync" disabled="@(_busy || _logs.Count == 0)">Limpiar historial</button>
+        @if (_msg is not null) { <span class="small text-muted">@_msg</span> }
+    </div>
 </div>
 
 @if (_loading)
@@ -95,6 +102,8 @@ else
     [Parameter, EditorRequired] public Guid AccountId { get; set; }
 
     private bool _loading = true;
+    private bool _busy;
+    private string? _msg;
     private List<TokenRefreshLogDto> _logs = new();
 
     protected override async Task OnParametersSetAsync()
@@ -104,9 +113,33 @@ else
 
     private async Task ReloadAsync()
     {
+        _busy = true; _msg = null;
         _loading = true;
-        _logs = (await LogsSvc.ListForAccountAsync(AccountId, 30)).ToList();
-        _loading = false;
+        try
+        {
+            _logs = (await LogsSvc.ListForAccountAsync(AccountId, 30)).ToList();
+        }
+        finally { _loading = false; _busy = false; }
+    }
+
+    private async Task ClearAsync()
+    {
+        if (!await JS.InvokeAsync<bool>("confirm",
+            "Borrar TODO el historial de tokens de esta cuenta? No se puede deshacer. Los nuevos intentos volveran a llenar la tabla."))
+        {
+            return;
+        }
+        _busy = true; _msg = null;
+        try
+        {
+            var st = await AuthProvider.GetAuthenticationStateAsync();
+            Guid.TryParse(st.User.FindFirst(ClaimTypes.NameIdentifier)?.Value, out var actor);
+            var n = await LogsSvc.ClearForAccountAsync(AccountId, actor);
+            _msg = $"{n} fila{(n == 1 ? "" : "s")} eliminada{(n == 1 ? "" : "s")}.";
+            _logs.Clear();
+        }
+        catch (Exception ex) { _msg = "Error: " + ex.Message; }
+        finally { _busy = false; }
     }
 
     /// <summary>
