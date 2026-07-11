@@ -451,14 +451,25 @@ public sealed class TikTokOAuthProvider : ISocialOAuthProvider
 
     private async Task<(string Body, int Status)> PostFormWithStatusAsync(string url, string form, CancellationToken ct)
     {
-        using var content = new StringContent(form, Encoding.UTF8, "application/x-www-form-urlencoded");
-        return await PostWithStatusAsync(url, content, ct);
+        // TikTok Open v2 rechaza requests con "; charset=utf-8" en Content-Type ("invalid_request:
+        // parameters are malformed"). Su curl oficial usa el Content-Type exacto sin sufijos, y
+        // exige el header Cache-Control: no-cache. Construimos el content manual para poder omitir
+        // el charset que StringContent(..., Encoding.UTF8, ...) siempre adjunta.
+        var bytes = Encoding.UTF8.GetBytes(form);
+        using var content = new ByteArrayContent(bytes);
+        content.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue("application/x-www-form-urlencoded");
+        return await PostWithStatusAsync(url, content, ct, cacheControlNoCache: true);
     }
 
-    private async Task<(string Body, int Status)> PostWithStatusAsync(string url, HttpContent content, CancellationToken ct)
+    private async Task<(string Body, int Status)> PostWithStatusAsync(string url, HttpContent content, CancellationToken ct,
+        bool cacheControlNoCache = false)
     {
         using var req = new HttpRequestMessage(HttpMethod.Post, url) { Content = content };
         req.Headers.TryAddWithoutValidation("Accept", "application/json");
+        if (cacheControlNoCache)
+        {
+            req.Headers.CacheControl = new System.Net.Http.Headers.CacheControlHeaderValue { NoCache = true };
+        }
         using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
         cts.CancelAfter(TimeSpan.FromSeconds(30));
         using var resp = await _http.SendAsync(req, cts.Token);
