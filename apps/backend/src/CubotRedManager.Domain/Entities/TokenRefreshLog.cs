@@ -49,4 +49,9 @@ public class TokenRefreshLog : TenantEntity
     /// <summary>Contador de fallos consecutivos DESPUES de este intento (snapshot). Facilita
     /// ver la escalada temporal.</summary>
     public int FailureCountAfter { get; set; }
+
+    /// <summary>Cuerpo crudo de la respuesta de TikTok (sanitizado: sin tokens ni auth_codes),
+    /// truncado a 2KB. Sirve para diagnosticar campos que el parseo estructurado no captura
+    /// (log_id, request_id, sub-errors, etc). Nulo si no se capturo o si el sanitizado lo vacio.</summary>
+    public string? RawResponse { get; set; }
 }

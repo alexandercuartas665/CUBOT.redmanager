@@ -21,7 +21,7 @@ public sealed class TokenRefreshLogService : ITokenRefreshLogService
             .OrderByDescending(x => x.AttemptedAt)
             .Take(take)
             .Select(x => new TokenRefreshLogDto(x.Id, x.AttemptedAt, x.Operation, x.Endpoint, x.Flavor,
-                x.Success, x.HttpStatus, x.ResponseCode, x.ErrorMessage, x.DurationMs, x.FailureCountAfter))
+                x.Success, x.HttpStatus, x.ResponseCode, x.ErrorMessage, x.DurationMs, x.FailureCountAfter, x.RawResponse))
             .ToListAsync(cancellationToken);
         return rows;
     }
