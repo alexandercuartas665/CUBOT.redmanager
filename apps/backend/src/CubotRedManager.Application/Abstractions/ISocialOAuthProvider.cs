@@ -25,7 +25,25 @@ public sealed record OAuthTokenResult(
     /// <summary>Codigo de estado HTTP recibido. 0 si no llego a haber respuesta (excepcion / timeout).</summary>
     int? HttpStatus = null,
     /// <summary>Codigo de negocio de la respuesta (ej. TikTok Business code=X). Nulo si no aplica.</summary>
-    string? ResponseCode = null);
+    string? ResponseCode = null,
+    /// <summary>Cuerpo crudo de la respuesta de TikTok, SANITIZADO (sin tokens ni auth_codes),
+    /// truncado a 2KB. Sirve para diagnosticar detalles del error (log_id, request_id).</summary>
+    string? RawResponse = null,
+    /// <summary>Solo relevante para exchange: intentos previos que fallaron antes del que
+    /// finalmente triunfo (o antes del fallo total). Cada uno se persiste como fila en el
+    /// TokenRefreshLog para diagnostico completo. Nulo si no aplica.</summary>
+    IReadOnlyList<OAuthAttemptRecord>? PriorAttempts = null);
+
+/// <summary>Un intento OAuth intermedio (que fallo antes de que otro triunfara). Registrado
+/// solo para diagnostico — nunca se toma como resultado.</summary>
+public sealed record OAuthAttemptRecord(
+    string Endpoint,
+    string Flavor,
+    int? HttpStatus,
+    string? ResponseCode,
+    string? ErrorMessage,
+    string? RawResponse,
+    int DurationMs);
 
 /// <summary>Resultado de un sondeo de credenciales (sin canje real).</summary>
 /// <param name="CredentialsOk">true si client_key+secret fueron aceptados por el endpoint.</param>

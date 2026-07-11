@@ -12,7 +12,8 @@ public sealed record TokenRefreshLogDto(
     string? ResponseCode,
     string? ErrorMessage,
     int DurationMs,
-    int FailureCountAfter);
+    int FailureCountAfter,
+    string? RawResponse);
 
 public interface ITokenRefreshLogService
 {

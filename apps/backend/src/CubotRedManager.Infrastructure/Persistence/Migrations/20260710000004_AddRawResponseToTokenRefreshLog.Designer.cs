@@ -3,6 +3,7 @@ using System;
 using CubotRedManager.Infrastructure.Persistence;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 
@@ -11,9 +12,11 @@ using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 namespace CubotRedManager.Infrastructure.Persistence.Migrations
 {
     [DbContext(typeof(CubotRedManagerDbContext))]
-    partial class CubotRedManagerDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260710000004_AddRawResponseToTokenRefreshLog")]
+    partial class AddRawResponseToTokenRefreshLog
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder

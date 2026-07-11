@@ -251,7 +251,32 @@ public sealed class TikTokConnectionService : ITikTokConnectionService
             previousValue: null, newValue: new { account.ClientId, externalId }, tenantId: tenantId);
         await _db.SaveChangesAsync(cancellationToken);
 
-        // Log persistente del exchange exitoso (endpoint golpeado, flavor detectado, duracion).
+        // Log persistente. Primero cada intento intermedio que fallo (Open v2 rechazando, etc)
+        // como fila separada — sirve para diagnosticar POR QUE Open v2 falla. Luego la fila del
+        // intento final exitoso con el flavor real detectado.
+        if (result.PriorAttempts is not null)
+        {
+            var attemptedAtBase = _time.GetUtcNow();
+            foreach (var att in result.PriorAttempts)
+            {
+                _db.TokenRefreshLogs.Add(new TokenRefreshLog
+                {
+                    TenantId = tenantId,
+                    SocialAccountId = account.Id,
+                    AttemptedAt = attemptedAtBase,
+                    Operation = "exchange-attempt",
+                    Endpoint = att.Endpoint,
+                    Flavor = att.Flavor,
+                    Success = false,
+                    HttpStatus = att.HttpStatus,
+                    ResponseCode = att.ResponseCode,
+                    ErrorMessage = att.ErrorMessage,
+                    DurationMs = att.DurationMs,
+                    FailureCountAfter = 0,
+                    RawResponse = att.RawResponse
+                });
+            }
+        }
         _db.TokenRefreshLogs.Add(new TokenRefreshLog
         {
             TenantId = tenantId,
@@ -265,7 +290,8 @@ public sealed class TikTokConnectionService : ITikTokConnectionService
             ResponseCode = result.ResponseCode,
             ErrorMessage = null,
             DurationMs = (int)swExchange.ElapsedMilliseconds,
-            FailureCountAfter = 0
+            FailureCountAfter = 0,
+            RawResponse = result.RawResponse
         });
         await _db.SaveChangesAsync(cancellationToken);
 
@@ -462,7 +488,8 @@ public sealed class TikTokConnectionService : ITikTokConnectionService
                 ResponseCode = result.ResponseCode,
                 ErrorMessage = result.Error,
                 DurationMs = (int)swRefresh.ElapsedMilliseconds,
-                FailureCountAfter = account.RefreshFailureCount
+                FailureCountAfter = account.RefreshFailureCount,
+                RawResponse = result.RawResponse
             });
             await _db.SaveChangesAsync(cancellationToken);
             return new TikTokOpResult(false, result.Trace, result.Error ?? "Renovacion fallida.", null);
@@ -494,7 +521,8 @@ public sealed class TikTokConnectionService : ITikTokConnectionService
             ResponseCode = result.ResponseCode,
             ErrorMessage = null,
             DurationMs = (int)swRefresh.ElapsedMilliseconds,
-            FailureCountAfter = 0
+            FailureCountAfter = 0,
+            RawResponse = result.RawResponse
         });
         await _db.SaveChangesAsync(cancellationToken);
 
