@@ -25,4 +25,15 @@ public sealed class TokenRefreshLogService : ITokenRefreshLogService
             .ToListAsync(cancellationToken);
         return rows;
     }
+
+    public async Task<int> ClearForAccountAsync(
+        Guid socialAccountId, Guid actorUserId, CancellationToken cancellationToken = default)
+    {
+        // ExecuteDeleteAsync respeta HasQueryFilter -> solo borra filas del tenant activo. Bulk
+        // delete (una sola consulta SQL, no carga las entidades en memoria).
+        var deleted = await _db.TokenRefreshLogs
+            .Where(x => x.SocialAccountId == socialAccountId)
+            .ExecuteDeleteAsync(cancellationToken);
+        return deleted;
+    }
 }

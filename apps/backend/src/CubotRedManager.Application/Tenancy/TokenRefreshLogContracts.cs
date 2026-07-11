@@ -19,4 +19,9 @@ public interface ITokenRefreshLogService
 {
     /// <summary>Ultimos N intentos para una cuenta social (por AttemptedAt DESC).</summary>
     Task<IReadOnlyList<TokenRefreshLogDto>> ListForAccountAsync(Guid socialAccountId, int take = 30, CancellationToken cancellationToken = default);
+
+    /// <summary>Borra todo el historial de una cuenta (util cuando se ha resuelto un problema y
+    /// el operador quiere empezar limpio para diagnosticar el proximo). Devuelve numero de filas
+    /// eliminadas. Tenant-scoped implicito.</summary>
+    Task<int> ClearForAccountAsync(Guid socialAccountId, Guid actorUserId, CancellationToken cancellationToken = default);
 }
