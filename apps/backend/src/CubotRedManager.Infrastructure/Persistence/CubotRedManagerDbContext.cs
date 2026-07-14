@@ -84,6 +84,7 @@ public class CubotRedManagerDbContext : DbContext, IApplicationDbContext, IDataP
     public DbSet<AiAgentPrompt> AiAgentPrompts => Set<AiAgentPrompt>();
     public DbSet<AiAgentCacheField> AiAgentCacheFields => Set<AiAgentCacheField>();
     public DbSet<AiAgentCacheValue> AiAgentCacheValues => Set<AiAgentCacheValue>();
+    public DbSet<AiAgentLineBinding> AiAgentLineBindings => Set<AiAgentLineBinding>();
     public DbSet<AiUsageLog> AiUsageLogs => Set<AiUsageLog>();
 
     // WhatsApp / Evolution
@@ -290,6 +291,19 @@ public class CubotRedManagerDbContext : DbContext, IApplicationDbContext, IDataP
         modelBuilder.Entity<AiAgent>().HasIndex(x => new { x.TenantId, x.SortOrder });
         modelBuilder.Entity<AiAgentCacheField>().HasIndex(x => new { x.AgentId, x.FieldKey }).IsUnique();
         modelBuilder.Entity<AiAgentCacheValue>().HasIndex(x => new { x.AgentId, x.SessionId, x.FieldKey }).IsUnique();
+
+        // AiAgentLineBinding: vincula agentes a lineas WhatsApp. Una linea solo puede tener
+        // UN binding activo (IsConnected=true) a la vez -> unique filtered index. Los bindings
+        // inactivos se mantienen como historial. Cascade delete si se elimina agente o linea.
+        modelBuilder.Entity<AiAgentLineBinding>(b =>
+        {
+            b.HasOne(x => x.Agent).WithMany().HasForeignKey(x => x.AgentId).OnDelete(DeleteBehavior.Cascade);
+            b.HasOne(x => x.WhatsAppLine).WithMany().HasForeignKey(x => x.WhatsAppLineId).OnDelete(DeleteBehavior.Cascade);
+            b.HasIndex(x => new { x.TenantId, x.WhatsAppLineId, x.IsConnected })
+                .IsUnique()
+                .HasFilter("\"is_connected\" = true");
+            b.HasIndex(x => new { x.TenantId, x.AgentId });
+        });
 
         // WhatsApp: una instancia por agencia.
         modelBuilder.Entity<WhatsAppLine>().HasIndex(x => new { x.TenantId, x.InstanceName }).IsUnique();

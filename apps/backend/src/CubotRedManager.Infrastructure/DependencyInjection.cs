@@ -59,6 +59,7 @@ public static class DependencyInjection
         // MCP simplificado: expone DataContainers como placeholders del prompt para los agentes IA.
         services.AddScoped<IDataContainerMcpService, DataContainerMcpService>();
         services.AddScoped<IAiAgentService, AiAgentService>();
+        services.AddScoped<IAiAgentLineBindingService, AiAgentLineBindingService>();
         services.AddScoped<IAiAgentCacheService, AiAgentCacheService>();
         services.AddScoped<IAiUsageService, AiUsageService>();
         services.AddScoped<IAiInferenceService, AiInferenceService>();
