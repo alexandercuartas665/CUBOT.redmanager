@@ -28,6 +28,8 @@
     <div style="display:flex;gap:10px;align-items:center;">
         @if (_selected is null)
         {
+            <InputFile OnChange="OnImportModelFileSelected" accept=".json" style="display:none;" @ref="_modelFileInput" />
+            <button class="btn btn-outline-secondary" @onclick="TriggerImportModelFile" disabled="@_busy" title="Sube un JSON de modelo exportado desde otro entorno para crear un contenedor vacio con las mismas columnas">Importar modelo (JSON)</button>
             <button class="btn btn-primary" @onclick="OpenCreateContainer">+ Nuevo modelo</button>
         }
         else
@@ -85,6 +87,9 @@ else
             <button class="btn btn-outline-secondary dc-danger" @onclick="DeleteContainerAsync">Eliminar modelo</button>
             <button class="btn btn-primary" @onclick="OpenNewRow">+ Nueva fila</button>
             <button class="btn btn-outline-secondary" @onclick="OpenImport">Importar Excel</button>
+            <button class="btn btn-outline-secondary" @onclick="ExportModelAsync" disabled="@_busy" title="Descarga un JSON con las columnas del modelo (sin datos). Sirve para replicar la estructura en otro entorno.">
+                @(_busy ? "..." : "Exportar modelo (JSON)")
+            </button>
             <button class="btn btn-outline-secondary" @onclick="ExportExcelAsync" disabled="@_busy">
                 @(_busy ? "Exportando..." : "Exportar Excel")
             </button>
@@ -347,6 +352,10 @@ else
     private IBrowserFile? _importFile;
     private string? _importError;
     private DataImportResult? _importResult;
+
+    // Import modelo (JSON) — sube desde la lista, no requiere modal. Feedback en toast/alert simple.
+    private InputFile? _modelFileInput;
+    private string? _modelImportMsg;
 
     private sealed class ColumnDraft
     {
@@ -642,6 +651,68 @@ else
                 result.FileName,
                 base64,
                 "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+        }
+        finally { _busy = false; }
+    }
+
+    private async Task ExportModelAsync()
+    {
+        if (_selected is null) { return; }
+        _busy = true;
+        try
+        {
+            var model = await DataSvc.ExportModelAsync(_selected.Id);
+            if (model is null) { return; }
+            var json = System.Text.Json.JsonSerializer.Serialize(model, new System.Text.Json.JsonSerializerOptions { WriteIndented = true });
+            var bytes = System.Text.Encoding.UTF8.GetBytes(json);
+            var base64 = Convert.ToBase64String(bytes);
+            var safeName = new string((_selected.Name ?? "modelo").Where(ch => char.IsLetterOrDigit(ch) || ch == '-' || ch == '_').ToArray());
+            if (string.IsNullOrEmpty(safeName)) { safeName = "modelo"; }
+            await JS.InvokeVoidAsync("cubotDownloadBase64",
+                safeName.ToLowerInvariant() + ".model.json",
+                base64,
+                "application/json");
+        }
+        finally { _busy = false; }
+    }
+
+    private async Task TriggerImportModelFile()
+    {
+        // Blazor no expone un metodo directo para gatillar el file picker de un <InputFile>
+        // oculto — se hace via JS clickeando el <input> subyacente por selector.
+        await JS.InvokeVoidAsync("eval", "document.querySelector('input[type=file][accept=\".json\"]')?.click()");
+    }
+
+    private async Task OnImportModelFileSelected(InputFileChangeEventArgs e)
+    {
+        _modelImportMsg = null;
+        _busy = true;
+        try
+        {
+            await using var stream = e.File.OpenReadStream(2 * 1024 * 1024); // 2MB max para JSON
+            using var reader = new StreamReader(stream);
+            var json = await reader.ReadToEndAsync();
+            DataContainerModelExport? payload;
+            try
+            {
+                payload = System.Text.Json.JsonSerializer.Deserialize<DataContainerModelExport>(json,
+                    new System.Text.Json.JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+            }
+            catch (Exception ex)
+            {
+                _modelImportMsg = "JSON invalido: " + ex.Message;
+                return;
+            }
+            if (payload is null) { _modelImportMsg = "El JSON no se pudo interpretar."; return; }
+
+            var result = await DataSvc.ImportModelAsync(payload, _actor);
+            if (!result.Success)
+            {
+                _modelImportMsg = "Error: " + (result.Error ?? "no se pudo importar el modelo");
+                return;
+            }
+            _modelImportMsg = $"Modelo '{payload.Name}' creado. Ahora puedes importar los datos con Excel.";
+            await ReloadListAsync();
         }
         finally { _busy = false; }
     }
