@@ -49,6 +49,11 @@ namespace CubotRedManager.Infrastructure.Persistence.Migrations
                 });
 
             migrationBuilder.CreateIndex(
+                name: "ix_ai_agent_line_bindings_agent_id",
+                table: "ai_agent_line_bindings",
+                column: "agent_id");
+
+            migrationBuilder.CreateIndex(
                 name: "ix_ai_agent_line_bindings_tenant_id_agent_id",
                 table: "ai_agent_line_bindings",
                 columns: new[] { "tenant_id", "agent_id" });

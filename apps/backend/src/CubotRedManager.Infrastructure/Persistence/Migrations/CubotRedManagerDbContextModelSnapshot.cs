@@ -260,6 +260,9 @@ namespace CubotRedManager.Infrastructure.Persistence.Migrations
                     b.HasKey("Id")
                         .HasName("pk_ai_agent_line_bindings");
 
+                    b.HasIndex("AgentId")
+                        .HasDatabaseName("ix_ai_agent_line_bindings_agent_id");
+
                     b.HasIndex("WhatsAppLineId")
                         .HasDatabaseName("ix_ai_agent_line_bindings_whats_app_line_id");
 
