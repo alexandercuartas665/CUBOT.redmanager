@@ -614,4 +614,66 @@ public sealed class DataContainerService : IDataContainerService
             try { return cell.GetString().Trim(); } catch { return null; }
         }
     }
+
+    public async Task<DataContainerModelExport?> ExportModelAsync(Guid containerId, CancellationToken ct = default)
+    {
+        if (_tenantContext.TenantId is null) { return null; }
+        var container = await _db.DataContainers.AsNoTracking().FirstOrDefaultAsync(c => c.Id == containerId, ct);
+        if (container is null) { return null; }
+        var columns = await _db.DataContainerColumns.AsNoTracking()
+            .Where(c => c.ContainerId == containerId)
+            .OrderBy(c => c.SortOrder)
+            .Select(c => new DataContainerModelColumn(c.Name, c.Description, c.Type, c.SortOrder, c.IsRequired))
+            .ToListAsync(ct);
+        return new DataContainerModelExport(1, container.Name, container.Description, columns);
+    }
+
+    public async Task<DataContainerModelImportResult> ImportModelAsync(DataContainerModelExport payload, Guid actorUserId, CancellationToken ct = default)
+    {
+        if (_tenantContext.TenantId is not Guid tenantId)
+        {
+            return new DataContainerModelImportResult(false, null, "Sin tenant activo.");
+        }
+        if (string.IsNullOrWhiteSpace(payload.Name))
+        {
+            return new DataContainerModelImportResult(false, null, "El JSON no trae nombre de modelo.");
+        }
+        if (payload.Columns is null || payload.Columns.Count == 0)
+        {
+            return new DataContainerModelImportResult(false, null, "El JSON no trae columnas.");
+        }
+        var name = payload.Name.Trim();
+        var exists = await _db.DataContainers.AsNoTracking().AnyAsync(c => c.Name == name, ct);
+        if (exists)
+        {
+            return new DataContainerModelImportResult(false, null, $"Ya existe un modelo con el nombre '{name}'. Renombra o elimina antes de importar.");
+        }
+
+        var container = new DataContainer
+        {
+            TenantId = tenantId,
+            Name = name,
+            Description = string.IsNullOrWhiteSpace(payload.Description) ? null : payload.Description!.Trim()
+        };
+        _db.DataContainers.Add(container);
+        var sort = 0;
+        foreach (var col in payload.Columns.OrderBy(x => x.SortOrder))
+        {
+            if (string.IsNullOrWhiteSpace(col.Name)) { continue; }
+            _db.DataContainerColumns.Add(new DataContainerColumn
+            {
+                TenantId = tenantId,
+                ContainerId = container.Id,
+                Name = col.Name.Trim(),
+                Description = string.IsNullOrWhiteSpace(col.Description) ? null : col.Description!.Trim(),
+                Type = col.Type,
+                SortOrder = sort++,
+                IsRequired = col.IsRequired
+            });
+        }
+        _audit.Write(actorUserId, "datacontainer.import-model", nameof(DataContainer), container.Id,
+            previousValue: null, newValue: new { container.Name, ColumnCount = payload.Columns.Count }, tenantId: tenantId);
+        await _db.SaveChangesAsync(ct);
+        return new DataContainerModelImportResult(true, container.Id, null);
+    }
 }

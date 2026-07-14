@@ -73,6 +73,34 @@ public interface IDataContainerService
     /// cada registro. El formato producido es re-importable con <see cref="ImportFromExcelAsync"/>.
     /// Devuelve null si el contenedor no existe o no hay tenant activo.</summary>
     Task<DataExportResult?> ExportToExcelAsync(Guid containerId, CancellationToken ct = default);
+
+    /// <summary>Exporta SOLO la estructura del contenedor (nombre + columnas) como JSON. Sin datos.
+    /// Complementa a ExportToExcelAsync (datos): el flujo tipico es exportar modelo -> crear en el
+    /// destino con ImportModelAsync -> exportar datos con Excel -> importar datos con Excel.</summary>
+    Task<DataContainerModelExport?> ExportModelAsync(Guid containerId, CancellationToken ct = default);
+
+    /// <summary>Crea un contenedor NUEVO desde el JSON de modelo. Rechaza si ya existe uno con el
+    /// mismo nombre en el tenant (mismo comportamiento que el import de agentes).</summary>
+    Task<DataContainerModelImportResult> ImportModelAsync(DataContainerModelExport payload, Guid actorUserId, CancellationToken ct = default);
 }
 
 public sealed record DataExportResult(string FileName, byte[] Bytes);
+
+/// <summary>JSON exportable de un modelo de contenedor. Sin filas — solo estructura.</summary>
+public sealed record DataContainerModelExport(
+    int Schema,
+    string Name,
+    string? Description,
+    IReadOnlyList<DataContainerModelColumn> Columns);
+
+public sealed record DataContainerModelColumn(
+    string Name,
+    string? Description,
+    DataColumnType Type,
+    int SortOrder,
+    bool IsRequired);
+
+public sealed record DataContainerModelImportResult(
+    bool Success,
+    Guid? ContainerId,
+    string? Error);
