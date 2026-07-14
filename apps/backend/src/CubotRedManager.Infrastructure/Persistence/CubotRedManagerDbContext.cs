@@ -92,6 +92,7 @@ public class CubotRedManagerDbContext : DbContext, IApplicationDbContext, IDataP
     public DbSet<WhatsAppTemplate> WhatsAppTemplates => Set<WhatsAppTemplate>();
     public DbSet<TenantEvolutionConfig> TenantEvolutionConfigs => Set<TenantEvolutionConfig>();
     public DbSet<TenantAlertConfig> TenantAlertConfigs => Set<TenantAlertConfig>();
+    public DbSet<TenantBlockedNumber> TenantBlockedNumbers => Set<TenantBlockedNumber>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -318,6 +319,14 @@ public class CubotRedManagerDbContext : DbContext, IApplicationDbContext, IDataP
         // Alertas: una config por tenant.
         modelBuilder.Entity<TenantAlertConfig>().HasIndex(x => x.TenantId).IsUnique();
         modelBuilder.Entity<TenantAlertConfig>().Property(x => x.TargetType).HasConversion<string>();
+
+        // Lista negra global del tenant. Un mismo numero no se registra dos veces por tenant.
+        modelBuilder.Entity<TenantBlockedNumber>(b =>
+        {
+            b.Property(x => x.Phone).HasMaxLength(32).IsRequired();
+            b.Property(x => x.Note).HasMaxLength(500);
+            b.HasIndex(x => new { x.TenantId, x.Phone }).IsUnique();
+        });
 
         // WhatsApp Templates (HSM). Nombre + idioma unico por tenant (regla Meta).
         modelBuilder.Entity<WhatsAppTemplate>().Property(x => x.Provider).HasConversion<string>();

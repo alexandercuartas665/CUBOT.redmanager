@@ -75,5 +75,8 @@ public interface IApplicationDbContext
     // Alertas operativas por WhatsApp (tenant-scoped, una por tenant).
     DbSet<TenantAlertConfig> TenantAlertConfigs { get; }
 
+    // Lista negra GLOBAL del tenant: numeros a los que ningun agente de IA responde.
+    DbSet<TenantBlockedNumber> TenantBlockedNumbers { get; }
+
     Task<int> SaveChangesAsync(CancellationToken cancellationToken = default);
 }
