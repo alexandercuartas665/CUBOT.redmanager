@@ -103,9 +103,20 @@ public sealed class AiAgentService : IAiAgentService
     {
         var agent = await _db.AiAgents.FirstOrDefaultAsync(a => a.Id == id, cancellationToken);
         if (agent is null) { return false; }
+
+        // Desasociar antes de borrar: la FK ai_agent_id en auto_reply_configs esta configurada como
+        // RESTRICT (default EF Core), asi que un DELETE directo con configs referenciando falla con
+        // "violates foreign key constraint". Como el campo es nullable, lo ponemos a NULL — el
+        // AutoReplyWorker interpreta null como "usa el primer agente activo del tenant" (fallback
+        // definido en la UI del modal). No hay perdida operativa.
+        var referencing = await _db.AutoReplyConfigs
+            .Where(c => c.AiAgentId == id)
+            .ToListAsync(cancellationToken);
+        foreach (var cfg in referencing) { cfg.AiAgentId = null; }
+
         _db.AiAgents.Remove(agent);
         _audit.Write(actorUserId, "ai-agent.delete", nameof(AiAgent), agent.Id,
-            previousValue: new { agent.Name }, newValue: null, tenantId: agent.TenantId);
+            previousValue: new { agent.Name, UnlinkedConfigs = referencing.Count }, newValue: null, tenantId: agent.TenantId);
         await _db.SaveChangesAsync(cancellationToken);
         return true;
     }
