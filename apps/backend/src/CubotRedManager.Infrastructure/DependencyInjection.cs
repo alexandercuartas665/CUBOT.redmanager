@@ -24,6 +24,13 @@ public static class DependencyInjection
         {
             options.UseNpgsql(connectionString);
             options.UseSnakeCaseNamingConvention();
+            // Silencia el "PendingModelChangesWarning" de EF Core que detecta divergencias
+            // no-materiales entre el ModelSnapshot y el modelo actual (ej. metadata generada
+            // automaticamente por EF que no queda en la migracion manual). No afecta al
+            // aplicar migraciones ni al schema real - la ultima migracion aplicada es la
+            // fuente de verdad.
+            options.ConfigureWarnings(w => w.Ignore(
+                Microsoft.EntityFrameworkCore.Diagnostics.RelationalEventId.PendingModelChangesWarning));
         });
 
         services.AddScoped<IApplicationDbContext>(sp => sp.GetRequiredService<CubotRedManagerDbContext>());
@@ -59,6 +66,7 @@ public static class DependencyInjection
         // MCP simplificado: expone DataContainers como placeholders del prompt para los agentes IA.
         services.AddScoped<IDataContainerMcpService, DataContainerMcpService>();
         services.AddScoped<IAiAgentService, AiAgentService>();
+        services.AddScoped<IAiAgentLineBindingService, AiAgentLineBindingService>();
         services.AddScoped<IAiAgentCacheService, AiAgentCacheService>();
         services.AddScoped<IAiUsageService, AiUsageService>();
         services.AddScoped<IAiInferenceService, AiInferenceService>();

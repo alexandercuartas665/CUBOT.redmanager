@@ -7,6 +7,7 @@
 @using CubotRedManager.Web.Authorization
 @inject IAiAgentService AgentsSvc
 @inject IAiAgentCacheService CacheSvc
+@inject IAiAgentLineBindingService BindingsSvc
 @inject IAiServerConfigService AiServersSvc
 @inject IAiInferenceService InferenceSvc
 @inject IAiUsageService UsageSvc
@@ -315,6 +316,75 @@ else
                         }
                     </div>
                 }
+
+                @* ===== Lineas WhatsApp atendidas por el agente - acordeon ===== *@
+                <hr style="border-color:var(--border);margin:14px 0;" />
+                <div class="ag-accordion">
+                    <div class="ag-accordion-head" role="button" tabindex="0" @onclick="() => _bindingsOpen = !_bindingsOpen">
+                        <span class="ag-accordion-chev @(_bindingsOpen ? "open" : "")">&#9656;</span>
+                        <span class="pl-stagegroup-title" style="margin:0;">Lineas WhatsApp atendidas</span>
+                        <span class="ag-accordion-count">@_bindings.Count(b => b.IsBoundHere)</span>
+                        <span class="ag-accordion-spacer"></span>
+                    </div>
+                    @if (_bindingsOpen)
+                    {
+                        <div class="ag-accordion-body">
+                            <div class="text-muted" style="font-size:12px;margin-bottom:10px;">
+                                Cuando una linea esta atendida por este agente, cada mensaje entrante de WhatsApp se contesta automaticamente segun el prompt y los recursos configurados.
+                                Una linea solo puede estar atendida por un agente a la vez.
+                            </div>
+                            @if (!string.IsNullOrEmpty(_bindingsError))
+                            {
+                                <div class="alert alert-danger" style="font-size:12px;margin-bottom:8px;">@_bindingsError</div>
+                            }
+                            @if (_bindings.Count == 0)
+                            {
+                                <div class="text-muted small">No hay lineas WhatsApp configuradas. Crea una en el modulo Lineas.</div>
+                            }
+                            else
+                            {
+                                <div class="ag-list">
+                                    @foreach (var b in _bindings)
+                                    {
+                                        var takenByOther = !b.IsBoundHere && b.BoundAgentId is not null;
+                                        <div class="ag-item">
+                                            <span class="ag-rtype">@(string.IsNullOrWhiteSpace(b.LinePhoneNumber) ? "WA" : "+")</span>
+                                            <div class="ag-item-main">
+                                                <div class="ag-item-name">@(string.IsNullOrWhiteSpace(b.LinePhoneNumber) ? b.LineInstanceName : b.LinePhoneNumber)</div>
+                                                <div class="ag-item-sub">
+                                                    @if (b.IsBoundHere)
+                                                    {
+                                                        <span style="color:var(--success);">Atendida por este agente</span>
+                                                    }
+                                                    else if (takenByOther)
+                                                    {
+                                                        <span style="color:var(--warning);">Atendida por: @b.BoundAgentName</span>
+                                                    }
+                                                    else
+                                                    {
+                                                        <span class="text-muted">Sin agente</span>
+                                                    }
+                                                </div>
+                                            </div>
+                                            @if (b.IsBoundHere)
+                                            {
+                                                <button class="btn btn-sm btn-outline-danger" @onclick="() => ToggleBindingAsync(b, false)" disabled="@_busy">Desvincular</button>
+                                            }
+                                            else if (takenByOther)
+                                            {
+                                                <button class="btn btn-sm btn-outline-secondary" disabled="true">Ocupada</button>
+                                            }
+                                            else
+                                            {
+                                                <button class="btn btn-sm btn-outline-primary" @onclick="() => ToggleBindingAsync(b, true)" disabled="@_busy">Vincular</button>
+                                            }
+                                        </div>
+                                    }
+                                </div>
+                            }
+                        </div>
+                    }
+                </div>
                </div>@* /ag-editor-left *@
 
                @if (_editId is not null)
@@ -827,6 +897,11 @@ else
     // Acordeones del editor (colapsados por defecto para no llenar la columna).
     private bool _cacheOpen;
     private bool _resourcesOpen;
+    private bool _bindingsOpen;
+
+    // Estado de bindings (lineas WhatsApp atendidas por el agente que se esta editando).
+    private List<AgentLineBindingRowDto> _bindings = new();
+    private string? _bindingsError;
     // Modal aparte para los datos percibidos en la sesion de prueba.
     private bool _perceivedModalOpen;
 
@@ -958,11 +1033,48 @@ else
         _resources = detail.Resources.ToList();
         _prompts = detail.Prompts.ToList();
         await ReloadCacheAsync(id);
+        await ReloadBindingsAsync(id);
         _cacheOpen = false;
         _resourcesOpen = false;
+        _bindingsOpen = false;
         _perceivedModalOpen = false;
         ResetTest();
         _editorOpen = true;
+    }
+
+    // ===== Lineas WhatsApp atendidas =====
+    // Carga la lista completa de lineas del tenant marcando cuales atiende este agente
+    // y cuales otras. Se refresca cada vez que se abre el editor.
+    private async Task ReloadBindingsAsync(Guid agentId)
+    {
+        _bindingsError = null;
+        try
+        {
+            _bindings = (await BindingsSvc.ListForAgentAsync(agentId)).ToList();
+        }
+        catch (Exception ex) { _bindingsError = ex.Message; _bindings = new(); }
+    }
+
+    private async Task ToggleBindingAsync(AgentLineBindingRowDto row, bool connect)
+    {
+        if (_editId is null) { return; }
+        _busy = true; _bindingsError = null;
+        try
+        {
+            var actor = await ActorAsync();
+            var ok = await BindingsSvc.SetAsync(
+                new SetAgentLineBindingRequest(_editId.Value, row.WhatsAppLineId, connect, row.AutoConfirm),
+                actor);
+            if (!ok)
+            {
+                _bindingsError = connect
+                    ? "No se pudo vincular. La linea puede estar atendida por otro agente."
+                    : "No se pudo desvincular.";
+            }
+            await ReloadBindingsAsync(_editId.Value);
+        }
+        catch (Exception ex) { _bindingsError = ex.Message; }
+        finally { _busy = false; }
     }
 
     // ===== Datos cache =====
