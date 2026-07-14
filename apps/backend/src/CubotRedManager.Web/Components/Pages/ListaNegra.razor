@@ -1,0 +1,124 @@
+@page "/lista-negra"
+@attribute [Authorize(Policy = AppPolicies.TenantMember)]
+@rendermode @(new InteractiveServerRenderMode(prerender: false))
+@using CubotRedManager.Application.Tenancy
+@using CubotRedManager.Web.Authorization
+@inject IBlockedNumberService BlockedSvc
+
+<PageTitle>Lista negra - CUBOT.redmanager</PageTitle>
+
+<div class="module-head">
+    <div>
+        <div class="module-eyebrow">
+            <div class="module-icon">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="m4.9 4.9 14.2 14.2"/></svg>
+            </div>
+            <span>Infraestructura & IA</span>
+        </div>
+        <h1 class="page-title" style="margin-top:12px;">Lista <span>negra</span></h1>
+        <p class="page-sub">Numeros que <strong>ningun agente de IA</strong> debe atender. Es global de la agencia: la respetan todos los agentes. Util para el numero propio, asesores, pruebas o clientes que pidieron no ser contactados por el bot.</p>
+    </div>
+</div>
+
+<div style="max-width:720px;background:var(--surface,#fff);border:1px solid var(--border);border-radius:14px;padding:22px;">
+    <label class="form-label">Agregar numero a la lista negra</label>
+    <div style="display:flex;gap:8px;align-items:center;">
+        <input class="form-control" style="flex:1;" @bind="_input" @bind:event="oninput"
+               @onkeydown="OnKeyDown" placeholder="Ej. 573156060833" disabled="@_busy" />
+        <button type="button" class="btn btn-primary" @onclick="AddAsync" disabled="@_busy">Agregar</button>
+    </div>
+    @if (!string.IsNullOrWhiteSpace(_error))
+    {
+        <div style="font-size:12px;margin-top:6px;color:#d64545;">@_error</div>
+    }
+    <div class="text-muted" style="font-size:11.5px;margin-top:6px;">La comparacion ignora "+", espacios y el codigo de pais. Minimo 7 digitos.</div>
+
+    <hr style="border-color:var(--border);margin:18px 0;" />
+
+    @if (_loading)
+    {
+        <div class="text-muted small">Cargando...</div>
+    }
+    else if (_items.Count == 0)
+    {
+        <div class="text-muted small">No hay numeros bloqueados. Todos los contactos seran atendidos por los agentes.</div>
+    }
+    else
+    {
+        <div style="font-size:12.5px;font-weight:600;margin-bottom:10px;">@_items.Count numero(s) bloqueado(s)</div>
+        <div style="display:flex;flex-direction:column;gap:6px;">
+            @foreach (var n in _items)
+            {
+                <div style="display:flex;align-items:center;gap:10px;border:1px solid var(--border);border-radius:9px;padding:9px 12px;">
+                    <span style="font-weight:600;font-variant-numeric:tabular-nums;">@n.Phone</span>
+                    @if (!string.IsNullOrWhiteSpace(n.Note))
+                    {
+                        <span class="text-muted" style="font-size:11.5px;">@n.Note</span>
+                    }
+                    <span class="text-muted" style="font-size:11px;margin-left:auto;">@n.CreatedAt.ToLocalTime().ToString("dd/MM/yyyy HH:mm")</span>
+                    <button type="button" class="btn btn-sm btn-outline-danger" title="Quitar de la lista" @onclick="() => RemoveAsync(n.Id)" disabled="@_busy">&times;</button>
+                </div>
+            }
+        </div>
+    }
+</div>
+
+@code {
+    [CascadingParameter] private Task<AuthenticationState>? AuthState { get; set; }
+
+    private List<BlockedNumberDto> _items = new();
+    private string? _input;
+    private string? _error;
+    private bool _loading = true;
+    private bool _busy;
+
+    protected override async Task OnInitializedAsync() => await ReloadAsync();
+
+    private async Task ReloadAsync()
+    {
+        _loading = true;
+        try { _items = (await BlockedSvc.ListAsync()).ToList(); }
+        finally { _loading = false; }
+    }
+
+    private async Task OnKeyDown(KeyboardEventArgs e)
+    {
+        if (e.Key == "Enter") { await AddAsync(); }
+    }
+
+    private async Task AddAsync()
+    {
+        _error = null;
+        var digits = new string((_input ?? string.Empty).Where(char.IsDigit).ToArray());
+        if (digits.Length < 7) { _error = "Ingresa un numero valido (minimo 7 digitos)."; return; }
+        _busy = true;
+        try
+        {
+            var actor = await ActorAsync();
+            var added = await BlockedSvc.AddAsync(digits, null, actor);
+            if (added is null) { _error = "No se pudo agregar el numero."; return; }
+            _input = null;
+            await ReloadAsync();
+        }
+        finally { _busy = false; }
+    }
+
+    private async Task RemoveAsync(Guid id)
+    {
+        _busy = true;
+        try
+        {
+            var actor = await ActorAsync();
+            await BlockedSvc.RemoveAsync(id, actor);
+            await ReloadAsync();
+        }
+        finally { _busy = false; }
+    }
+
+    private async Task<Guid> ActorAsync()
+    {
+        if (AuthState is null) { return Guid.Empty; }
+        var st = await AuthState;
+        return Guid.TryParse(st.User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value, out var id) ? id : Guid.Empty;
+    }
+}
