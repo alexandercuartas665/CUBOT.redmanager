@@ -85,6 +85,7 @@ public class CubotRedManagerDbContext : DbContext, IApplicationDbContext, IDataP
     public DbSet<AiAgentCacheField> AiAgentCacheFields => Set<AiAgentCacheField>();
     public DbSet<AiAgentCacheValue> AiAgentCacheValues => Set<AiAgentCacheValue>();
     public DbSet<AiAgentLineBinding> AiAgentLineBindings => Set<AiAgentLineBinding>();
+    public DbSet<AiAgentRunLog> AiAgentRunLogs => Set<AiAgentRunLog>();
     public DbSet<AiUsageLog> AiUsageLogs => Set<AiUsageLog>();
 
     // WhatsApp / Evolution
@@ -304,6 +305,19 @@ public class CubotRedManagerDbContext : DbContext, IApplicationDbContext, IDataP
                 .IsUnique()
                 .HasFilter("\"is_connected\" = true");
             b.HasIndex(x => new { x.TenantId, x.AgentId });
+        });
+
+        // AiAgentRunLog: bitacora de atencion del agente IA. Enum como texto, contenido como
+        // text plano, dos indices para las dos consultas: por conversacion (bitacora de un
+        // hilo) y por agente (todo lo que ese agente ha hecho).
+        modelBuilder.Entity<AiAgentRunLog>(b =>
+        {
+            b.Property(x => x.Kind).HasConversion<string>().HasMaxLength(20).IsRequired();
+            b.Property(x => x.Title).HasMaxLength(200).IsRequired();
+            b.Property(x => x.Content).HasColumnType("text");
+            b.Property(x => x.Response).HasColumnType("text");
+            b.HasIndex(x => new { x.TenantId, x.ConversationId, x.OccurredAt });
+            b.HasIndex(x => new { x.TenantId, x.AgentId, x.OccurredAt });
         });
 
         // WhatsApp: una instancia por agencia.
