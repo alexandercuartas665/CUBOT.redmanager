@@ -1,0 +1,338 @@
+@page "/bitacora-agente"
+@attribute [Authorize(Policy = AppPolicies.TenantMember)]
+@rendermode @(new InteractiveServerRenderMode(prerender: false))
+@using CubotRedManager.Application.Tenancy
+@using CubotRedManager.Domain.Enums
+@using CubotRedManager.Web.Authorization
+@inject IAgentRunLogService LogSvc
+
+<PageTitle>Bitacora del agente - CUBOT.redmanager</PageTitle>
+
+<div class="module-head">
+    <div>
+        <div class="module-eyebrow">
+            <div class="module-icon">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 8V4H8"/><rect width="16" height="12" x="4" y="8" rx="2"/><path d="M2 14h2"/><path d="M20 14h2"/><path d="M15 13v2"/><path d="M9 13v2"/></svg>
+            </div>
+            <span>Comunicacion e IA</span>
+        </div>
+        <h1 class="page-title" style="margin-top:12px;">Bitacora del <span>agente</span></h1>
+        <p class="page-sub" style="margin-bottom:0;">Revisa como atendio el agente cada conversacion: mensaje recibido, prompts enviados a la IA, herramientas usadas y respuesta.</p>
+    </div>
+    <div style="display:flex;gap:8px;">
+        <button class="btn btn-outline-danger" @onclick="ClearAllAsync" disabled="@(_loading || _clearing || _convs.Count == 0)" title="Borra TODA la bitacora del tenant Y el cache de datos capturados por los agentes (deja al agente en cero). No toca mensajes del chat ni leads.">
+            @(_clearing ? "Borrando..." : "Limpiar historia")
+        </button>
+        <button class="btn btn-outline-secondary" @onclick="ReloadAsync" disabled="@_loading">Actualizar</button>
+    </div>
+</div>
+@if (!string.IsNullOrEmpty(_clearedMsg))
+{
+    <div class="alert alert-success" style="margin-top:10px;">@_clearedMsg</div>
+}
+
+@if (_loading)
+{
+    <p><em>Cargando...</em></p>
+}
+else
+{
+    <div style="display:grid;grid-template-columns:minmax(300px,400px) 1fr;gap:22px;align-items:start;">
+        <div class="card" style="padding:14px;">
+            @if (_convs.Count == 0)
+            {
+                <p class="text-muted" style="padding:8px 2px;">Aun no hay atenciones registradas. Cuando un agente atienda una linea, apareceran aqui.</p>
+            }
+            else
+            {
+                <div style="display:flex;flex-direction:column;gap:4px;max-height:68vh;overflow-y:auto;">
+                    @foreach (var c in _convs)
+                    {
+                        <div style="display:flex;align-items:center;gap:10px;padding:9px;border-radius:10px;cursor:pointer;@(_selectedId == c.ConversationId ? "background:var(--primary-soft);" : "")" @onclick="() => SelectAsync(c.ConversationId)">
+                            <span style="width:38px;height:38px;border-radius:50%;flex-shrink:0;display:grid;place-items:center;color:#fff;font-weight:800;font-size:12px;background:var(--gradient-violet);">@Initials(c.ContactName ?? c.ContactPhone)</span>
+                            <div style="flex:1;min-width:0;">
+                                <div style="font-weight:700;font-size:13px;">@(string.IsNullOrWhiteSpace(c.ContactName) ? c.ContactPhone : c.ContactName)</div>
+                                <div class="text-muted" style="font-size:11px;">@c.ContactPhone @(c.LineLabel is null ? "" : $"- linea {c.LineLabel}")</div>
+                            </div>
+                            <div style="text-align:right;">
+                                <span class="badge bg-secondary">@c.Events</span>
+                                <div class="text-muted" style="font-size:10.5px;">@(c.LastActivityAt?.ToLocalTime().ToString("dd MMM HH:mm") ?? "")</div>
+                            </div>
+                        </div>
+                    }
+                </div>
+            }
+        </div>
+
+        <div class="card" style="padding:22px;">
+            @if (_selectedId is null)
+            {
+                <p class="text-muted" style="padding:24px 0;text-align:center;">Selecciona una conversacion para ver su bitacora de atencion.</p>
+            }
+            else
+            {
+                <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px;border-bottom:1px solid var(--border);padding-bottom:12px;">
+                    <button class="btn @(_panel == Panel.Log ? "btn-primary" : "btn-outline-primary")" @onclick="() => SwitchPanel(Panel.Log)">Bitacora (@_log.Count)</button>
+                    <button class="btn @(_panel == Panel.Cache ? "btn-primary" : "btn-outline-primary")" @onclick="() => SwitchPanel(Panel.Cache)" disabled="@_loadingPanel">Datos cache</button>
+                    <button class="btn @(_panel == Panel.Messages ? "btn-primary" : "btn-outline-primary")" @onclick="() => SwitchPanel(Panel.Messages)" disabled="@_loadingPanel">Historial del chat</button>
+                    <div style="flex:1;"></div>
+                    <button class="btn btn-outline-danger" @onclick="ResetMemoryAsync" disabled="@(_resetting || _loadingPanel)" title="Borra logs + cache + mensajes del chat de esta conversacion. El agente arranca de cero en el siguiente mensaje. No toca el lead si existe.">
+                        @(_resetting ? "Reiniciando..." : "Reiniciar conversacion completa")
+                    </button>
+                </div>
+
+                @if (!string.IsNullOrEmpty(_resetMsg))
+                {
+                    <div class="alert alert-success" style="margin-bottom:14px;">@_resetMsg</div>
+                }
+
+                @if (_panel == Panel.Log)
+                {
+                    @if (_log.Count == 0)
+                    {
+                        <p class="text-muted">Sin eventos en esta conversacion.</p>
+                    }
+                    else
+                    {
+                <div style="display:flex;flex-direction:column;gap:12px;">
+                    @foreach (var e in _log)
+                    {
+                        <div style="border-left:3px solid @KindColor(e.Kind);padding:6px 0 6px 14px;">
+                            <div style="display:flex;justify-content:space-between;flex-wrap:wrap;gap:8px;align-items:center;">
+                                <strong style="font-size:13.5px;"><span class="badge @KindBadge(e.Kind)" style="margin-right:6px;">@KindLabel(e.Kind)</span>@e.Title</strong>
+                                <span class="text-muted" style="font-size:11.5px;">@e.OccurredAt.ToLocalTime().ToString("dd-MM-yyyy HH:mm:ss")</span>
+                            </div>
+                            @if (!string.IsNullOrWhiteSpace(e.Content))
+                            {
+                                <textarea class="form-control" rows="@Rows(e.Content!)" readonly style="margin-top:6px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11px;line-height:1.45;white-space:pre;">@e.Content</textarea>
+                            }
+                            @if (!string.IsNullOrWhiteSpace(e.Response))
+                            {
+                                <details style="margin-top:6px;" open="@(e.Kind == AiAgentRunLogKind.Error)">
+                                    <summary style="font-size:11.5px;cursor:pointer;color:var(--muted);">@(e.Kind == AiAgentRunLogKind.Error ? "Detalle del LLM (causa del error)" : "Ver respuesta del LLM / resultado")</summary>
+                                    <textarea class="form-control" rows="@Rows(e.Response!)" readonly style="margin-top:4px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11px;line-height:1.45;white-space:pre-wrap;word-break:break-word;">@e.Response</textarea>
+                                </details>
+                            }
+                        </div>
+                    }
+                </div>
+                    }
+                }
+                else if (_panel == Panel.Cache)
+                {
+                    @if (_cache.Count == 0)
+                    {
+                        <p class="text-muted">El agente aun no ha capturado datos cache de esta conversacion. Los datos se llenan turno a turno cuando el cliente proporciona informacion (destino, fechas, viajeros, etc.).</p>
+                    }
+                    else
+                    {
+                        <div style="display:grid;grid-template-columns:1fr 2fr;gap:8px 12px;">
+                            <div style="font-weight:700;font-size:12px;color:var(--muted);text-transform:uppercase;">Campo</div>
+                            <div style="font-weight:700;font-size:12px;color:var(--muted);text-transform:uppercase;">Valor</div>
+                            @foreach (var c in _cache)
+                            {
+                                <div style="font-size:13px;padding:6px 0;border-bottom:1px solid var(--border);">
+                                    <div style="font-weight:600;">@c.Label</div>
+                                    <div class="text-muted" style="font-size:11px;font-family:ui-monospace,monospace;">@c.FieldKey</div>
+                                </div>
+                                <div style="font-size:13px;padding:6px 0;border-bottom:1px solid var(--border);">
+                                    @if (string.IsNullOrWhiteSpace(c.Value))
+                                    {
+                                        <span class="text-muted" style="font-style:italic;">(sin valor)</span>
+                                    }
+                                    else
+                                    {
+                                        <span>@c.Value</span>
+                                    }
+                                    @if (!string.IsNullOrWhiteSpace(c.Source))
+                                    {
+                                        <span class="badge bg-secondary" style="margin-left:8px;font-size:9.5px;">@c.Source</span>
+                                    }
+                                </div>
+                            }
+                        </div>
+                    }
+                }
+                else if (_panel == Panel.Messages)
+                {
+                    @if (_messages.Count == 0)
+                    {
+                        <p class="text-muted">Sin mensajes en esta conversacion. (El historial de chat aparecera cuando se porte el modulo Conversaciones desde CUBOT.travels.)</p>
+                    }
+                    else
+                    {
+                        <div style="display:flex;flex-direction:column;gap:6px;max-height:70vh;overflow-y:auto;padding-right:6px;">
+                            @foreach (var m in _messages)
+                            {
+                                var isIn = m.Direction == "inbound";
+                                <div style="display:flex;justify-content:@(isIn ? "flex-start" : "flex-end");">
+                                    <div style="max-width:75%;background:@(isIn ? "var(--surface-2)" : "var(--primary-soft)");padding:8px 12px;border-radius:14px;">
+                                        <div style="white-space:pre-wrap;font-size:13px;">@m.Body</div>
+                                        <div class="text-muted" style="font-size:10.5px;margin-top:4px;">
+                                            @(isIn ? "Cliente" : (m.SentByName ?? "Salida"))
+                                            - @m.SentAt.ToLocalTime().ToString("dd MMM HH:mm:ss")
+                                        </div>
+                                    </div>
+                                </div>
+                            }
+                        </div>
+                    }
+                }
+            }
+        </div>
+    </div>
+}
+
+@code {
+    private enum Panel { Log, Cache, Messages }
+    private Panel _panel = Panel.Log;
+    private bool _loading = true;
+    private bool _clearing;
+    private bool _loadingPanel;
+    private bool _resetting;
+    private string? _clearedMsg;
+    private string? _resetMsg;
+    private List<AgentRunLogConversationDto> _convs = new();
+    private Guid? _selectedId;
+    private List<AgentRunLogEntryDto> _log = new();
+    private List<AgentCacheItemDto> _cache = new();
+    private List<AgentConversationMessageDto> _messages = new();
+
+    protected override async Task OnInitializedAsync() => await ReloadAsync();
+
+    private async Task ClearAllAsync()
+    {
+        // Confirmacion implicita: el usuario ya hizo click. Borra la bitacora + el cache de datos
+        // capturados del tenant (deja al agente en cero). No toca mensajes ni leads.
+        _clearing = true;
+        _clearedMsg = null;
+        try
+        {
+            var (logs, cache) = await LogSvc.ClearAllAsync();
+            _clearedMsg = $"Se eliminaron {logs} entrada(s) de la bitacora y {cache} dato(s) de cache. El agente arranca de cero en el siguiente mensaje.";
+            _selectedId = null;
+            _log = new();
+            await ReloadAsync();
+        }
+        finally { _clearing = false; }
+    }
+
+    private async Task ReloadAsync()
+    {
+        _loading = true;
+        try
+        {
+            _convs = (await LogSvc.ListConversationsAsync()).ToList();
+            // Si la conversacion seleccionada sigue presente, refrescamos su log.
+            if (_selectedId is Guid id && _convs.Any(c => c.ConversationId == id))
+            {
+                _log = (await LogSvc.GetConversationLogAsync(id)).ToList();
+            }
+            else
+            {
+                _selectedId = null;
+                _log = new();
+            }
+        }
+        finally { _loading = false; }
+    }
+
+    private async Task SelectAsync(Guid conversationId)
+    {
+        _selectedId = conversationId;
+        _panel = Panel.Log;
+        _resetMsg = null;
+        _cache = new();
+        _messages = new();
+        _log = (await LogSvc.GetConversationLogAsync(conversationId)).ToList();
+    }
+
+    private async Task SwitchPanel(Panel p)
+    {
+        _panel = p;
+        if (_selectedId is not Guid id) { return; }
+        _loadingPanel = true;
+        try
+        {
+            switch (p)
+            {
+                case Panel.Cache:
+                    if (_cache.Count == 0) { _cache = (await LogSvc.GetConversationCacheAsync(id)).ToList(); }
+                    break;
+                case Panel.Messages:
+                    if (_messages.Count == 0) { _messages = (await LogSvc.GetConversationMessagesAsync(id)).ToList(); }
+                    break;
+                case Panel.Log:
+                    // El log se recarga al seleccionar conversacion; no se invalida al alternar paneles.
+                    break;
+            }
+        }
+        finally { _loadingPanel = false; }
+    }
+
+    private async Task ResetMemoryAsync()
+    {
+        if (_selectedId is not Guid id) { return; }
+        _resetting = true;
+        _resetMsg = null;
+        try
+        {
+            var (logs, cache, messages) = await LogSvc.ResetConversationMemoryAsync(id);
+            _resetMsg = $"Conversacion reiniciada: {logs} log(s), {cache} dato(s) cache y {messages} mensaje(s) del chat eliminados. " +
+                        $"El agente arrancara desde cero en el siguiente mensaje del cliente.";
+            _log = new();
+            _cache = new();
+            _messages = new();
+            await ReloadAsync();
+        }
+        finally { _resetting = false; }
+    }
+
+    private static string Initials(string s)
+    {
+        if (string.IsNullOrWhiteSpace(s)) { return "?"; }
+        var parts = s.Trim().Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        if (parts.Length == 1) { return parts[0].Length >= 2 ? parts[0][..2].ToUpperInvariant() : parts[0].ToUpperInvariant(); }
+        return ((parts[0][0]).ToString() + parts[^1][0]).ToUpperInvariant();
+    }
+
+    private static string KindLabel(AiAgentRunLogKind k) => k switch
+    {
+        AiAgentRunLogKind.Inbound => "Recibido",
+        AiAgentRunLogKind.Prompt  => "Prompt IA",
+        AiAgentRunLogKind.Tool    => "Herramienta",
+        AiAgentRunLogKind.Reply   => "Respuesta",
+        AiAgentRunLogKind.Info    => "Info",
+        AiAgentRunLogKind.Error   => "Error",
+        _ => k.ToString()
+    };
+
+    private static string KindBadge(AiAgentRunLogKind k) => k switch
+    {
+        AiAgentRunLogKind.Inbound => "bg-info",
+        AiAgentRunLogKind.Prompt  => "bg-primary",
+        AiAgentRunLogKind.Tool    => "bg-warning text-dark",
+        AiAgentRunLogKind.Reply   => "bg-success",
+        AiAgentRunLogKind.Info    => "bg-secondary",
+        AiAgentRunLogKind.Error   => "bg-danger",
+        _ => "bg-secondary"
+    };
+
+    private static string KindColor(AiAgentRunLogKind k) => k switch
+    {
+        AiAgentRunLogKind.Inbound => "#0dcaf0",
+        AiAgentRunLogKind.Prompt  => "#6366f1",
+        AiAgentRunLogKind.Tool    => "#f59e0b",
+        AiAgentRunLogKind.Reply   => "#22c55e",
+        AiAgentRunLogKind.Info    => "#94a3b8",
+        AiAgentRunLogKind.Error   => "#ef4444",
+        _ => "#94a3b8"
+    };
+
+    // Calcula filas de altura para el textarea segun el contenido (max 18 para no saturar).
+    private static int Rows(string s)
+    {
+        var lines = s.Count(c => c == '\n') + 1;
+        return Math.Min(18, Math.Max(3, lines));
+    }
+}
