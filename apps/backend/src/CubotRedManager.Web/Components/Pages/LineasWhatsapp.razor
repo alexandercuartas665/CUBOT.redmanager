@@ -1,11 +1,13 @@
 @page "/lineas-whatsapp"
 @attribute [Authorize(Policy = AppPolicies.TenantMember)]
 @rendermode InteractiveServer
+@implements IDisposable
 @using CubotRedManager.Application.Tenancy
 @using CubotRedManager.Domain.Enums
 @using CubotRedManager.Web.Components
 @inject IWhatsAppLineService LinesSvc
 @inject IWhatsAppConnectorService Connector
+@inject IWebhookAdminService WebhookSvc
 @inject IYCloudApiClient YCloud
 @inject AuthenticationStateProvider AuthProvider
 
@@ -22,12 +24,170 @@
         <h1 class="page-title" style="margin-top:12px;">Lineas WhatsApp</h1>
         <p class="page-sub" style="margin-bottom:0;">Lineas WhatsApp de la agencia. Soporta Evolution (QR), Meta Cloud API oficial y YCloud (BSP con coexistencia).</p>
     </div>
-    <button class="btn btn-primary" @onclick="() => _showCreate = true">Nueva linea</button>
+    <button class="btn btn-primary" @onclick="() => _showCreate = true"
+            disabled="@(_server is { MasterReady: false, UseMasterServer: true })"
+            title="@(_server is { MasterReady: false, UseMasterServer: true } ? "El servidor maestro Evolution aun no esta configurado por el operador. Elige 'Mi propio servidor' o pide al operador que lo configure." : null)">Nueva linea</button>
 </div>
 
 @if (_loading)
 {
     <p class="text-muted">Cargando...</p>
+}
+else
+{
+    @* ===== Acordeon "Avanzado" que agrupa configuracion de Servidor + Webhook ===== *@
+    <details class="cfg-accordion" style="max-width:1040px;margin-bottom:22px;">
+        <summary class="cfg-accordion-summary">
+            <svg class="cfg-accordion-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width:14px;height:14px;"><polyline points="9 18 15 12 9 6"/></svg>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width:16px;height:16px;"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+            <span>Avanzado</span>
+            <span class="text-muted" style="font-size:11.5px;font-weight:400;">Servidor y webhook de Evolution API</span>
+        </summary>
+
+        @* ===== Servidor Evolution (plataforma / propio) ===== *@
+        <div class="card" style="max-width:1040px;padding:20px 22px;margin:16px 0;">
+            <div style="font-weight:700;margin-bottom:4px;">Servidor de WhatsApp</div>
+            <div class="text-muted" style="font-size:12px;margin-bottom:14px;">Usa el servidor de la plataforma o conecta tu propio servidor Evolution API.</div>
+
+            <div style="display:flex;flex-direction:column;gap:8px;max-width:620px;">
+                <label class="cfg-row" style="cursor:pointer;gap:10px;">
+                    <input type="radio" name="srv" checked="@_useMaster" @onchange="@(() => _useMaster = true)" />
+                    <div class="grow">
+                        <div style="font-weight:600;font-size:13px;">Servidor de la plataforma (CUBOT)</div>
+                        <div class="text-muted" style="font-size:11px;">
+                            @if (_server?.MasterReady == true) { <text>Listo: @_server.MasterBaseUrl</text> }
+                            else { <text>El operador aun no ha configurado el servidor maestro.</text> }
+                        </div>
+                    </div>
+                </label>
+                <label class="cfg-row" style="cursor:pointer;gap:10px;">
+                    <input type="radio" name="srv" checked="@(!_useMaster)" @onchange="@(() => _useMaster = false)" />
+                    <div class="grow">
+                        <div style="font-weight:600;font-size:13px;">Mi propio servidor Evolution</div>
+                        <div class="text-muted" style="font-size:11px;">Configura la URL y la API key de tu servidor.</div>
+                    </div>
+                </label>
+            </div>
+
+            @if (!_useMaster)
+            {
+                <div class="field-row" style="max-width:620px;margin-top:12px;">
+                    <div class="field">
+                        <label class="form-label">URL del servidor</label>
+                        <input class="form-control" @bind="_ownUrl" placeholder="https://mi-evolution.com" autocomplete="off" />
+                    </div>
+                    <div class="field">
+                        <label class="form-label">API key</label>
+                        <input class="form-control" type="password" @bind="_ownToken" autocomplete="new-password" placeholder="@(_server?.HasOwnToken == true ? "Dejar vacio para conservar" : "")" />
+                    </div>
+                </div>
+            }
+
+            @if (_serverMsg is not null)
+            {
+                <div class="@(_serverOk ? "text-success" : "text-danger")" style="font-size:12px;margin-top:10px;">@_serverMsg</div>
+            }
+            <button class="btn btn-outline-secondary" style="margin-top:12px;" @onclick="SaveServerAsync" disabled="@_busy">Guardar servidor</button>
+        </div>
+
+        @* ===== Webhook entrante (mensajes en caliente) ===== *@
+        @if (_webhook is not null)
+        {
+            <div class="card" style="max-width:1040px;padding:20px 22px;margin:16px 0;">
+                <div style="font-weight:700;margin-bottom:4px;">Mensajes entrantes (webhook)</div>
+                <div class="text-muted" style="font-size:12px;margin-bottom:14px;">Para recibir respuestas de los clientes en vivo. En desarrollo se levanta un tunel; en produccion se usa la URL de tu dominio.</div>
+
+                <div style="display:flex;flex-direction:column;gap:8px;max-width:620px;">
+                    <label class="cfg-row" style="cursor:pointer;gap:10px;">
+                        <input type="radio" name="whmode" checked="@(_whMode == "Development")" @onchange="@(() => _whMode = "Development")" />
+                        <div class="grow">
+                            <div style="font-weight:600;font-size:13px;">Modo desarrollo (tunel)</div>
+                            <div class="text-muted" style="font-size:11px;">La app levanta un tunel cloudflared y expone el webhook temporalmente.</div>
+                        </div>
+                    </label>
+                    <label class="cfg-row" style="cursor:pointer;gap:10px;">
+                        <input type="radio" name="whmode" checked="@(_whMode == "Production")" @onchange="@(() => _whMode = "Production")" />
+                        <div class="grow">
+                            <div style="font-weight:600;font-size:13px;">Produccion (URL fija)</div>
+                            <div class="text-muted" style="font-size:11px;">Usa la URL publica de tu dominio (ej. https://app.cubot.com.co).</div>
+                        </div>
+                    </label>
+                </div>
+
+                <div class="field-row" style="max-width:620px;margin-top:12px;">
+                    @if (_whMode == "Production")
+                    {
+                        <div class="field">
+                            <label class="form-label">URL publica</label>
+                            <input class="form-control" @bind="_whPublicUrl" placeholder="https://app.cubot.com.co" autocomplete="off" />
+                        </div>
+                    }
+                    <div class="field">
+                        <label class="form-label">Token del webhook</label>
+                        <input class="form-control" @bind="_whToken" placeholder="Se genera si lo dejas vacio" autocomplete="off" />
+                    </div>
+                </div>
+
+                <div style="display:flex;gap:8px;align-items:center;margin-top:12px;flex-wrap:wrap;">
+                    <button class="btn btn-outline-secondary" @onclick="SaveWebhookAsync" disabled="@_busy">Guardar webhook</button>
+                    @if (_whMode == "Development")
+                    {
+                        @if (_webhook.TunnelRunning)
+                        {
+                            <button class="btn btn-outline-danger" @onclick="StopTunnelAsync" disabled="@_busy">Detener tunel</button>
+                        }
+                        else
+                        {
+                            <button class="btn btn-primary" @onclick="StartTunnelAsync" disabled="@_busy">Iniciar tunel</button>
+                        }
+                    }
+                    @if (!string.IsNullOrWhiteSpace(_webhook.EffectiveUrl))
+                    {
+                        <span class="badge bg-success">Escuchando</span>
+                    }
+                    else
+                    {
+                        <span class="badge bg-secondary">Sin URL activa</span>
+                    }
+                </div>
+
+                @if (!string.IsNullOrWhiteSpace(_webhook.EffectiveUrl))
+                {
+                    <div class="text-muted" style="font-size:11px;margin-top:8px;word-break:break-all;">Webhook activo: @_webhook.EffectiveUrl</div>
+                }
+                @if (_whMsg is not null)
+                {
+                    <div class="@(_whOk ? "text-success" : "text-danger")" style="font-size:12px;margin-top:8px;">@_whMsg</div>
+                }
+            </div>
+        }
+    </details>
+
+    @* ===== KPIs — Lineas totales / Conectadas / Pendientes ===== *@
+    <div class="kpi-grid" style="margin-bottom:22px;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));max-width:820px;">
+        <div class="kpi-card">
+            <div class="kpi-top"><div class="kpi-icon tone-primary"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="14" height="20" x="5" y="2" rx="2"/><path d="M12 18h.01"/></svg></div></div>
+            <div class="kpi-label">Lineas</div>
+            <div class="kpi-value">@_lines.Count</div>
+            <div class="kpi-hint">Total registradas</div>
+        </div>
+        <div class="kpi-card">
+            <div class="kpi-top"><div class="kpi-icon tone-success"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><path d="m9 11 3 3L22 4"/></svg></div></div>
+            <div class="kpi-label">Conectadas</div>
+            <div class="kpi-value">@_lines.Count(l => l.Status == WhatsAppLineStatus.Connected)</div>
+            <div class="kpi-hint">En linea</div>
+        </div>
+        <div class="kpi-card">
+            <div class="kpi-top"><div class="kpi-icon tone-gold"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg></div></div>
+            <div class="kpi-label">Pendientes</div>
+            <div class="kpi-value">@_lines.Count(l => l.Status is WhatsAppLineStatus.Connecting or WhatsAppLineStatus.Created)</div>
+            <div class="kpi-hint">Por conectar</div>
+        </div>
+    </div>
+}
+
+@if (_loading)
+{
 }
 else if (_lines.Count == 0)
 {
@@ -70,20 +230,28 @@ else
                 {
                     <div class="line-meta">WABA: @l.YCloudWabaId</div>
                 }
+                @if (l.LastConnectedAt is DateTimeOffset lc)
+                {
+                    <div class="line-meta">Ultima conexion: @lc.LocalDateTime.ToString("dd MMM HH:mm")</div>
+                }
                 <div class="line-actions">
                     @if (l.Status == WhatsAppLineStatus.Connected)
                     {
-                        <button class="btn btn-sm btn-outline-secondary" @onclick="() => Disconnect(l)">Desconectar</button>
+                        <button class="btn btn-sm btn-primary" @onclick="() => OpenTest(l)" disabled="@_busy">Probar envio</button>
+                        <button class="btn btn-sm btn-outline-secondary" @onclick="() => RefreshAsync(l.Id)" disabled="@_busy">Actualizar</button>
+                        <button class="btn btn-sm btn-outline-secondary" @onclick="() => Disconnect(l)" disabled="@_busy">Desconectar</button>
                     }
                     else if (l.Provider == WhatsAppProvider.Evolution)
                     {
-                        <button class="btn btn-sm btn-primary" @onclick="() => ConnectEvolution(l)">Conectar (QR)</button>
+                        <button class="btn btn-sm btn-primary" @onclick="() => ConnectEvolution(l)" disabled="@_busy">Conectar (QR)</button>
+                        <button class="btn btn-sm btn-outline-secondary" @onclick="() => RefreshAsync(l.Id)" disabled="@_busy">Actualizar</button>
                     }
                     else
                     {
-                        <button class="btn btn-sm btn-primary" @onclick="() => ChangeStatus(l, WhatsAppLineStatus.Connected)">Marcar conectada</button>
+                        <button class="btn btn-sm btn-primary" @onclick="() => ChangeStatus(l, WhatsAppLineStatus.Connected)" disabled="@_busy">Marcar conectada</button>
+                        <button class="btn btn-sm btn-outline-secondary" @onclick="() => RefreshAsync(l.Id)" disabled="@_busy">Actualizar</button>
                     }
-                    <button class="btn btn-sm btn-outline-danger" @onclick="() => Delete(l)">Eliminar</button>
+                    <button class="btn btn-sm btn-outline-danger" @onclick="() => AskDelete(l)" disabled="@_busy">Eliminar</button>
                 </div>
             </div>
         }
@@ -114,8 +282,8 @@ else
                         <img class="qr-img" src="@QrSrc(_qrBase64)" alt="QR de conexion" />
                         <div class="qr-hint">
                             Abre <strong>WhatsApp</strong> en tu celular &rarr; <strong>Dispositivos vinculados</strong> &rarr;
-                            <strong>Vincular un dispositivo</strong> y escanea este codigo. El QR se refresca cada minuto;
-                            pulsa <em>Verificar estado</em> luego de escanear.
+                            <strong>Vincular un dispositivo</strong> y escanea este codigo. El estado se
+                            verifica automaticamente cada 3 segundos.
                         </div>
                     }
                     @if (!string.IsNullOrEmpty(_qrError))
@@ -130,6 +298,59 @@ else
                     @(_qrBusy ? "Verificando..." : "Verificar estado")
                 </button>
                 <button class="btn btn-primary" @onclick="() => OpenQrForAsync(_qrLine!)" disabled="@_qrBusy">Regenerar QR</button>
+            </div>
+        </div>
+    </div>
+}
+
+@if (_testOpen)
+{
+    <div class="modal-overlay" @onclick="() => _testOpen = false">
+        <div class="modal-dialog" @onclick:stopPropagation="true">
+            <div class="modal-head">
+                <h3>Probar envio &mdash; @_testLineName</h3>
+                <button class="modal-close" @onclick="() => _testOpen = false">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div class="field">
+                    <label class="form-label">Numero destino <small>(formato internacional sin +)</small></label>
+                    <input class="form-control" @bind="_testPhone" autocomplete="off" placeholder="573001234567" />
+                </div>
+                <div class="field">
+                    <label class="form-label">Mensaje</label>
+                    <textarea class="form-control" rows="3" @bind="_testText"></textarea>
+                </div>
+                @if (_testMsg is not null)
+                {
+                    <div class="@(_testOk ? "text-success" : "text-danger")" style="font-size:0.85rem;">@_testMsg</div>
+                }
+            </div>
+            <div class="modal-foot">
+                <button class="btn btn-outline-secondary" @onclick="() => _testOpen = false">Cerrar</button>
+                <button class="btn btn-primary" @onclick="SendTestAsync" disabled="@(_busy || string.IsNullOrWhiteSpace(_testPhone))">Enviar</button>
+            </div>
+        </div>
+    </div>
+}
+
+@if (_deleteLineId is not null)
+{
+    <div class="modal-overlay" @onclick="() => { _deleteLineId = null; _err = null; }">
+        <div class="modal-dialog" @onclick:stopPropagation="true">
+            <div class="modal-head">
+                <h3>Eliminar linea</h3>
+                <button class="modal-close" @onclick="() => { _deleteLineId = null; _err = null; }">&times;</button>
+            </div>
+            <div class="modal-body">
+                <p>Vas a eliminar la linea <strong>@_deleteLineName</strong>. Se cerrara su sesion en WhatsApp y se quitara de la lista. Esta accion no se puede deshacer.</p>
+                @if (!string.IsNullOrEmpty(_err))
+                {
+                    <div class="check-msg err">@_err</div>
+                }
+            </div>
+            <div class="modal-foot">
+                <button class="btn btn-outline-secondary" @onclick="() => { _deleteLineId = null; _err = null; }">Cancelar</button>
+                <button class="btn btn-danger" @onclick="ConfirmDeleteAsync" disabled="@_busy">@(_busy ? "Eliminando..." : "Eliminar")</button>
             </div>
         </div>
     </div>
@@ -250,8 +471,9 @@ else
     .line-top { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; }
     .line-name { font-weight: 700; font-size: 15px; margin-right: 8px; }
     .line-provider { font-size: 10px; font-weight: 700; padding: 2px 7px; border-radius: 6px; background: var(--muted); color: var(--muted-foreground); text-transform: uppercase; letter-spacing: .03em; }
-    .line-provider.p-ycloud { background: oklch(0.72 0.15 285 / 0.15); color: var(--primary); }
+    .line-provider.p-ycloud { background: oklch(0.62 0.16 155 / 0.15); color: var(--success); }
     .line-provider.p-cloud { background: oklch(0.55 0.2 245 / 0.15); color: oklch(0.55 0.2 245); }
+    .line-provider.p-evolution { background: var(--muted); color: var(--muted-foreground); }
     .line-phone { font-size: 12.5px; color: var(--muted-foreground); margin-top: 6px; }
     .line-meta { font-size: 11.5px; color: var(--muted-foreground); margin-top: 2px; font-family: ui-monospace, monospace; }
     .line-actions { margin-top: 14px; display: flex; gap: 8px; flex-wrap: wrap; }
@@ -272,10 +494,23 @@ else
     .qr-wrap { display: flex; flex-direction: column; align-items: center; gap: 12px; padding: 8px 0; }
     .qr-img { width: 260px; height: 260px; border: 1px solid var(--border); border-radius: 10px; padding: 8px; background: #fff; }
     .qr-hint { color: var(--muted-foreground); font-size: 12.5px; text-align: center; max-width: 360px; }
+    .text-success { color: var(--success); }
+    .text-danger { color: var(--destructive); }
+    /* Acordeon "Avanzado" (Servidor + Webhook Evolution). Portado desde travels. */
+    .cfg-accordion { border: 1px solid var(--border); border-radius: 12px; background: var(--card); padding: 6px 14px; }
+    .cfg-accordion-summary { display: flex; align-items: center; gap: 10px; cursor: pointer; padding: 8px 4px; font-weight: 600; font-size: 13.5px; list-style: none; }
+    .cfg-accordion-summary::-webkit-details-marker { display: none; }
+    .cfg-accordion-chevron { transition: transform .18s ease; color: var(--muted-foreground); }
+    .cfg-accordion[open] > .cfg-accordion-summary .cfg-accordion-chevron { transform: rotate(90deg); }
+    .cfg-row { display: flex; align-items: flex-start; padding: 6px 8px; border-radius: 8px; }
+    .cfg-row:hover { background: var(--muted); }
+    .cfg-row .grow { flex: 1; }
+    .field-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 12px; }
 </style>
 
 @code {
     private bool _loading = true;
+    private bool _busy;
     private bool _showCreate;
     private string _newName = "";
     private string _newPhone = "";
@@ -295,14 +530,45 @@ else
     private string _checkMsg = "";
     // General
     private string? _error;
+    private string? _err;
     private Guid _actor;
-    private IReadOnlyList<WhatsAppLineDto> _lines = [];
+    private List<WhatsAppLineDto> _lines = new();
 
-    // Modal de QR (Evolution)
+    // Modal de QR (Evolution) + polling automatico
     private WhatsAppLineDto? _qrLine;
     private string? _qrBase64;
     private string? _qrError;
     private bool _qrBusy;
+    private Timer? _pollTimer;
+
+    // Modal "Probar envio"
+    private bool _testOpen;
+    private Guid _testLineId;
+    private string? _testLineName;
+    private string? _testPhone;
+    private string _testText = "Hola! Mensaje de prueba desde CUBOT.redmanager.";
+    private string? _testMsg;
+    private bool _testOk;
+
+    // Modal "Eliminar linea"
+    private Guid? _deleteLineId;
+    private string? _deleteLineName;
+
+    // Acordeon "Servidor de WhatsApp": eleccion master vs propio Evolution.
+    private EvolutionServerSettingDto? _server;
+    private bool _useMaster = true;
+    private string? _ownUrl;
+    private string? _ownToken;
+    private string? _serverMsg;
+    private bool _serverOk;
+
+    // Card "Webhook entrante": modo dev/prod, URL publica, token, tunel.
+    private WebhookConfigDto? _webhook;
+    private string _whMode = "Development";
+    private string? _whPublicUrl;
+    private string? _whToken;
+    private string? _whMsg;
+    private bool _whOk;
 
     protected override async Task OnInitializedAsync()
     {
@@ -314,8 +580,97 @@ else
     private async Task Reload()
     {
         _loading = true;
-        _lines = await LinesSvc.ListAsync();
+        _lines = (await LinesSvc.ListAsync()).ToList();
+        // Cargar config del servidor Evolution del tenant para el acordeon "Avanzado".
+        _server = await Connector.GetServerAsync();
+        _useMaster = _server.UseMasterServer;
+        _ownUrl = _server.OwnBaseUrl;
+        // Cargar config del webhook (modo dev/prod, URL activa, token).
+        _webhook = await WebhookSvc.GetAsync();
+        _whMode = _webhook.Mode;
+        _whPublicUrl = _webhook.PublicUrl;
+        _whToken = _webhook.Token;
         _loading = false;
+    }
+
+    private async Task SaveWebhookAsync()
+    {
+        _whMsg = null;
+        _busy = true;
+        try
+        {
+            _webhook = await WebhookSvc.SaveAsync(_whMode, _whPublicUrl, _whToken, _actor);
+            _whToken = _webhook.Token;
+            _whOk = true;
+            _whMsg = "Webhook guardado y aplicado a las lineas conectadas.";
+        }
+        catch (Exception ex)
+        {
+            _whOk = false;
+            _whMsg = $"Error: {ex.Message}";
+        }
+        finally { _busy = false; }
+    }
+
+    private async Task StartTunnelAsync()
+    {
+        _whMsg = null;
+        _busy = true;
+        try
+        {
+            _webhook = await WebhookSvc.StartTunnelAsync(_actor);
+            _whOk = _webhook.TunnelRunning;
+            _whMsg = _webhook.TunnelRunning
+                ? $"Tunel activo: {_webhook.EffectiveUrl}"
+                : "No se pudo iniciar el tunel. Verifica que cloudflared este instalado en el host.";
+        }
+        catch (Exception ex)
+        {
+            _whOk = false;
+            _whMsg = $"Error: {ex.Message}";
+        }
+        finally { _busy = false; }
+    }
+
+    private async Task StopTunnelAsync()
+    {
+        _whMsg = null;
+        _busy = true;
+        try
+        {
+            _webhook = await WebhookSvc.StopTunnelAsync(_actor);
+            _whOk = true;
+            _whMsg = "Tunel detenido.";
+        }
+        catch (Exception ex)
+        {
+            _whOk = false;
+            _whMsg = $"Error: {ex.Message}";
+        }
+        finally { _busy = false; }
+    }
+
+    private async Task SaveServerAsync()
+    {
+        _serverMsg = null;
+        _busy = true;
+        try
+        {
+            var res = await Connector.SetServerAsync(new SetEvolutionServerRequest(_useMaster, _ownUrl, _ownToken), _actor);
+            if (res is null) { _serverMsg = "No se pudo guardar."; _serverOk = false; return; }
+            _server = res;
+            // Nunca dejamos el token en el input despues de guardar. Si el usuario quiere cambiarlo
+            // otra vez tiene que reingresarlo; asi evitamos exponerlo en el DOM inspeccionable.
+            _ownToken = null;
+            _serverOk = true;
+            _serverMsg = "Servidor guardado.";
+        }
+        catch (Exception ex)
+        {
+            _serverOk = false;
+            _serverMsg = $"Error: {ex.Message}";
+        }
+        finally { _busy = false; }
     }
 
     private async Task CheckYCloud()
@@ -396,13 +751,40 @@ else
                 _qrBase64 = res.QrBase64;
                 if (string.IsNullOrEmpty(_qrBase64))
                 {
-                    _qrError = "Evolution acepto la instancia pero no devolvio QR. Espera unos segundos y presiona 'Verificar estado'.";
+                    _qrError = "Evolution acepto la instancia pero no devolvio QR. Espera unos segundos.";
                 }
             }
         }
         catch (Exception ex) { _qrError = ex.Message; }
         finally { _qrBusy = false; }
         await Reload();
+        // Arranca polling automatico cada 3s hasta que la linea quede Connected o el usuario
+        // cierre el modal. Sin esto el operador tenia que pulsar "Verificar estado" a mano.
+        StartPolling();
+    }
+
+    private void StartPolling()
+    {
+        _pollTimer?.Dispose();
+        _pollTimer = new Timer(async _ => await PollAsync(), null, TimeSpan.FromSeconds(3), TimeSpan.FromSeconds(3));
+    }
+
+    private async Task PollAsync()
+    {
+        if (_qrLine is null) { return; }
+        var updated = await Connector.RefreshAsync(_qrLine.Id, _actor);
+        if (updated is null) { return; }
+        _qrLine = updated;
+        var i = _lines.FindIndex(l => l.Id == updated.Id);
+        if (i >= 0) { _lines[i] = updated; }
+        if (updated.Status == WhatsAppLineStatus.Connected)
+        {
+            _qrError = null;
+            _qrBase64 = null;
+            _pollTimer?.Dispose();
+            _pollTimer = null;
+        }
+        await InvokeAsync(StateHasChanged);
     }
 
     private async Task RefreshQrLine()
@@ -417,25 +799,54 @@ else
             {
                 _qrError = null;
                 _qrBase64 = null;
+                _pollTimer?.Dispose();
+                _pollTimer = null;
             }
         }
         finally { _qrBusy = false; }
         await Reload();
     }
 
-    private void CloseQrModal() { _qrLine = null; _qrBase64 = null; _qrError = null; }
+    private void CloseQrModal()
+    {
+        _qrLine = null;
+        _qrBase64 = null;
+        _qrError = null;
+        _pollTimer?.Dispose();
+        _pollTimer = null;
+    }
+
+    private async Task RefreshAsync(Guid lineId)
+    {
+        _busy = true;
+        try
+        {
+            var updated = await Connector.RefreshAsync(lineId, _actor);
+            if (updated is not null)
+            {
+                var i = _lines.FindIndex(l => l.Id == updated.Id);
+                if (i >= 0) { _lines[i] = updated; }
+            }
+        }
+        finally { _busy = false; }
+    }
 
     private async Task Disconnect(WhatsAppLineDto line)
     {
-        if (line.Provider == WhatsAppProvider.Evolution)
+        _busy = true;
+        try
         {
-            await Connector.DisconnectAsync(line.Id, _actor);
+            if (line.Provider == WhatsAppProvider.Evolution)
+            {
+                await Connector.DisconnectAsync(line.Id, _actor);
+            }
+            else
+            {
+                await LinesSvc.ChangeStatusAsync(line.Id, WhatsAppLineStatus.Disconnected, _actor);
+            }
+            await Reload();
         }
-        else
-        {
-            await LinesSvc.ChangeStatusAsync(line.Id, WhatsAppLineStatus.Disconnected, _actor);
-        }
-        await Reload();
+        finally { _busy = false; }
     }
 
     private void ResetForm()
@@ -448,15 +859,65 @@ else
 
     private async Task ChangeStatus(WhatsAppLineDto line, WhatsAppLineStatus status)
     {
-        await LinesSvc.ChangeStatusAsync(line.Id, status, _actor);
-        await Reload();
+        _busy = true;
+        try
+        {
+            await LinesSvc.ChangeStatusAsync(line.Id, status, _actor);
+            await Reload();
+        }
+        finally { _busy = false; }
     }
 
-    private async Task Delete(WhatsAppLineDto line)
+    private void AskDelete(WhatsAppLineDto line)
     {
-        await LinesSvc.DeleteAsync(line.Id, _actor);
-        await Reload();
+        _err = null;
+        _deleteLineId = line.Id;
+        _deleteLineName = line.InstanceName;
     }
+
+    private async Task ConfirmDeleteAsync()
+    {
+        if (_deleteLineId is not Guid id) { return; }
+        _busy = true;
+        try
+        {
+            // Usa Connector.DeleteLineAsync (no LinesSvc.DeleteAsync) para que ademas de borrar
+            // la fila cierre la sesion en Evolution y deje auditoria. Best-effort a nivel BSP.
+            await Connector.DeleteLineAsync(id, _actor);
+            _deleteLineId = null;
+            _deleteLineName = null;
+            await Reload();
+        }
+        catch (Exception ex)
+        {
+            _err = $"No se pudo eliminar la linea: {ex.Message}";
+        }
+        finally { _busy = false; }
+    }
+
+    private void OpenTest(WhatsAppLineDto line)
+    {
+        _testMsg = null;
+        _testLineId = line.Id;
+        _testLineName = line.InstanceName;
+        _testPhone = string.IsNullOrWhiteSpace(line.PhoneNumber) ? null : line.PhoneNumber;
+        _testOpen = true;
+    }
+
+    private async Task SendTestAsync()
+    {
+        _testMsg = null;
+        _busy = true;
+        try
+        {
+            var res = await Connector.SendTestAsync(_testLineId, _testPhone ?? "", _testText, _actor);
+            _testOk = res.Ok;
+            _testMsg = res.Ok ? "Mensaje enviado." : $"No se pudo enviar: {res.Error}";
+        }
+        finally { _busy = false; }
+    }
+
+    public void Dispose() => _pollTimer?.Dispose();
 
     private static string StatusLabel(WhatsAppLineStatus s) => s switch
     {
@@ -481,4 +942,3 @@ else
     private static string QrSrc(string qr)
         => qr.StartsWith("data:", StringComparison.OrdinalIgnoreCase) ? qr : $"data:image/png;base64,{qr}";
 }
-
