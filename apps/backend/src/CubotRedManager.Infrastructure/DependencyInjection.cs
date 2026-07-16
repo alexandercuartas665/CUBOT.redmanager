@@ -54,6 +54,10 @@ public static class DependencyInjection
         services.AddScoped<ITenantAlertService, TenantAlertService>();
         services.AddScoped<IBlockedNumberService, BlockedNumberService>();
         services.AddScoped<IAgentRunLogService, AgentRunLogService>();
+        // Webhook Evolution: config + tunel dev. IDevTunnel real (cloudflared) se registra en el
+        // Web host solo si esta instalado; por defecto usamos el NoOp para no romper prod.
+        services.AddSingleton<IDevTunnel, NoOpDevTunnel>();
+        services.AddScoped<IWebhookAdminService, WebhookAdminService>();
         // Proveedores OAuth de redes sociales (Modulo 2.2). TikTok via HttpClient.
         services.AddHttpClient<ISocialOAuthProvider, CubotRedManager.Infrastructure.Social.TikTokOAuthProvider>();
         // Cliente HTTP de datos TikTok (Modulo 2.4 Sync).
