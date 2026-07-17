@@ -14,6 +14,7 @@
 @inject IWhatsAppLineService LinesSvc
 @inject IWhatsAppConnectorService Connector
 @inject IWebHostEnvironment Env
+@inject CubotRedManager.Application.Common.IAgentMediaReader MediaReader
 @inject IJSRuntime JS
 
 <PageTitle>Agentes IA - CUBOT.redmanager</PageTitle>
@@ -882,6 +883,11 @@ else
     private string? _rDetail;
     private string? _rFileUrl;
     private string? _rFileName;
+    // Binario del archivo recien seleccionado en el modal (solo si el operador subio algo esta
+    // sesion). Al guardar viaja al servicio y se persiste como bytea en ai_agent_resources.
+    // Se limpia al abrir el modal para no reenviar bytes de una edicion anterior.
+    private byte[]? _rFileBytes;
+    private string? _rFileMimeType;
     private string? _resError;
 
     // Datos cache (capa 3: el agente captura datos durante la conversacion)
@@ -1231,16 +1237,25 @@ else
         _rDetail = r?.Detail;
         _rFileUrl = r?.FileUrl;
         _rFileName = r?.FileName;
+        // No arrastramos bytes de una edicion anterior: si el operador re-abre para editar,
+        // el archivo ya esta en BD y su URL vive en _rFileUrl. Solo se envian bytes nuevos
+        // si el operador selecciona un archivo en esta sesion.
+        _rFileBytes = null;
+        _rFileMimeType = null;
         _resEmojiOpen = false;
         _resModalOpen = true;
     }
 
     private async Task OnResourceModalFileAsync(InputFileChangeEventArgs e)
     {
-        var saved = await SaveAgentFileAsync(e.File);
-        if (saved is null) { _resError = "No se pudo subir el archivo."; return; }
-        _rFileUrl = saved.Value.Url;
-        _rFileName = saved.Value.Name;
+        var read = await ReadUploadAsync(e.File);
+        if (read is null) { _resError = "No se pudo leer el archivo (tamano invalido o vacio)."; return; }
+        _rFileBytes = read.Value.Bytes;
+        _rFileMimeType = read.Value.MimeType;
+        _rFileName = read.Value.Name;
+        // La URL definitiva la asigna el servicio tras persistir (formato /api/agent-resources/{id}/file).
+        // Antes de guardar mostramos el nombre local para dar feedback al operador.
+        _rFileUrl = null;
     }
 
     private async Task SaveResourceAsync()
@@ -1254,12 +1269,14 @@ else
             var actor = await ActorAsync();
             if (_resEditId is null)
             {
-                var created = await AgentsSvc.AddResourceAsync(new CreateAgentResourceRequest(_editId.Value, _rName, _rType, _rDetail, _rFileUrl, _rFileName), actor);
+                var created = await AgentsSvc.AddResourceAsync(
+                    new CreateAgentResourceRequest(_editId.Value, _rName, _rType, _rDetail, _rFileUrl, _rFileName, _rFileBytes, _rFileMimeType), actor);
                 if (created is not null) { _resources.Add(created); }
             }
             else
             {
-                var updated = await AgentsSvc.UpdateResourceAsync(_resEditId.Value, new UpdateAgentResourceRequest(_rName, _rType, _rDetail, _rFileUrl, _rFileName), actor);
+                var updated = await AgentsSvc.UpdateResourceAsync(_resEditId.Value,
+                    new UpdateAgentResourceRequest(_rName, _rType, _rDetail, _rFileUrl, _rFileName, _rFileBytes, _rFileMimeType), actor);
                 if (updated is not null)
                 {
                     var idx = _resources.FindIndex(x => x.Id == updated.Id);
@@ -1397,13 +1414,14 @@ else
         catch (Exception ex) { _phoneInfo = "No se pudo enviar al telefono: " + ex.Message; }
     }
 
-    private async Task<string?> ReadLocalBase64Async(string? localUrl)
+    // Devuelve el binario del recurso en base64. Delegado en IAgentMediaReader, que sabe leer
+    // tanto desde la BD (URLs /api/agent-resources/{id}/file - formato oficial en produccion)
+    // como desde el filesystem local (URLs /uploads/* - fallback historico en dev).
+    private async Task<string?> ReadLocalBase64Async(string? fileUrl)
     {
-        if (string.IsNullOrWhiteSpace(localUrl)) { return null; }
-        var rel = localUrl.TrimStart('/').Replace('/', System.IO.Path.DirectorySeparatorChar);
-        var path = System.IO.Path.Combine(Env.WebRootPath, rel);
-        if (!System.IO.File.Exists(path)) { return null; }
-        return Convert.ToBase64String(await System.IO.File.ReadAllBytesAsync(path));
+        if (string.IsNullOrWhiteSpace(fileUrl)) { return null; }
+        var content = await MediaReader.TryReadAsync(fileUrl);
+        return content?.Base64;
     }
 
     private void CloseEditor() => _editorOpen = false;
@@ -1533,18 +1551,18 @@ else
         finally { _busy = false; }
     }
 
-    private async Task<(string Url, string Name)?> SaveAgentFileAsync(IBrowserFile file)
+    // Lee un archivo subido desde el navegador y devuelve sus bytes + mime + nombre. NO escribe
+    // a disco: el binario se persiste como bytea en ai_agent_resources.file_content. Motivo:
+    // el filesystem del contenedor (Railway) es efimero y cualquier archivo escrito bajo
+    // wwwroot/uploads se pierde al reciclar el pod.
+    private static async Task<(byte[] Bytes, string MimeType, string Name)?> ReadUploadAsync(IBrowserFile file)
     {
         const long max = 25L * 1024 * 1024;
         if (file.Size <= 0 || file.Size > max) { return null; }
         using var ms = new MemoryStream();
         await file.OpenReadStream(max).CopyToAsync(ms);
-        var ext = System.IO.Path.GetExtension(file.Name);
-        var dir = System.IO.Path.Combine(Env.WebRootPath, "uploads", "agents");
-        System.IO.Directory.CreateDirectory(dir);
-        var name = $"agent-{Guid.NewGuid():N}{ext}";
-        await System.IO.File.WriteAllBytesAsync(System.IO.Path.Combine(dir, name), ms.ToArray());
-        return ($"/uploads/agents/{name}", file.Name);
+        var mime = string.IsNullOrWhiteSpace(file.ContentType) ? "application/octet-stream" : file.ContentType;
+        return (ms.ToArray(), mime, file.Name);
     }
 
     private async Task<Guid> ActorAsync()

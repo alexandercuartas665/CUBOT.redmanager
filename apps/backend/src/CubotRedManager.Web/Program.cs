@@ -261,6 +261,26 @@ app.MapStaticAssets();
 app.MapRazorComponents<App>()
     .AddInteractiveServerRenderMode();
 
+// ===== Servido del binario de recursos del agente =====
+// GET /api/agent-resources/{id}/file - devuelve el bytea de ai_agent_resources.file_content.
+// - Requiere autenticacion (tenant_id claim) para evitar leaks entre agencias. El QueryFilter de
+//   IApplicationDbContext filtra por TenantId, asi que un usuario solo ve recursos de su tenant.
+// - No es una API publica: solo la usa el agente (dispatcher via IAgentMediaReader) y la UI del
+//   propio operador para verificar que el archivo persistio.
+app.MapGet("/api/agent-resources/{id:guid}/file", async (
+    Guid id,
+    IApplicationDbContext db,
+    CancellationToken ct) =>
+{
+    var res = await db.AiAgentResources.AsNoTracking()
+        .Where(r => r.Id == id)
+        .Select(r => new { r.FileContent, r.FileMimeType, r.FileName })
+        .FirstOrDefaultAsync(ct);
+    if (res?.FileContent is not { Length: > 0 }) { return Results.NotFound(); }
+    var mime = string.IsNullOrWhiteSpace(res.FileMimeType) ? "application/octet-stream" : res.FileMimeType;
+    return Results.File(res.FileContent, mime, res.FileName);
+}).RequireAuthorization();
+
 // ===== Login unificado (Web :5036 hospeda el formulario real para SuperAdmin y Tenant) =====
 // Portado verbatim del SuperAdmin de CUBOT.travels. Despues del login exitoso:
 //   - Si el usuario es operador de plataforma (claim platform_role): redirige a SuperAdmin (:5037).

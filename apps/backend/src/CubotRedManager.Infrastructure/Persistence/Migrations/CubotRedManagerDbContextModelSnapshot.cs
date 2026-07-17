@@ -467,6 +467,15 @@ namespace CubotRedManager.Infrastructure.Persistence.Migrations
                         .HasColumnType("text")
                         .HasColumnName("detail");
 
+                    b.Property<byte[]>("FileContent")
+                        .HasColumnType("bytea")
+                        .HasColumnName("file_content");
+
+                    b.Property<string>("FileMimeType")
+                        .HasMaxLength(120)
+                        .HasColumnType("character varying(120)")
+                        .HasColumnName("file_mime_type");
+
                     b.Property<string>("FileName")
                         .HasColumnType("text")
                         .HasColumnName("file_name");

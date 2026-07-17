@@ -31,8 +31,8 @@ public sealed record AiAgentDetailDto(AiAgentDto Agent, IReadOnlyList<AiAgentRes
 public sealed record CreateAiAgentRequest(string Name, string? Role, AiProvider Provider, string? Model, string SystemPrompt, bool EnableDataContainerMcp = false);
 public sealed record UpdateAiAgentRequest(string Name, string? Role, AiProvider Provider, string? Model, string SystemPrompt, bool EnableDataContainerMcp = false);
 
-public sealed record CreateAgentResourceRequest(Guid AgentId, string Name, AgentResourceType ResourceType, string? Detail, string? FileUrl, string? FileName);
-public sealed record UpdateAgentResourceRequest(string Name, AgentResourceType ResourceType, string? Detail, string? FileUrl, string? FileName);
+public sealed record CreateAgentResourceRequest(Guid AgentId, string Name, AgentResourceType ResourceType, string? Detail, string? FileUrl, string? FileName, byte[]? FileContent = null, string? FileMimeType = null);
+public sealed record UpdateAgentResourceRequest(string Name, AgentResourceType ResourceType, string? Detail, string? FileUrl, string? FileName, byte[]? FileContent = null, string? FileMimeType = null, bool ClearFile = false);
 
 public sealed record CreateAgentPromptRequest(Guid AgentId, string Name, string? Rule, string Body);
 public sealed record UpdateAgentPromptRequest(string Name, string? Rule, string Body);

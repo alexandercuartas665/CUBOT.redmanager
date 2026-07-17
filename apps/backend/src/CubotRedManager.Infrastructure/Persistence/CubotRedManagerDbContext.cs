@@ -115,6 +115,8 @@ public class CubotRedManagerDbContext : DbContext, IApplicationDbContext, IDataP
         modelBuilder.Entity<AiProviderConfig>().Property(x => x.Provider).HasConversion<string>();
         modelBuilder.Entity<AiAgent>().Property(x => x.Provider).HasConversion<string>();
         modelBuilder.Entity<AiAgentResource>().Property(x => x.ResourceType).HasConversion<string>();
+        modelBuilder.Entity<AiAgentResource>().Property(x => x.FileContent).HasColumnType("bytea");
+        modelBuilder.Entity<AiAgentResource>().Property(x => x.FileMimeType).HasMaxLength(120);
         modelBuilder.Entity<AiUsageLog>().Property(x => x.Provider).HasConversion<string>();
         modelBuilder.Entity<WhatsAppLine>().Property(x => x.Status).HasConversion<string>();
         modelBuilder.Entity<EvolutionMasterConfig>().Property(x => x.Status).HasConversion<string>();

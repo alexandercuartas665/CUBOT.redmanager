@@ -127,6 +127,7 @@ public sealed class AiAgentService : IAiAgentService
         var agent = await _db.AiAgents.FirstOrDefaultAsync(a => a.Id == request.AgentId, cancellationToken);
         if (agent is null) { return null; }
         var nextOrder = (await _db.AiAgentResources.Where(r => r.AgentId == request.AgentId).Select(r => (int?)r.SortOrder).MaxAsync(cancellationToken) ?? -1) + 1;
+        var hasBinary = request.FileContent is { Length: > 0 };
         var res = new AiAgentResource
         {
             TenantId = tenantId,
@@ -134,12 +135,21 @@ public sealed class AiAgentService : IAiAgentService
             Name = (request.Name ?? "Recurso").Trim(),
             ResourceType = request.ResourceType,
             Detail = request.Detail,
-            FileUrl = request.FileUrl,
             FileName = request.FileName,
+            FileContent = hasBinary ? request.FileContent : null,
+            FileMimeType = hasBinary ? request.FileMimeType : null,
+            // Si vienen bytes: la URL sera /api/agent-resources/{id}/file (rellenada al conocer el Id).
+            // Si viene una URL externa (import antiguo): se conserva. Si no hay ninguno: null.
+            FileUrl = hasBinary ? null : request.FileUrl,
             SortOrder = nextOrder
         };
         _db.AiAgentResources.Add(res);
         await _db.SaveChangesAsync(cancellationToken);
+        if (hasBinary)
+        {
+            res.FileUrl = $"/api/agent-resources/{res.Id}/file";
+            await _db.SaveChangesAsync(cancellationToken);
+        }
         return MapResource(res);
     }
 
@@ -150,8 +160,24 @@ public sealed class AiAgentService : IAiAgentService
         res.Name = (request.Name ?? res.Name).Trim();
         res.ResourceType = request.ResourceType;
         res.Detail = request.Detail;
-        res.FileUrl = request.FileUrl;
         res.FileName = request.FileName;
+        if (request.ClearFile)
+        {
+            res.FileContent = null;
+            res.FileMimeType = null;
+            res.FileUrl = null;
+        }
+        else if (request.FileContent is { Length: > 0 })
+        {
+            res.FileContent = request.FileContent;
+            res.FileMimeType = request.FileMimeType;
+            res.FileUrl = $"/api/agent-resources/{res.Id}/file";
+        }
+        else if (!string.IsNullOrWhiteSpace(request.FileUrl))
+        {
+            // Mantener o cambiar la URL externa sin tocar el binario.
+            res.FileUrl = request.FileUrl;
+        }
         await _db.SaveChangesAsync(cancellationToken);
         return MapResource(res);
     }
