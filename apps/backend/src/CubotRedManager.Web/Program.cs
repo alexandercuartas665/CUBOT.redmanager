@@ -528,6 +528,24 @@ if (app.Environment.IsDevelopment())
     }).AllowAnonymous();
 }
 
+// ===== Webhook Evolution (crudo) =====
+// POST /webhooks/evolution: recibe TODOS los eventos de Evolution (mensajes, reacciones, etc).
+// - Valida el token global contra EvolutionMasterConfig.WebhookToken (o env
+//   CUBOT_EVOLUTION_WEBHOOK_TOKEN como fallback). Header: x-webhook-token. Fallback query: ?token=.
+// - Parsea con EvolutionWebhookParser: solo procesa messages.upsert que no sean grupo/reaccion.
+// - Comando de toma de control "Manejo_asesor" (fromMe) -> agrega a lista negra y sale.
+// - Los demas mensajes se persisten via IChatIngestService.IngestTrustedAsync (dedupe por
+//   ExternalMessageId, crea/actualiza Conversation, guarda Message inbound).
+// - .AllowAnonymous().DisableAntiforgery() porque no lleva antiforgery token.
+// TODO Fase 2: descargar media faltante via IWhatsAppConnectorService.FetchInboundMediaAsync
+// y guardar en /uploads/chat.
+// TODO Fase 3: encolar dispatch al agente tras persistir.
+// IMPORTANTE: este MapPost DEBE ir despues del MapPost de YCloud. Bug conocido de ASP.NET Core 10
+// con Blazor Server: el primer MapPost anonimo con DisableAntiforgery tras UseAntiforgery() no
+// registra correctamente la metadata (el middleware ve el endpoint sin DisableAntiforgery y
+// devuelve 400). El segundo y siguientes MapPost si toman la metadata. Solucion: dejar YCloud
+// primero (mismo bug pero descubierto antes) y Evolution justo despues. NO reordenar.
+
 // ===== Webhooks: YCloud (WhatsApp BSP oficial) =====
 // POST /webhooks/ycloud/{tenantId}: recibe mensajes entrantes. Idempotencia por wamid.
 // Resuelve la linea por YCloudPhoneNumberId = payload.to. Guarda como InboxMessage.
@@ -585,6 +603,62 @@ app.MapPost("/webhooks/ycloud/{tenantId:guid}", async (
     }
     await db.SaveChangesAsync();
     return Results.Ok();
+}).AllowAnonymous().DisableAntiforgery();
+
+// ===== Webhook Evolution (crudo) =====
+// POST /webhooks/evolution/{tenantId}: recibe TODOS los eventos de Evolution (mensajes,
+// reacciones, etc). Valida el token global contra EvolutionMasterConfig.WebhookToken (header
+// x-webhook-token o query ?token=). Parsea con EvolutionWebhookParser. Comando "Manejo_asesor"
+// (fromMe) -> agrega a lista negra. Los demas mensajes van a IChatIngestService que persiste
+// Conversation + Message.
+// IMPORTANTE: registrado DESPUES de YCloud a proposito -- ver comentario arriba.
+app.MapPost("/webhooks/evolution/{tenantId:guid}", async (
+    Guid tenantId,
+    HttpContext http,
+    IServiceScopeFactory scopeFactory,
+    ILoggerFactory loggerFactory) =>
+{
+    var log = loggerFactory.CreateLogger("EvolutionWebhook");
+    log.LogInformation("Evolution webhook: request recibido para tenant {Tenant}", tenantId);
+    var ct = http.RequestAborted;
+
+    using var scope = scopeFactory.CreateScope();
+    var db = scope.ServiceProvider.GetRequiredService<IApplicationDbContext>();
+
+    var master = await db.EvolutionMasterConfigs.FirstOrDefaultAsync(ct);
+    var expected = master?.WebhookToken
+        ?? Environment.GetEnvironmentVariable("CUBOT_EVOLUTION_WEBHOOK_TOKEN");
+    if (string.IsNullOrEmpty(expected)) { return Results.StatusCode(503); }
+
+    var provided = http.Request.Headers["x-webhook-token"].ToString();
+    if (string.IsNullOrEmpty(provided)) { provided = http.Request.Query["token"].ToString(); }
+    if (!string.Equals(provided, expected, StringComparison.Ordinal)) { return Results.Unauthorized(); }
+
+    System.Text.Json.JsonDocument doc;
+    try { doc = await System.Text.Json.JsonDocument.ParseAsync(http.Request.Body, cancellationToken: ct); }
+    catch (Exception ex) { log.LogWarning(ex, "Evolution webhook: JSON invalido"); return Results.Ok(); }
+
+    CubotRedManager.Application.Tenancy.ParsedInbound? parsed;
+    try { parsed = CubotRedManager.Application.Tenancy.EvolutionWebhookParser.Parse(doc.RootElement); }
+    finally { doc.Dispose(); }
+    if (parsed is null) { return Results.Ok(new { status = "ignored" }); }
+
+    // Tenant final: el que vino en la URL. El ambient override apunta al tenant correcto para
+    // filtros globales y auditor.
+    scope.ServiceProvider.GetRequiredService<IAmbientTenantOverride>().Set(tenantId, null);
+
+    if (parsed.IsTakeControlCommand)
+    {
+        await CubotRedManager.Application.Tenancy.AgentControlCommands.BlockNumberForLineAsync(
+            db, parsed.Payload.WhatsAppLineId ?? Guid.Empty, parsed.Payload.ContactPhone, ct);
+        return Results.Ok(new { status = "blocked" });
+    }
+
+    var ingest = scope.ServiceProvider.GetRequiredService<CubotRedManager.Application.Tenancy.IChatIngestService>();
+    var result = await ingest.IngestTrustedAsync(tenantId, parsed.Payload, ct);
+    return result == CubotRedManager.Application.Tenancy.ChatIngestResult.Duplicate
+        ? Results.Ok(new { status = "duplicate" })
+        : Results.Accepted();
 }).AllowAnonymous().DisableAntiforgery();
 
 // ===== Callback OAuth TikTok =====

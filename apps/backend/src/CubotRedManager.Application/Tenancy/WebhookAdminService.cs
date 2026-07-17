@@ -101,7 +101,9 @@ public sealed class WebhookAdminService : IWebhookAdminService
         var effectiveBase = string.Equals(c.WebhookMode, "Production", StringComparison.OrdinalIgnoreCase)
             ? c.WebhookPublicUrl
             : c.WebhookActiveUrl;
-        var effective = string.IsNullOrWhiteSpace(effectiveBase) ? null : $"{effectiveBase!.TrimEnd('/')}/webhooks/evolution";
+        // La URL real por linea es /webhooks/evolution/{tenantId}. Aqui mostramos la base sin
+        // el tenantId (informativo para la UI); el registrador la completa por linea.
+        var effective = string.IsNullOrWhiteSpace(effectiveBase) ? null : $"{effectiveBase!.TrimEnd('/')}/webhooks/evolution/{{tenantId}}";
         return new WebhookConfigDto(c.WebhookMode, c.WebhookPublicUrl, c.WebhookToken, c.WebhookActiveUrl, _tunnel.IsRunning, effective);
     }
 

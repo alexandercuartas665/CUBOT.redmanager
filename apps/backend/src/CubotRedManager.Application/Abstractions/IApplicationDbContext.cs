@@ -79,5 +79,9 @@ public interface IApplicationDbContext
     // Lista negra GLOBAL del tenant: numeros a los que ningun agente de IA responde.
     DbSet<TenantBlockedNumber> TenantBlockedNumbers { get; }
 
+    // Conversaciones de WhatsApp + mensajes (una fila por mensaje entrante/saliente).
+    DbSet<Conversation> Conversations { get; }
+    DbSet<Message> Messages { get; }
+
     Task<int> SaveChangesAsync(CancellationToken cancellationToken = default);
 }

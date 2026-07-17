@@ -94,6 +94,8 @@ public class CubotRedManagerDbContext : DbContext, IApplicationDbContext, IDataP
     public DbSet<TenantEvolutionConfig> TenantEvolutionConfigs => Set<TenantEvolutionConfig>();
     public DbSet<TenantAlertConfig> TenantAlertConfigs => Set<TenantAlertConfig>();
     public DbSet<TenantBlockedNumber> TenantBlockedNumbers => Set<TenantBlockedNumber>();
+    public DbSet<Conversation> Conversations => Set<Conversation>();
+    public DbSet<Message> Messages => Set<Message>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -340,6 +342,31 @@ public class CubotRedManagerDbContext : DbContext, IApplicationDbContext, IDataP
             b.Property(x => x.Phone).HasMaxLength(32).IsRequired();
             b.Property(x => x.Note).HasMaxLength(500);
             b.HasIndex(x => new { x.TenantId, x.Phone }).IsUnique();
+        });
+
+        // Conversacion de WhatsApp con un contacto. Una por (TenantId, ContactPhone).
+        modelBuilder.Entity<Conversation>(b =>
+        {
+            b.Property(x => x.ContactPhone).HasMaxLength(40).IsRequired();
+            b.Property(x => x.ContactName).HasMaxLength(200);
+            b.HasIndex(x => new { x.TenantId, x.ContactPhone }).IsUnique();
+        });
+
+        // Mensaje de una conversacion. ExternalId da idempotencia a la ingesta entrante.
+        modelBuilder.Entity<Message>(b =>
+        {
+            b.Property(x => x.Body).HasMaxLength(4000);
+            b.Property(x => x.MessageType).HasMaxLength(40).IsRequired();
+            b.Property(x => x.ExternalId).HasMaxLength(200);
+            b.Property(x => x.MediaUrl).HasMaxLength(500);
+            b.Property(x => x.MediaMimeType).HasMaxLength(120);
+            b.Property(x => x.SentByName).HasMaxLength(200);
+            b.Property(x => x.Direction).HasConversion<string>().HasMaxLength(20).IsRequired();
+            b.Property(x => x.MediaType).HasConversion<string>().HasMaxLength(20).IsRequired();
+            b.Property(x => x.Reaction).HasMaxLength(20);
+            b.HasOne(x => x.Conversation).WithMany().HasForeignKey(x => x.ConversationId).OnDelete(DeleteBehavior.Cascade);
+            b.HasIndex(x => new { x.TenantId, x.ConversationId });
+            b.HasIndex(x => new { x.TenantId, x.ExternalId }).IsUnique().HasFilter("external_id IS NOT NULL");
         });
 
         // WhatsApp Templates (HSM). Nombre + idioma unico por tenant (regla Meta).
