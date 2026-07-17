@@ -12,7 +12,11 @@ public sealed record AiAgentDto(
     bool IsActive,
     bool EnableDataContainerMcp,
     int SortOrder,
-    int ResourceCount);
+    int ResourceCount,
+    bool ReactionsEnabled = false,
+    int ReactionRatioN = 3,
+    int ReactionRatioM = 4,
+    string? ReactionEmojis = null);
 
 public sealed record AiAgentResourceDto(
     Guid Id,
@@ -28,8 +32,8 @@ public sealed record AiAgentPromptDto(Guid Id, Guid AgentId, string Name, string
 
 public sealed record AiAgentDetailDto(AiAgentDto Agent, IReadOnlyList<AiAgentResourceDto> Resources, IReadOnlyList<AiAgentPromptDto> Prompts);
 
-public sealed record CreateAiAgentRequest(string Name, string? Role, AiProvider Provider, string? Model, string SystemPrompt, bool EnableDataContainerMcp = false);
-public sealed record UpdateAiAgentRequest(string Name, string? Role, AiProvider Provider, string? Model, string SystemPrompt, bool EnableDataContainerMcp = false);
+public sealed record CreateAiAgentRequest(string Name, string? Role, AiProvider Provider, string? Model, string SystemPrompt, bool EnableDataContainerMcp = false, bool ReactionsEnabled = false, int ReactionRatioN = 3, int ReactionRatioM = 4, string? ReactionEmojis = null);
+public sealed record UpdateAiAgentRequest(string Name, string? Role, AiProvider Provider, string? Model, string SystemPrompt, bool EnableDataContainerMcp = false, bool ReactionsEnabled = false, int ReactionRatioN = 3, int ReactionRatioM = 4, string? ReactionEmojis = null);
 
 public sealed record CreateAgentResourceRequest(Guid AgentId, string Name, AgentResourceType ResourceType, string? Detail, string? FileUrl, string? FileName, byte[]? FileContent = null, string? FileMimeType = null);
 public sealed record UpdateAgentResourceRequest(string Name, AgentResourceType ResourceType, string? Detail, string? FileUrl, string? FileName, byte[]? FileContent = null, string? FileMimeType = null, bool ClearFile = false);

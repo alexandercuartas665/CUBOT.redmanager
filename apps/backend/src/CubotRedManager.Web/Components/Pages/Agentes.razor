@@ -386,6 +386,63 @@ else
                         </div>
                     }
                 </div>
+
+                @* ===== Reacciones automaticas (emoji) - acordeon ===== *@
+                <hr style="border-color:var(--border);margin:14px 0;" />
+                <div class="ag-accordion">
+                    <div class="ag-accordion-head" role="button" tabindex="0" @onclick="() => _reactionsOpen = !_reactionsOpen">
+                        <span class="ag-accordion-chev @(_reactionsOpen ? "open" : "")">&#9656;</span>
+                        <span class="pl-stagegroup-title" style="margin:0;">Reacciones</span>
+                        <span class="ag-accordion-count">@ReactionEmojiList().Count</span>
+                        <span class="ag-accordion-spacer"></span>
+                        <span class="small @(_fReactionsEnabled ? "" : "text-muted")" style="@(_fReactionsEnabled ? "color:var(--success);" : "")">@(_fReactionsEnabled ? "Activas" : "Inactivas")</span>
+                    </div>
+                    @if (_reactionsOpen)
+                    {
+                        <div class="ag-accordion-body">
+                            <div class="text-muted" style="font-size:12px;margin-bottom:10px;">
+                                El agente pone un emoji (pulgar, corazon, etc.) a algunos mensajes del cliente. No pasa por la IA: <strong>no consume tokens</strong>. Un mensaje que ya tiene reaccion no recibe otra.
+                            </div>
+                            <div class="field" style="display:flex;align-items:center;gap:10px;margin-bottom:12px;">
+                                <label class="ag-switch" title="@(_fReactionsEnabled ? "Desactivar reacciones" : "Activar reacciones")">
+                                    <input type="checkbox" checked="@_fReactionsEnabled" @onchange="@(e => _fReactionsEnabled = (bool)e.Value!)" disabled="@_busy" />
+                                    <span class="ag-slider"></span>
+                                </label>
+                                <div style="font-weight:500;">@(_fReactionsEnabled ? "Reacciones activadas" : "Reacciones desactivadas")</div>
+                            </div>
+                            <div class="field" style="margin-bottom:12px;">
+                                <label class="form-label">Frecuencia</label>
+                                <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+                                    <span class="small text-muted">Reaccionar a</span>
+                                    <input type="number" class="form-control" style="width:72px;" min="0" max="@_fReactionM" @bind="_fReactionN" disabled="@_busy" />
+                                    <span class="small text-muted">de cada</span>
+                                    <input type="number" class="form-control" style="width:72px;" min="1" max="20" @bind="_fReactionM" disabled="@_busy" />
+                                    <span class="small text-muted">mensajes del cliente</span>
+                                </div>
+                                <div class="text-muted" style="font-size:11.5px;margin-top:6px;">Ej. 3 de cada 4 = el agente reacciona aproximadamente al 75% de los mensajes, al azar.</div>
+                            </div>
+                            <div class="field">
+                                <label class="form-label">Stack de emojis (separados por coma)</label>
+                                <input class="form-control" @bind="_fReactionEmojis" @bind:event="oninput" placeholder="Pega los emojis separados por coma (en Windows: tecla Windows + punto)" disabled="@_busy" />
+                                @if (ReactionEmojiList().Count > 0)
+                                {
+                                    <div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:8px;">
+                                        @foreach (var em in ReactionEmojiList())
+                                        {
+                                            <span class="ag-rtype" style="font-size:18px;padding:2px 8px;">@em</span>
+                                        }
+                                    </div>
+                                    <div class="text-muted" style="font-size:11.5px;margin-top:6px;">Se elige uno al azar de estos @ReactionEmojiList().Count emoji(s) en cada reaccion.</div>
+                                }
+                                else
+                                {
+                                    <div class="text-muted" style="font-size:11.5px;margin-top:6px;">Agrega al menos un emoji para que las reacciones funcionen.</div>
+                                }
+                            </div>
+                            <div class="text-muted" style="font-size:11.5px;margin-top:10px;">Esta configuracion se guarda con el boton <strong>Guardar cambios</strong> de arriba.</div>
+                        </div>
+                    }
+                </div>
                </div>@* /ag-editor-left *@
 
                @if (_editId is not null)
@@ -904,6 +961,19 @@ else
     private bool _cacheOpen;
     private bool _resourcesOpen;
     private bool _bindingsOpen;
+    private bool _reactionsOpen;
+    private bool _fReactionsEnabled;
+    private int _fReactionN = 3;
+    private int _fReactionM = 4;
+    private string? _fReactionEmojis;
+
+    private List<string> ReactionEmojiList()
+    {
+        if (string.IsNullOrWhiteSpace(_fReactionEmojis)) { return new(); }
+        return _fReactionEmojis
+            .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .ToList();
+    }
 
     // Estado de bindings (lineas WhatsApp atendidas por el agente que se esta editando).
     private List<AgentLineBindingRowDto> _bindings = new();
@@ -1001,6 +1071,11 @@ else
         _fPrompt = "";
         _fActive = false;
         _fEnableMcp = false;
+        _fReactionsEnabled = false;
+        _fReactionN = 3;
+        _fReactionM = 4;
+        _fReactionEmojis = null;
+        _reactionsOpen = false;
         _resources = new();
         _cacheFields = new();
         _cacheValues = new();
@@ -1036,6 +1111,10 @@ else
         _fPrompt = detail.Agent.SystemPrompt;
         _fActive = detail.Agent.IsActive;
         _fEnableMcp = detail.Agent.EnableDataContainerMcp;
+        _fReactionsEnabled = detail.Agent.ReactionsEnabled;
+        _fReactionN = detail.Agent.ReactionRatioN;
+        _fReactionM = detail.Agent.ReactionRatioM <= 0 ? 4 : detail.Agent.ReactionRatioM;
+        _fReactionEmojis = detail.Agent.ReactionEmojis;
         _resources = detail.Resources.ToList();
         _prompts = detail.Prompts.ToList();
         await ReloadCacheAsync(id);
@@ -1043,6 +1122,7 @@ else
         _cacheOpen = false;
         _resourcesOpen = false;
         _bindingsOpen = false;
+        _reactionsOpen = false;
         _perceivedModalOpen = false;
         ResetTest();
         _editorOpen = true;
@@ -1437,14 +1517,14 @@ else
             var model = EffectiveModel(_fProvider);
             if (_editId is null)
             {
-                var created = await AgentsSvc.CreateAsync(new CreateAiAgentRequest(_fName, _fRole, _fProvider, model, _fPrompt, _fEnableMcp), actor);
+                var created = await AgentsSvc.CreateAsync(new CreateAiAgentRequest(_fName, _fRole, _fProvider, model, _fPrompt, _fEnableMcp, _fReactionsEnabled, _fReactionN, _fReactionM, _fReactionEmojis), actor);
                 if (created is null) { _editorError = "No se pudo crear el agente."; return; }
                 _editId = created.Id;
                 await ReloadCacheAsync(_editId.Value);
             }
             else
             {
-                await AgentsSvc.UpdateAsync(_editId.Value, new UpdateAiAgentRequest(_fName, _fRole, _fProvider, model, _fPrompt, _fEnableMcp), actor);
+                await AgentsSvc.UpdateAsync(_editId.Value, new UpdateAiAgentRequest(_fName, _fRole, _fProvider, model, _fPrompt, _fEnableMcp, _fReactionsEnabled, _fReactionN, _fReactionM, _fReactionEmojis), actor);
             }
             await ReloadAsync();
         }

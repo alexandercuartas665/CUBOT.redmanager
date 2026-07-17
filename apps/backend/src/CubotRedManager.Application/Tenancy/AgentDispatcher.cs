@@ -71,13 +71,12 @@ public sealed class AgentDispatcher : IAgentDispatcher
             return;
         }
 
-        // Agente activo. En redmanager los campos de reacciones (ReactionsEnabled/RatioN/RatioM/
-        // Emojis) aun no existen en AiAgent, asi que las reacciones quedan desactivadas hasta que
-        // se porte esa columna desde travels.
+        // Agente activo + config de reacciones. Reacciones automaticas por emoji sin pasar por
+        // el LLM (0 tokens). El path se ejecuta antes de la inferencia para acknowledge rapido.
         var agentCfg = await _db.AiAgents
             .IgnoreQueryFilters()
             .Where(a => a.Id == binding.AgentId)
-            .Select(a => new { a.IsActive })
+            .Select(a => new { a.IsActive, a.ReactionsEnabled, a.ReactionRatioN, a.ReactionRatioM, a.ReactionEmojis })
             .FirstOrDefaultAsync(cancellationToken);
         if (agentCfg is null || !agentCfg.IsActive)
         {
@@ -118,7 +117,14 @@ public sealed class AgentDispatcher : IAgentDispatcher
         await LogRunAsync(tenantId, conversationId, binding.AgentId, AiAgentRunLogKind.Inbound,
             "Mensaje recibido", inboundBody, null, cancellationToken);
 
-        // 2b) Reaccion emoji: desactivada en redmanager hasta portar los campos AiAgent.Reactions*.
+        // 2b) Reaccion emoji (sin LLM, 0 tokens). Se hace incluso si el binding no autoConfirma
+        // porque es un acknowledge visual que ayuda al cliente a saber que su mensaje llego.
+        if (agentCfg.ReactionsEnabled && whatsAppLineId is not null)
+        {
+            await MaybeReactAsync(tenantId, conversationId, whatsAppLineId.Value, conv.ContactPhone,
+                agentCfg.ReactionRatioN, agentCfg.ReactionRatioM, agentCfg.ReactionEmojis,
+                binding.AgentId, cancellationToken);
+        }
 
         // 3) Historial (con filtro de reset de contexto).
         var resetAt = conv.AgentContextResetAt;

@@ -32,5 +32,22 @@ public class AiAgent : TenantEntity
     /// </summary>
     public bool EnableDataContainerMcp { get; set; }
 
+    /// <summary>
+    /// Reacciones automaticas (emoji) a los mensajes del cliente, SIN pasar por el LLM (cero
+    /// tokens). Si esta activo, el dispatcher reacciona a ~N de cada M mensajes entrantes con
+    /// un emoji elegido al azar de ReactionEmojis. Un mensaje que ya tiene reaccion no recibe
+    /// otra. Portado desde CUBOT.travels.
+    /// </summary>
+    public bool ReactionsEnabled { get; set; }
+
+    /// <summary>Numerador de la frecuencia (ej. 3 de cada 4 -> N=3). Se aplica como probabilidad.</summary>
+    public int ReactionRatioN { get; set; } = 3;
+
+    /// <summary>Denominador de la frecuencia (ej. 3 de cada 4 -> M=4).</summary>
+    public int ReactionRatioM { get; set; } = 4;
+
+    /// <summary>Emojis para reaccionar al azar, separados por coma. Configurable por UI.</summary>
+    public string? ReactionEmojis { get; set; }
+
     public int SortOrder { get; set; }
 }
