@@ -36,15 +36,19 @@ public sealed class AiAgentService : IAiAgentService
     {
         var agent = await _db.AiAgents.AsNoTracking().FirstOrDefaultAsync(a => a.Id == id, cancellationToken);
         if (agent is null) { return null; }
+        // Proyeccion EXPLICITA (no MapResource): asi EF genera SELECT id,name,resource_type,...
+        // sin traer file_content (bytea potencialmente grande). Y hace la query robusta ante
+        // instancias intermedias donde la migracion de file_content aun no se aplico.
         var resources = await _db.AiAgentResources.AsNoTracking()
             .Where(r => r.AgentId == id)
             .OrderBy(r => r.SortOrder)
-            .Select(r => MapResource(r))
+            .Select(r => new AiAgentResourceDto(
+                r.Id, r.AgentId, r.Name, r.ResourceType, r.Detail, r.FileUrl, r.FileName, r.SortOrder))
             .ToListAsync(cancellationToken);
         var prompts = await _db.AiAgentPrompts.AsNoTracking()
             .Where(p => p.AgentId == id)
             .OrderBy(p => p.SortOrder)
-            .Select(p => MapPrompt(p))
+            .Select(p => new AiAgentPromptDto(p.Id, p.AgentId, p.Name, p.Rule, p.Body, p.SortOrder))
             .ToListAsync(cancellationToken);
         return new AiAgentDetailDto(Map(agent, resources.Count), resources, prompts);
     }
