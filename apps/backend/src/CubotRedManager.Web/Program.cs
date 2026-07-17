@@ -54,6 +54,15 @@ var arOpts = builder.Configuration.GetSection("AutoReply").Get<CubotRedManager.W
 builder.Services.AddSingleton(arOpts);
 builder.Services.AddHostedService<CubotRedManager.Web.BackgroundJobs.AutoReplyWorker>();
 
+// AgentDispatchQueue: procesador en background del agente IA. Se registra como singleton triple
+// (patron travels) para que el mismo objeto sea IAgentDispatchQueue (donde el ChatIngestService
+// encola) y BackgroundService (donde .NET lo levanta como hosted service).
+builder.Services.AddSingleton<CubotRedManager.Web.BackgroundJobs.AgentDispatchQueue>();
+builder.Services.AddSingleton<CubotRedManager.Application.Tenancy.IAgentDispatchQueue>(sp =>
+    sp.GetRequiredService<CubotRedManager.Web.BackgroundJobs.AgentDispatchQueue>());
+builder.Services.AddHostedService(sp =>
+    sp.GetRequiredService<CubotRedManager.Web.BackgroundJobs.AgentDispatchQueue>());
+
 // Estado de autenticacion en cascada para los componentes (AuthorizeView, AuthorizeRouteView).
 builder.Services.AddCascadingAuthenticationState();
 builder.Services.AddHttpContextAccessor();

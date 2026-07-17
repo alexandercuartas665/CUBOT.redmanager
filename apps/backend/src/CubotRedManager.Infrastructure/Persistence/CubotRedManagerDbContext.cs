@@ -86,6 +86,8 @@ public class CubotRedManagerDbContext : DbContext, IApplicationDbContext, IDataP
     public DbSet<AiAgentCacheValue> AiAgentCacheValues => Set<AiAgentCacheValue>();
     public DbSet<AiAgentLineBinding> AiAgentLineBindings => Set<AiAgentLineBinding>();
     public DbSet<AiAgentRunLog> AiAgentRunLogs => Set<AiAgentRunLog>();
+    public DbSet<AiAgentCacheLeadMapping> AiAgentCacheLeadMappings => Set<AiAgentCacheLeadMapping>();
+    public DbSet<AiAgentNotificationTarget> AiAgentNotificationTargets => Set<AiAgentNotificationTarget>();
     public DbSet<AiUsageLog> AiUsageLogs => Set<AiUsageLog>();
 
     // WhatsApp / Evolution
@@ -320,6 +322,27 @@ public class CubotRedManagerDbContext : DbContext, IApplicationDbContext, IDataP
             b.Property(x => x.Response).HasColumnType("text");
             b.HasIndex(x => new { x.TenantId, x.ConversationId, x.OccurredAt });
             b.HasIndex(x => new { x.TenantId, x.AgentId, x.OccurredAt });
+        });
+
+        // AiAgentCacheLeadMapping: unique por (agente, cache_field_key).
+        modelBuilder.Entity<AiAgentCacheLeadMapping>(b =>
+        {
+            b.Property(x => x.CacheFieldKey).HasMaxLength(80).IsRequired();
+            b.Property(x => x.TargetSelector).HasMaxLength(120).IsRequired();
+            b.HasOne(x => x.Agent).WithMany().HasForeignKey(x => x.AgentId).OnDelete(DeleteBehavior.Cascade);
+            b.HasIndex(x => new { x.AgentId, x.CacheFieldKey }).IsUnique();
+            b.HasIndex(x => new { x.TenantId, x.AgentId });
+        });
+
+        // AiAgentNotificationTarget: destinos del [[pedido: ...]].
+        modelBuilder.Entity<AiAgentNotificationTarget>(b =>
+        {
+            b.Property(x => x.TargetKind).HasConversion<string>().HasMaxLength(20).IsRequired();
+            b.Property(x => x.TargetValue).HasMaxLength(120).IsRequired();
+            b.Property(x => x.Label).HasMaxLength(100);
+            b.HasOne(x => x.Agent).WithMany().HasForeignKey(x => x.AgentId).OnDelete(DeleteBehavior.Cascade);
+            b.HasOne(x => x.FromWhatsAppLine).WithMany().HasForeignKey(x => x.FromWhatsAppLineId).OnDelete(DeleteBehavior.Restrict);
+            b.HasIndex(x => new { x.TenantId, x.AgentId, x.SortOrder });
         });
 
         // WhatsApp: una instancia por agencia.
