@@ -226,7 +226,18 @@ if (!app.Environment.IsDevelopment())
     app.UseExceptionHandler("/Error", createScopeForErrors: true);
     app.UseHsts();
 }
-app.UseStatusCodePagesWithReExecute("/not-found", createScopeForStatusCodePages: true);
+// StatusCodePages: solo se aplica a rutas de UI. Se salta /webhooks/*, /oauth/*, /auth/*, /api/*,
+// /hubs/* porque son endpoints programaticos que responden JSON o redirects; si /webhooks/evolution
+// devuelve 400/401/503, no queremos re-ejecutar hacia la pagina Blazor /not-found (que ademas
+// tiene antiforgery metadata y trigea un error interno). Sin este bypass, el POST a /webhooks/*
+// se reescribia a /not-found y AntiforgeryMiddleware lo rechazaba con 400 confuso.
+app.UseWhen(
+    ctx => !ctx.Request.Path.StartsWithSegments("/webhooks")
+        && !ctx.Request.Path.StartsWithSegments("/oauth")
+        && !ctx.Request.Path.StartsWithSegments("/auth")
+        && !ctx.Request.Path.StartsWithSegments("/api")
+        && !ctx.Request.Path.StartsWithSegments("/hubs"),
+    branch => branch.UseStatusCodePagesWithReExecute("/not-found", createScopeForStatusCodePages: true));
 app.UseHttpsRedirection();
 
 // Sirve los archivos subidos por usuarios (wwwroot/uploads/...). La URL incluye un Guid v7 que
@@ -614,28 +625,27 @@ app.MapPost("/webhooks/ycloud/{tenantId:guid}", async (
 // IMPORTANTE: registrado DESPUES de YCloud a proposito -- ver comentario arriba.
 app.MapPost("/webhooks/evolution/{tenantId:guid}", async (
     Guid tenantId,
-    HttpContext http,
-    IServiceScopeFactory scopeFactory,
-    ILoggerFactory loggerFactory) =>
+    HttpRequest request,
+    IApplicationDbContext db,
+    CubotRedManager.Application.Tenancy.IChatIngestService ingest,
+    IAmbientTenantOverride tenantOverride,
+    ILoggerFactory loggerFactory,
+    CancellationToken ct) =>
 {
     var log = loggerFactory.CreateLogger("EvolutionWebhook");
     log.LogInformation("Evolution webhook: request recibido para tenant {Tenant}", tenantId);
-    var ct = http.RequestAborted;
-
-    using var scope = scopeFactory.CreateScope();
-    var db = scope.ServiceProvider.GetRequiredService<IApplicationDbContext>();
 
     var master = await db.EvolutionMasterConfigs.FirstOrDefaultAsync(ct);
     var expected = master?.WebhookToken
         ?? Environment.GetEnvironmentVariable("CUBOT_EVOLUTION_WEBHOOK_TOKEN");
     if (string.IsNullOrEmpty(expected)) { return Results.StatusCode(503); }
 
-    var provided = http.Request.Headers["x-webhook-token"].ToString();
-    if (string.IsNullOrEmpty(provided)) { provided = http.Request.Query["token"].ToString(); }
+    var provided = request.Headers["x-webhook-token"].ToString();
+    if (string.IsNullOrEmpty(provided)) { provided = request.Query["token"].ToString(); }
     if (!string.Equals(provided, expected, StringComparison.Ordinal)) { return Results.Unauthorized(); }
 
     System.Text.Json.JsonDocument doc;
-    try { doc = await System.Text.Json.JsonDocument.ParseAsync(http.Request.Body, cancellationToken: ct); }
+    try { doc = await System.Text.Json.JsonDocument.ParseAsync(request.Body, cancellationToken: ct); }
     catch (Exception ex) { log.LogWarning(ex, "Evolution webhook: JSON invalido"); return Results.Ok(); }
 
     CubotRedManager.Application.Tenancy.ParsedInbound? parsed;
@@ -643,9 +653,8 @@ app.MapPost("/webhooks/evolution/{tenantId:guid}", async (
     finally { doc.Dispose(); }
     if (parsed is null) { return Results.Ok(new { status = "ignored" }); }
 
-    // Tenant final: el que vino en la URL. El ambient override apunta al tenant correcto para
-    // filtros globales y auditor.
-    scope.ServiceProvider.GetRequiredService<IAmbientTenantOverride>().Set(tenantId, null);
+    // Ambient tenant para que los filtros globales y auditor apunten al tenant correcto.
+    tenantOverride.Set(tenantId, null);
 
     if (parsed.IsTakeControlCommand)
     {
@@ -654,7 +663,6 @@ app.MapPost("/webhooks/evolution/{tenantId:guid}", async (
         return Results.Ok(new { status = "blocked" });
     }
 
-    var ingest = scope.ServiceProvider.GetRequiredService<CubotRedManager.Application.Tenancy.IChatIngestService>();
     var result = await ingest.IngestTrustedAsync(tenantId, parsed.Payload, ct);
     return result == CubotRedManager.Application.Tenancy.ChatIngestResult.Duplicate
         ? Results.Ok(new { status = "duplicate" })
