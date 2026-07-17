@@ -65,6 +65,8 @@ public interface IApplicationDbContext
     DbSet<AiAgentCacheValue> AiAgentCacheValues { get; }
     DbSet<AiAgentLineBinding> AiAgentLineBindings { get; }
     DbSet<AiAgentRunLog> AiAgentRunLogs { get; }
+    DbSet<AiAgentCacheLeadMapping> AiAgentCacheLeadMappings { get; }
+    DbSet<AiAgentNotificationTarget> AiAgentNotificationTargets { get; }
     DbSet<AiUsageLog> AiUsageLogs { get; }
 
     // WhatsApp / Evolution

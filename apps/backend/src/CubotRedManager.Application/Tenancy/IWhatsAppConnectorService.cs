@@ -39,6 +39,13 @@ public interface IWhatsAppConnectorService
     /// <summary>Lista los grupos de WhatsApp visibles desde la instancia Evolution asociada a la
     /// linea (para poblar dropdowns de destinatario). Devuelve lista vacia + error si aplica.</summary>
     Task<LineGroupsResult> FetchGroupsAsync(Guid lineId, CancellationToken cancellationToken = default);
+
+    /// <summary>Envia una reaccion (emoji) al mensaje entrante identificado por externalId.</summary>
+    Task<LineSendResult> SendReactionAsync(Guid lineId, string phone, string externalMessageId, string emoji, CancellationToken cancellationToken = default);
+
+    /// <summary>Descarga el contenido binario (base64) de un mensaje entrante con adjunto, cuando
+    /// Evolution no lo incluyo en el webhook. Devuelve Ok=false si no se pudo obtener.</summary>
+    Task<InboundMediaResult> FetchInboundMediaAsync(Guid lineId, string externalMessageId, CancellationToken cancellationToken = default);
 }
 
 /// <summary>Configuracion de servidor Evolution de la agencia: maestro de la plataforma o propio.</summary>
@@ -58,8 +65,12 @@ public sealed record SetEvolutionServerRequest(
 /// <summary>Resultado de conectar/refrescar una linea: QR a escanear (base64) o error.</summary>
 public sealed record LineConnectResult(bool Ok, string? QrBase64, string? Error);
 
-/// <summary>Resultado de un envio de mensaje de prueba.</summary>
-public sealed record LineSendResult(bool Ok, string? Error);
+/// <summary>Resultado de un envio de mensaje de prueba. MessageId es el id real de WhatsApp
+/// devuelto por el provider (opcional; permite eliminar "para todos" desde la UI).</summary>
+public sealed record LineSendResult(bool Ok, string? Error, string? MessageId = null);
+
+/// <summary>Contenido binario descargado de un mensaje entrante con adjunto.</summary>
+public sealed record InboundMediaResult(bool Ok, string? Base64, string? MimeType, string? FileName, string? Error);
 
 public sealed record LineGroupDto(string Jid, string Name, int? ParticipantCount);
 public sealed record LineGroupsResult(bool Ok, IReadOnlyList<LineGroupDto> Groups, string? Error);

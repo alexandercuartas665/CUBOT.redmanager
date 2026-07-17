@@ -55,6 +55,18 @@ public static class DependencyInjection
         services.AddScoped<IBlockedNumberService, BlockedNumberService>();
         services.AddScoped<IAgentRunLogService, AgentRunLogService>();
         services.AddScoped<IChatIngestService, ChatIngestService>();
+        // Chat broadcaster (NoOp por defecto; el host puede reemplazar por SignalR).
+        services.AddScoped<IChatBroadcaster, NoOpChatBroadcaster>();
+        // Media reader (NoOp por defecto). Cuando exista LocalAgentMediaReader, sustituir.
+        services.AddScoped<CubotRedManager.Application.Common.IAgentMediaReader, CubotRedManager.Application.Common.NoOpAgentMediaReader>();
+        // Procesadores de markers del dispatcher.
+        services.AddScoped<ILeadMarkerProcessor, LeadMarkerProcessor>();
+        services.AddScoped<IPedidoMarkerProcessor, PedidoMarkerProcessor>();
+        // Agent dispatcher (motor de respuesta del agente IA).
+        services.AddScoped<IAgentDispatcher, AgentDispatcher>();
+        // La cola real (BackgroundService) se registra en el host (Web/Program.cs). Aqui dejamos
+        // el NoOp como fallback para procesos sin worker.
+        services.AddSingleton<IAgentDispatchQueue, NoOpAgentDispatchQueue>();
         // Webhook Evolution: config + tunel dev. IDevTunnel real (cloudflared) se registra en el
         // Web host solo si esta instalado; por defecto usamos el NoOp para no romper prod.
         services.AddSingleton<IDevTunnel, NoOpDevTunnel>();

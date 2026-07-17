@@ -18,14 +18,19 @@ public sealed class ChatIngestService : IChatIngestService
 {
     private readonly IApplicationDbContext _db;
     private readonly ISecretProtector _secretProtector;
+    private readonly IAgentDispatchQueue _dispatchQueue;
+    private readonly IChatBroadcaster _broadcaster;
     private readonly TimeProvider _timeProvider;
     private readonly ILogger<ChatIngestService> _logger;
 
     public ChatIngestService(IApplicationDbContext db, ISecretProtector secretProtector,
+        IAgentDispatchQueue dispatchQueue, IChatBroadcaster broadcaster,
         TimeProvider timeProvider, ILogger<ChatIngestService> logger)
     {
         _db = db;
         _secretProtector = secretProtector;
+        _dispatchQueue = dispatchQueue;
+        _broadcaster = broadcaster;
         _timeProvider = timeProvider;
         _logger = logger;
     }
@@ -115,8 +120,25 @@ public sealed class ChatIngestService : IChatIngestService
         _logger.LogInformation("Chat ingest OK: tenant={Tenant} conv={Conv} msg={Msg} phone={Phone}",
             tenantId, conversation.Id, message.Id, payload.ContactPhone);
 
-        // TODO(Fase 3): cuando exista IAgentDispatchQueue, encolar aqui si enqueueDispatch && WhatsAppLineId.
-        _ = enqueueDispatch;
+        // Broadcast en vivo (NoOp por defecto; el host puede reemplazar por SignalR).
+        try
+        {
+            var dto = new MessageDto(message.Id, message.ConversationId, message.Direction,
+                message.Body, message.MessageType, message.SentAt,
+                message.MediaType, message.MediaUrl, message.MediaMimeType, message.SentByName);
+            await _broadcaster.MessageAddedAsync(tenantId, conversation.Id, dto, ct);
+        }
+        catch (Exception ex) { _logger.LogWarning(ex, "Chat ingest broadcast fallo (best-effort)"); }
+
+        // Encola al AgentDispatcher (background) para que responda con debounce por conversacion.
+        if (enqueueDispatch && payload.WhatsAppLineId is not null)
+        {
+            try
+            {
+                _dispatchQueue.Enqueue(tenantId, conversation.Id, payload.WhatsAppLineId, payload.Body ?? string.Empty);
+            }
+            catch (Exception ex) { _logger.LogWarning(ex, "Chat ingest dispatch enqueue fallo (best-effort)"); }
+        }
         return ChatIngestResult.Accepted;
     }
 }

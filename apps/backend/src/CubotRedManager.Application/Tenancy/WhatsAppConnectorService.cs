@@ -293,6 +293,22 @@ public sealed class WhatsAppConnectorService : IWhatsAppConnectorService
         return new LineGroupsResult(res.Ok, mapped, res.Error);
     }
 
+    public Task<LineSendResult> SendReactionAsync(Guid lineId, string phone, string externalMessageId, string emoji, CancellationToken cancellationToken = default)
+    {
+        // STUB Fase 3: cuando se porte el endpoint /sendReaction del Evolution client, este metodo
+        // llamara al connector real. Por ahora no envia (best-effort) para no romper el dispatcher.
+        _ = lineId; _ = phone; _ = externalMessageId; _ = emoji; _ = cancellationToken;
+        return Task.FromResult(new LineSendResult(false, "SendReactionAsync no implementado aun.", null));
+    }
+
+    public Task<InboundMediaResult> FetchInboundMediaAsync(Guid lineId, string externalMessageId, CancellationToken cancellationToken = default)
+    {
+        // STUB Fase 2: cuando se porte el endpoint /chat/getBase64FromMediaMessage, este metodo
+        // descargara el media. Por ahora los mensajes con adjunto quedan persistidos con MediaUrl=null.
+        _ = lineId; _ = externalMessageId; _ = cancellationToken;
+        return Task.FromResult(new InboundMediaResult(false, null, null, null, "FetchInboundMediaAsync no implementado aun."));
+    }
+
     public async Task<int> ApplyWebhookToConnectedLinesAsync(Guid actorUserId, CancellationToken cancellationToken = default)
     {
         var (baseWebhookUrl, webhookToken) = await EffectiveWebhookBaseAsync(cancellationToken);
