@@ -172,8 +172,9 @@ public enum InboxStatus { Unread, Read, Replied, Archived, EscalateToHuman }
 /// </summary>
 public enum CommentPipelineStage { New, Contacted, Qualified, Converted }
 
-/// <summary>Tipo de media a enviar via WhatsApp Connector (Modulo Agentes).</summary>
-public enum MessageMediaType { Image, Video, Audio, Document }
+// MessageMediaType movido a su propio archivo (Enums/MessageMediaType.cs) al portar el modulo
+// de chat desde travels. Ahora incluye None (0) y Location; los usos existentes (Image/Video/
+// Audio/Document) siguen siendo validos.
 
 /// <summary>Modo de respuesta del motor de autorespuesta (Modulo 2.11).</summary>
 public enum AutoReplyMode

@@ -54,6 +54,7 @@ public static class DependencyInjection
         services.AddScoped<ITenantAlertService, TenantAlertService>();
         services.AddScoped<IBlockedNumberService, BlockedNumberService>();
         services.AddScoped<IAgentRunLogService, AgentRunLogService>();
+        services.AddScoped<IChatIngestService, ChatIngestService>();
         // Webhook Evolution: config + tunel dev. IDevTunnel real (cloudflared) se registra en el
         // Web host solo si esta instalado; por defecto usamos el NoOp para no romper prod.
         services.AddSingleton<IDevTunnel, NoOpDevTunnel>();

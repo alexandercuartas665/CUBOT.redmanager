@@ -108,9 +108,11 @@ public sealed class WhatsAppConnectorService : IWhatsAppConnectorService
         await _db.SaveChangesAsync(cancellationToken);
 
         // Configura el webhook entrante para recibir mensajes en caliente (si esta configurado).
-        var (webhookUrl, webhookToken) = await EffectiveWebhookAsync(cancellationToken);
-        if (webhookUrl is not null && webhookToken is not null)
+        // El tenantId va en la URL (mismo esquema que ApplyWebhookToConnectedLinesAsync).
+        var (webhookBase, webhookToken) = await EffectiveWebhookBaseAsync(cancellationToken);
+        if (webhookBase is not null && webhookToken is not null)
         {
+            var webhookUrl = $"{webhookBase}/{line.TenantId:D}";
             await _client.SetWebhookAsync(baseUrl, apiKey, EvoInstance(line), webhookUrl, webhookToken, cancellationToken);
         }
 
@@ -293,24 +295,29 @@ public sealed class WhatsAppConnectorService : IWhatsAppConnectorService
 
     public async Task<int> ApplyWebhookToConnectedLinesAsync(Guid actorUserId, CancellationToken cancellationToken = default)
     {
-        var (webhookUrl, webhookToken) = await EffectiveWebhookAsync(cancellationToken);
-        if (webhookUrl is null || webhookToken is null) { return 0; }
+        var (baseWebhookUrl, webhookToken) = await EffectiveWebhookBaseAsync(cancellationToken);
+        if (baseWebhookUrl is null || webhookToken is null) { return 0; }
         var server = await ResolveServerAsync(cancellationToken);
         if (server is null) { return 0; }
         var (baseUrl, apiKey) = server.Value;
 
-        var lines = await _db.WhatsAppLines.Where(l => l.Status == WhatsAppLineStatus.Connected).ToListAsync(cancellationToken);
+        var lines = await _db.WhatsAppLines.IgnoreQueryFilters()
+            .Where(l => l.Status == WhatsAppLineStatus.Connected).ToListAsync(cancellationToken);
         var applied = 0;
         foreach (var line in lines)
         {
+            // El tenantId va en la URL para que ASP.NET Core 10 aplique `.DisableAntiforgery()`
+            // (rutas sin parametros no lo hacen bien en el receptor de Blazor Server).
+            var webhookUrl = $"{baseWebhookUrl}/{line.TenantId:D}";
             var res = await _client.SetWebhookAsync(baseUrl, apiKey, EvoInstance(line), webhookUrl, webhookToken, cancellationToken);
             if (res.Ok) { applied++; }
         }
         return applied;
     }
 
-    // URL + token efectivos del webhook segun el modo configurado (dev usa la URL activa del tunel).
-    private async Task<(string? Url, string? Token)> EffectiveWebhookAsync(CancellationToken ct)
+    // URL base + token efectivos del webhook segun el modo configurado (dev usa la URL activa del
+    // tunel). El tenantId se concatena por linea en ApplyWebhookToConnectedLinesAsync.
+    private async Task<(string? Url, string? Token)> EffectiveWebhookBaseAsync(CancellationToken ct)
     {
         var master = await _db.EvolutionMasterConfigs.AsNoTracking().FirstOrDefaultAsync(ct);
         if (master is null || string.IsNullOrWhiteSpace(master.WebhookToken)) { return (null, null); }
