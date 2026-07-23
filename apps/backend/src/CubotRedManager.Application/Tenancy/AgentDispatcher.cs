@@ -25,6 +25,7 @@ public sealed class AgentDispatcher : IAgentDispatcher
     private readonly IChatBroadcaster _broadcaster;
     private readonly ILeadMarkerProcessor _leadMarker;
     private readonly IPedidoMarkerProcessor _pedidoMarker;
+    private readonly IPaymentLinkProcessor _paymentLinker;
     private readonly IAgentMediaReader _mediaReader;
     private readonly TimeProvider _timeProvider;
     private readonly ILogger<AgentDispatcher> _logger;
@@ -36,6 +37,7 @@ public sealed class AgentDispatcher : IAgentDispatcher
         IChatBroadcaster broadcaster,
         ILeadMarkerProcessor leadMarker,
         IPedidoMarkerProcessor pedidoMarker,
+        IPaymentLinkProcessor paymentLinker,
         IAgentMediaReader mediaReader,
         TimeProvider timeProvider,
         ILogger<AgentDispatcher> logger)
@@ -46,6 +48,7 @@ public sealed class AgentDispatcher : IAgentDispatcher
         _broadcaster = broadcaster;
         _leadMarker = leadMarker;
         _pedidoMarker = pedidoMarker;
+        _paymentLinker = paymentLinker;
         _mediaReader = mediaReader;
         _timeProvider = timeProvider;
         _logger = logger;
@@ -217,6 +220,26 @@ public sealed class AgentDispatcher : IAgentDispatcher
             pedidoResult = new PedidoMarkerResult(_pedidoMarker.StripMarkers(leadResult.CleanText), 0, 0);
         }
         var textToSend = pedidoResult.CleanText ?? string.Empty;
+
+        // 4c) Markers de pago FUXION [[link_pago: NOMBRE:qty, ...]] -> URL de sales-link.
+        // Se ejecuta despues de lead/pedido porque puede consumir contenido cache/lead. Si algo
+        // falla (token expirado, contrato roto, red), el processor sustituye por un mensaje amable
+        // y devuelve errores en el result para loguear en bitacora sin romper la respuesta.
+        if (textToSend.Contains("[[link_pago", StringComparison.OrdinalIgnoreCase))
+        {
+            var payResult = await _paymentLinker.ProcessAsync(tenantId, binding.AgentId, textToSend, cancellationToken);
+            textToSend = payResult.ProcessedText;
+            if (payResult.MarkersFound > 0)
+            {
+                var summary = $"markers={payResult.MarkersFound} ok={payResult.LinksGenerated} fallidos={payResult.LinksFailed}";
+                var kind = payResult.LinksFailed > 0 ? AiAgentRunLogKind.Error : AiAgentRunLogKind.Tool;
+                var body = payResult.Errors.Count > 0
+                    ? string.Join(" | ", payResult.Errors)
+                    : $"Sales-link(s) generado(s) correctamente para {payResult.LinksGenerated} marker(s).";
+                await LogRunAsync(tenantId, conversationId, binding.AgentId, kind,
+                    "Payment link processor: " + summary, body, null, cancellationToken);
+            }
+        }
 
         // Red de seguridad para markers residuales / mal formados.
         if (textToSend.Contains("[[", StringComparison.Ordinal))

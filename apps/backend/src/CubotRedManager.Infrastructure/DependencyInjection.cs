@@ -65,6 +65,11 @@ public static class DependencyInjection
         // Procesadores de markers del dispatcher.
         services.AddScoped<ILeadMarkerProcessor, LeadMarkerProcessor>();
         services.AddScoped<IPedidoMarkerProcessor, PedidoMarkerProcessor>();
+        services.AddScoped<IPaymentLinkProcessor, PaymentLinkProcessor>();
+        // Cliente HTTP tipado para el API de app-aware.fuxion.com. La configuracion por agente
+        // (token, userId, path) vive en AiAgent.Payment* y se pasa por request.
+        services.AddHttpClient<CubotRedManager.Application.Common.IFuxionPaymentClient,
+            CubotRedManager.Infrastructure.Fuxion.FuxionPaymentClient>();
         // Agent dispatcher (motor de respuesta del agente IA).
         services.AddScoped<IAgentDispatcher, AgentDispatcher>();
         // La cola real (BackgroundService) se registra en el host (Web/Program.cs). Aqui dejamos
