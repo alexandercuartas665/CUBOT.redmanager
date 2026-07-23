@@ -87,6 +87,11 @@ public class AiAgent : TenantEntity
     /// <summary>Columna del contenedor con el productId de FUXION (default "productId").</summary>
     public string? PaymentCatalogProductIdColumn { get; set; }
 
+    /// <summary>Columna del contenedor con el pais ISO2 del producto (opcional). Si existe, el
+    /// processor usa el pais por fila (permite un mismo agente vender en varios paises). Si es
+    /// null o la columna no existe, se cae al PaymentCountry del agente.</summary>
+    public string? PaymentCatalogCountryColumn { get; set; }
+
     // Overrides opcionales para tolerar cambios de FUXION sin redeploy:
 
     /// <summary>Base URL de la API (default https://api-aware.fuxion.com).</summary>

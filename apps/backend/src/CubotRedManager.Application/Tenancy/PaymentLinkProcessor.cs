@@ -53,6 +53,7 @@ public sealed class PaymentLinkProcessor : IPaymentLinkProcessor
             .Select(a => new AgentPaymentSnapshot(
                 a.PaymentEnabled, a.PaymentUserId, a.PaymentCountry,
                 a.PaymentCatalogContainerName, a.PaymentCatalogNameColumn, a.PaymentCatalogProductIdColumn,
+                a.PaymentCatalogCountryColumn,
                 a.PaymentApiBaseUrl, a.PaymentApiPathTemplate, a.PaymentResponseUrlPath))
             .FirstOrDefaultAsync(cancellationToken);
 
@@ -63,8 +64,9 @@ public sealed class PaymentLinkProcessor : IPaymentLinkProcessor
             return SubstituteAllWithFallback(agentText!, matches, "PaymentEnabled=false");
         }
 
-        // Diccionario nombre -> productId (case-insensitive). Cargado una vez por invocacion.
-        Dictionary<string, string> catalog;
+        // Diccionario nombre -> (productId, pais). El pais es null si el contenedor no tiene columna
+        // pais o si la fila no tiene valor - se cae al PaymentCountry del agente.
+        Dictionary<string, CatalogEntry> catalog;
         try
         {
             catalog = await LoadCatalogAsync(cfg, cancellationToken);
@@ -76,6 +78,7 @@ public sealed class PaymentLinkProcessor : IPaymentLinkProcessor
         }
 
         var token = await _agentService.GetDecryptedPaymentTokenAsync(agentId, cancellationToken);
+        var defaultCountry = cfg.PaymentCountry ?? "pe";
         var errors = new List<string>();
         int generated = 0, failed = 0;
         var sb = new StringBuilder();
@@ -87,40 +90,61 @@ public sealed class PaymentLinkProcessor : IPaymentLinkProcessor
             cursor = match.Index + match.Length;
 
             var args = match.Groups["args"].Success ? match.Groups["args"].Value : "";
-            var items = ParseItems(args, catalog, out var unresolved);
+            var parsed = ParseItems(args, catalog, defaultCountry, out var unresolved);
             if (unresolved.Count > 0)
             {
                 errors.Add($"productos no encontrados en catalogo '{cfg.PaymentCatalogContainerName}': {string.Join(", ", unresolved)}");
             }
-            if (items.Count == 0)
+            if (parsed.Count == 0)
             {
                 sb.Append(FallbackMessage);
                 failed++;
                 continue;
             }
 
+            // Agrupar por pais efectivo: 1 POST por grupo. Un carrito FUXION solo lleva 1 country,
+            // asi que si el LLM pidio productos de PE + CO en un solo marker generamos 2 URLs y las
+            // pegamos separadas por salto de linea. En el caso comun (todos mismo pais) es 1 solo POST.
+            var groups = parsed.GroupBy(p => p.Country, StringComparer.OrdinalIgnoreCase).ToList();
             var description = $"WA {DateTime.UtcNow:yyyyMMdd-HHmmss}";
-            var req = new FuxionGenerateLinkRequest(
-                BaseUrl: cfg.PaymentApiBaseUrl ?? "https://api-aware.fuxion.com",
-                PathTemplate: cfg.PaymentApiPathTemplate ?? "/api/products/user/{userId}/generate-power-link",
-                ResponseUrlPath: cfg.PaymentResponseUrlPath ?? "data.url",
-                UserId: cfg.PaymentUserId ?? "",
-                BearerToken: token ?? "",
-                Country: cfg.PaymentCountry ?? "pe",
-                Description: description,
-                Items: items);
+            var groupUrls = new List<string>();
+            int groupOk = 0, groupErr = 0;
 
-            var result = await _fuxion.GenerateSalesLinkAsync(req, cancellationToken);
-            if (result.Ok && !string.IsNullOrWhiteSpace(result.Url))
+            foreach (var g in groups)
             {
-                sb.Append(result.Url);
-                generated++;
+                var req = new FuxionGenerateLinkRequest(
+                    BaseUrl: cfg.PaymentApiBaseUrl ?? "https://api-aware.fuxion.com",
+                    PathTemplate: cfg.PaymentApiPathTemplate ?? "/api/products/user/{userId}/generate-power-link",
+                    ResponseUrlPath: cfg.PaymentResponseUrlPath ?? "data.url",
+                    UserId: cfg.PaymentUserId ?? "",
+                    BearerToken: token ?? "",
+                    Country: g.Key,
+                    Description: groups.Count > 1 ? $"{description} {g.Key}" : description,
+                    Items: g.Select(x => new FuxionSalesLinkItem(x.ProductId, x.Amount)).ToList());
+
+                var result = await _fuxion.GenerateSalesLinkAsync(req, cancellationToken);
+                if (result.Ok && !string.IsNullOrWhiteSpace(result.Url))
+                {
+                    groupUrls.Add(result.Url);
+                    groupOk++;
+                }
+                else
+                {
+                    groupErr++;
+                    errors.Add($"[{g.Key}] {result.ErrorDetail ?? result.ErrorKind.ToString()}");
+                }
+            }
+
+            if (groupUrls.Count > 0)
+            {
+                sb.Append(string.Join('\n', groupUrls));
+                generated += groupOk;
+                failed += groupErr;
             }
             else
             {
                 sb.Append(FallbackMessage);
-                failed++;
-                errors.Add(result.ErrorDetail ?? result.ErrorKind.ToString());
+                failed += groups.Count;
             }
         }
         sb.Append(agentText!, cursor, agentText!.Length - cursor);
@@ -128,9 +152,13 @@ public sealed class PaymentLinkProcessor : IPaymentLinkProcessor
         return new PaymentLinkResult(sb.ToString(), matches.Count, generated, failed, errors);
     }
 
+    private sealed record CatalogEntry(string ProductId, string? Country);
+    private sealed record ParsedItem(string ProductId, int Amount, string Country);
+
     private sealed record AgentPaymentSnapshot(
         bool PaymentEnabled, string? PaymentUserId, string? PaymentCountry,
         string? PaymentCatalogContainerName, string? PaymentCatalogNameColumn, string? PaymentCatalogProductIdColumn,
+        string? PaymentCatalogCountryColumn,
         string? PaymentApiBaseUrl, string? PaymentApiPathTemplate, string? PaymentResponseUrlPath);
 
     private static PaymentLinkResult SubstituteAllWithFallback(string text, MatchCollection matches, string reason)
@@ -147,13 +175,13 @@ public sealed class PaymentLinkProcessor : IPaymentLinkProcessor
         return new PaymentLinkResult(sb.ToString(), matches.Count, 0, matches.Count, new[] { reason });
     }
 
-    /// <summary>Parsea "REXET:2, PRUNEX1:1" contra el diccionario case-insensitive nombre->productId.
-    /// Nombres sin ":qty" se toman como cantidad 1. Items no encontrados se agregan a "unresolved"
-    /// y se omiten del resultado. Cantidades <= 0 se saltan.</summary>
-    private static List<FuxionSalesLinkItem> ParseItems(string args, Dictionary<string, string> catalog, out List<string> unresolved)
+    /// <summary>Parsea "REXET:2, PRUNEX1:1" contra el catalogo. Resuelve nombre->productId y
+    /// deriva el pais efectivo: el de la fila del contenedor si existe, si no <paramref name="defaultCountry"/>.
+    /// Nombres sin ":qty" se toman como cantidad 1. No encontrados se agregan a "unresolved" y se omiten.</summary>
+    private static List<ParsedItem> ParseItems(string args, Dictionary<string, CatalogEntry> catalog, string defaultCountry, out List<string> unresolved)
     {
         unresolved = new List<string>();
-        var items = new List<FuxionSalesLinkItem>();
+        var items = new List<ParsedItem>();
         if (string.IsNullOrWhiteSpace(args)) { return items; }
 
         foreach (var raw in args.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
@@ -164,9 +192,10 @@ public sealed class PaymentLinkProcessor : IPaymentLinkProcessor
             if (parts.Length == 2 && !int.TryParse(parts[1], out qty)) { qty = 1; }
             if (qty <= 0) { continue; }
             if (string.IsNullOrWhiteSpace(name)) { continue; }
-            if (catalog.TryGetValue(name.Trim(), out var productId))
+            if (catalog.TryGetValue(name.Trim(), out var entry))
             {
-                items.Add(new FuxionSalesLinkItem(productId, qty));
+                var country = string.IsNullOrWhiteSpace(entry.Country) ? defaultCountry : entry.Country!.ToLowerInvariant();
+                items.Add(new ParsedItem(entry.ProductId, qty, country));
             }
             else
             {
@@ -176,11 +205,13 @@ public sealed class PaymentLinkProcessor : IPaymentLinkProcessor
         return items;
     }
 
-    /// <summary>Carga el catalogo agente->productId del DataContainer configurado. Case-insensitive
-    /// en el nombre. Devuelve diccionario vacio si algo falla, con log a nivel Warning.</summary>
-    private async Task<Dictionary<string, string>> LoadCatalogAsync(AgentPaymentSnapshot cfg, CancellationToken ct)
+    /// <summary>Carga el catalogo del DataContainer configurado. Case-insensitive en el nombre.
+    /// Si el operador configuro PaymentCatalogCountryColumn Y esa columna existe, se lee el pais
+    /// por fila (permite un mismo agente vender en varios paises). Si no, el pais efectivo se
+    /// cae al PaymentCountry del agente en ParseItems.</summary>
+    private async Task<Dictionary<string, CatalogEntry>> LoadCatalogAsync(AgentPaymentSnapshot cfg, CancellationToken ct)
     {
-        var result = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        var result = new Dictionary<string, CatalogEntry>(StringComparer.OrdinalIgnoreCase);
         if (string.IsNullOrWhiteSpace(cfg.PaymentCatalogContainerName)) { return result; }
 
         var containers = await _containers.ListAsync(ct);
@@ -198,14 +229,24 @@ public sealed class PaymentLinkProcessor : IPaymentLinkProcessor
         {
             throw new InvalidOperationException($"columnas '{nameColName}' o '{idColName}' no encontradas en el contenedor");
         }
+        // Columna pais es opcional. Si el operador la nombro pero no existe en el contenedor,
+        // no fallamos: solo omitimos el pais por fila y caemos al default del agente.
+        var countryCol = string.IsNullOrWhiteSpace(cfg.PaymentCatalogCountryColumn)
+            ? null
+            : detail.Columns.FirstOrDefault(c => string.Equals(c.Name, cfg.PaymentCatalogCountryColumn, StringComparison.OrdinalIgnoreCase));
 
         var rows = await _containers.ListRowsAsync(target.Id, search: null, take: 2000, ct);
         foreach (var row in rows)
         {
             if (!row.ValuesByColumnId.TryGetValue(nameCol.Id, out var nameVal) || string.IsNullOrWhiteSpace(nameVal)) { continue; }
             if (!row.ValuesByColumnId.TryGetValue(idCol.Id, out var idVal) || string.IsNullOrWhiteSpace(idVal)) { continue; }
-            // Si hay duplicados, gana el primero. Es raro y logueable como advertencia futura.
-            result.TryAdd(nameVal.Trim(), idVal.Trim());
+            string? country = null;
+            if (countryCol is not null && row.ValuesByColumnId.TryGetValue(countryCol.Id, out var cVal) && !string.IsNullOrWhiteSpace(cVal))
+            {
+                country = cVal.Trim();
+            }
+            // Si hay duplicados, gana el primero.
+            result.TryAdd(nameVal.Trim(), new CatalogEntry(idVal.Trim(), country));
         }
         return result;
     }

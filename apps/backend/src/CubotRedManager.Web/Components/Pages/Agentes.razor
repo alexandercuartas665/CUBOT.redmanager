@@ -15,6 +15,7 @@
 @inject IWhatsAppConnectorService Connector
 @inject IWebHostEnvironment Env
 @inject CubotRedManager.Application.Common.IAgentMediaReader MediaReader
+@inject IDataContainerService ContainersSvc
 @inject IJSRuntime JS
 
 <PageTitle>Agentes IA - CUBOT.redmanager</PageTitle>
@@ -503,20 +504,58 @@ else
                                 <div class="small" style="margin-bottom:6px;"><strong>Catalogo de productos (contenedor de datos)</strong></div>
                                 <div class="text-muted" style="font-size:11.5px;margin-bottom:8px;">
                                     El agente traduce el nombre que emita el LLM (<code>REXET:2</code>) al <code>productId</code> de FUXION
-                                    consultando este contenedor. Debe tener al menos dos columnas: nombre y productId.
+                                    consultando este contenedor. Elige contenedor -> se cargan sus columnas y las asignas.
+                                    La <strong>columna pais</strong> es opcional: si el catalogo la trae, se usa el pais por fila (permite
+                                    vender en varios paises con el mismo agente). Si esta vacia, se usa el <em>Pais (ISO2)</em> de arriba.
                                 </div>
-                                <div class="row" style="display:grid;grid-template-columns:2fr 1fr 1fr;gap:10px;">
+                                <div class="row" style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:8px;">
                                     <div class="field">
-                                        <label class="form-label">Nombre del contenedor</label>
-                                        <input class="form-control" @bind="_fPayContainer" placeholder="ej. productos_fuxion" disabled="@_busy" />
+                                        <label class="form-label">Contenedor</label>
+                                        <select class="form-control" value="@_fPayContainer" @onchange="OnPayContainerChanged" disabled="@_busy">
+                                            <option value="">-- (ninguno) --</option>
+                                            @foreach (var c in _payContainers)
+                                            {
+                                                <option value="@c.Name">@c.Name (@c.RowCount filas)</option>
+                                            }
+                                        </select>
+                                        @if (!string.IsNullOrEmpty(_fPayContainer) && _payContainers.All(c => !string.Equals(c.Name, _fPayContainer, StringComparison.OrdinalIgnoreCase)))
+                                        {
+                                            <div class="text-muted" style="font-size:11px;color:var(--warning);margin-top:4px;">
+                                                Aviso: '<strong>@_fPayContainer</strong>' guardado pero no existe (renombrado o borrado?). Elige otro.
+                                            </div>
+                                        }
                                     </div>
                                     <div class="field">
                                         <label class="form-label">Columna nombre</label>
-                                        <input class="form-control" @bind="_fPayNameCol" placeholder="nombre" disabled="@_busy" />
+                                        <select class="form-control" value="@_fPayNameCol" @onchange="e => _fPayNameCol = e.Value?.ToString()" disabled="@(_busy || _payContainerColumns.Count == 0)">
+                                            <option value="">-- (elige) --</option>
+                                            @foreach (var col in _payContainerColumns)
+                                            {
+                                                <option value="@col">@col</option>
+                                            }
+                                        </select>
                                     </div>
+                                </div>
+                                <div class="row" style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
                                     <div class="field">
                                         <label class="form-label">Columna productId</label>
-                                        <input class="form-control" @bind="_fPayIdCol" placeholder="productId" disabled="@_busy" />
+                                        <select class="form-control" value="@_fPayIdCol" @onchange="e => _fPayIdCol = e.Value?.ToString()" disabled="@(_busy || _payContainerColumns.Count == 0)">
+                                            <option value="">-- (elige) --</option>
+                                            @foreach (var col in _payContainerColumns)
+                                            {
+                                                <option value="@col">@col</option>
+                                            }
+                                        </select>
+                                    </div>
+                                    <div class="field">
+                                        <label class="form-label">Columna pais <span class="text-muted small">(opcional)</span></label>
+                                        <select class="form-control" value="@_fPayCountryCol" @onchange="e => _fPayCountryCol = e.Value?.ToString()" disabled="@(_busy || _payContainerColumns.Count == 0)">
+                                            <option value="">-- (usar pais fijo del agente) --</option>
+                                            @foreach (var col in _payContainerColumns)
+                                            {
+                                                <option value="@col">@col</option>
+                                            }
+                                        </select>
                                     </div>
                                 </div>
                             </div>
@@ -1089,11 +1128,39 @@ else
     private string? _fPayContainer;
     private string? _fPayNameCol;
     private string? _fPayIdCol;
+    private string? _fPayCountryCol;
     private string? _fPayBaseUrl;
     private string? _fPayPath;
     private string? _fPayRespPath;
     private string? _payError;
     private string? _payInfo;
+
+    // Lista de DataContainers del tenant + columnas del contenedor actualmente seleccionado.
+    // Se rellenan al abrir el editor y al cambiar el dropdown de contenedor.
+    private List<DataContainerDto> _payContainers = new();
+    private List<string> _payContainerColumns = new();
+
+    private async Task OnPayContainerChanged(ChangeEventArgs e)
+    {
+        var name = e.Value?.ToString();
+        _fPayContainer = string.IsNullOrWhiteSpace(name) ? null : name;
+        // Cambio de contenedor -> las columnas anteriores probablemente ya no existen.
+        _fPayNameCol = null; _fPayIdCol = null; _fPayCountryCol = null;
+        await ReloadPayContainerColumnsAsync();
+    }
+
+    private async Task ReloadPayContainerColumnsAsync()
+    {
+        _payContainerColumns = new();
+        if (string.IsNullOrWhiteSpace(_fPayContainer)) { return; }
+        var target = _payContainers.FirstOrDefault(c => string.Equals(c.Name, _fPayContainer, StringComparison.OrdinalIgnoreCase));
+        if (target is null) { return; }
+        var detail = await ContainersSvc.GetAsync(target.Id);
+        if (detail is not null)
+        {
+            _payContainerColumns = detail.Columns.OrderBy(c => c.SortOrder).ThenBy(c => c.Name).Select(c => c.Name).ToList();
+        }
+    }
 
     private string PaymentStatusLabel()
     {
@@ -1125,6 +1192,7 @@ else
                 CatalogContainerName: _fPayContainer,
                 CatalogNameColumn: _fPayNameCol,
                 CatalogProductIdColumn: _fPayIdCol,
+                CatalogCountryColumn: _fPayCountryCol,
                 ApiBaseUrl: _fPayBaseUrl,
                 ApiPathTemplate: _fPayPath,
                 ResponseUrlPath: _fPayRespPath);
@@ -1189,6 +1257,9 @@ else
         _providerOptions = (await AiServersSvc.ListEnabledAsync()).ToList();
         _phoneLines = (await LinesSvc.ListAsync()).Where(l => l.Status == WhatsAppLineStatus.Connected).ToList();
         _phoneLineId = _phoneLines.FirstOrDefault()?.Id ?? Guid.Empty;
+        // Contenedores del tenant para el dropdown de "Pagos FUXION -> Catalogo". Los cargamos aqui
+        // (no en OpenEdit) para que el select este poblado incluso al crear un agente nuevo.
+        _payContainers = (await ContainersSvc.ListAsync()).ToList();
         await ReloadAsync();
         _loading = false;
     }
@@ -1245,9 +1316,10 @@ else
         _fPayEnabled = false; _fPayUserId = null; _fPayCountry = null;
         _fPayTokenPresent = false; _fPayTokenExpiresAt = null; _fPayTokenLastVerifiedAt = null;
         _fPayNewToken = null;
-        _fPayContainer = null; _fPayNameCol = null; _fPayIdCol = null;
+        _fPayContainer = null; _fPayNameCol = null; _fPayIdCol = null; _fPayCountryCol = null;
         _fPayBaseUrl = null; _fPayPath = null; _fPayRespPath = null;
         _payError = null; _payInfo = null;
+        _payContainerColumns = new();
         _resources = new();
         _cacheFields = new();
         _cacheValues = new();
@@ -1299,6 +1371,10 @@ else
         _fPayContainer = pc?.CatalogContainerName;
         _fPayNameCol = pc?.CatalogNameColumn;
         _fPayIdCol = pc?.CatalogProductIdColumn;
+        _fPayCountryCol = pc?.CatalogCountryColumn;
+        // Cargar la lista de contenedores del tenant + columnas del elegido para el dropdown encadenado.
+        _payContainers = (await ContainersSvc.ListAsync()).ToList();
+        await ReloadPayContainerColumnsAsync();
         _fPayBaseUrl = pc?.ApiBaseUrl;
         _fPayPath = pc?.ApiPathTemplate;
         _fPayRespPath = pc?.ResponseUrlPath;

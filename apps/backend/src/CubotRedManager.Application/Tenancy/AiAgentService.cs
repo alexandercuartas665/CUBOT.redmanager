@@ -62,6 +62,7 @@ public sealed class AiAgentService : IAiAgentService
             CatalogContainerName: agent.PaymentCatalogContainerName,
             CatalogNameColumn: agent.PaymentCatalogNameColumn,
             CatalogProductIdColumn: agent.PaymentCatalogProductIdColumn,
+            CatalogCountryColumn: agent.PaymentCatalogCountryColumn,
             ApiBaseUrl: agent.PaymentApiBaseUrl,
             ApiPathTemplate: agent.PaymentApiPathTemplate,
             ResponseUrlPath: agent.PaymentResponseUrlPath);
@@ -416,6 +417,7 @@ public sealed class AiAgentService : IAiAgentService
         agent.PaymentCatalogContainerName = Trim(request.CatalogContainerName);
         agent.PaymentCatalogNameColumn = Trim(request.CatalogNameColumn);
         agent.PaymentCatalogProductIdColumn = Trim(request.CatalogProductIdColumn);
+        agent.PaymentCatalogCountryColumn = Trim(request.CatalogCountryColumn);
         agent.PaymentApiBaseUrl = Trim(request.ApiBaseUrl);
         agent.PaymentApiPathTemplate = Trim(request.ApiPathTemplate);
         agent.PaymentResponseUrlPath = Trim(request.ResponseUrlPath);
@@ -465,6 +467,7 @@ public sealed class AiAgentService : IAiAgentService
             CatalogContainerName: agent.PaymentCatalogContainerName,
             CatalogNameColumn: agent.PaymentCatalogNameColumn,
             CatalogProductIdColumn: agent.PaymentCatalogProductIdColumn,
+            CatalogCountryColumn: agent.PaymentCatalogCountryColumn,
             ApiBaseUrl: agent.PaymentApiBaseUrl,
             ApiPathTemplate: agent.PaymentApiPathTemplate,
             ResponseUrlPath: agent.PaymentResponseUrlPath);

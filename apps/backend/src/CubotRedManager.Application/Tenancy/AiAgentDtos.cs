@@ -49,6 +49,7 @@ public sealed record AgentPaymentConfigDto(
     string? CatalogContainerName,
     string? CatalogNameColumn,
     string? CatalogProductIdColumn,
+    string? CatalogCountryColumn,
     string? ApiBaseUrl,
     string? ApiPathTemplate,
     string? ResponseUrlPath);
@@ -65,6 +66,7 @@ public sealed record SetAgentPaymentConfigRequest(
     string? CatalogContainerName,
     string? CatalogNameColumn,
     string? CatalogProductIdColumn,
+    string? CatalogCountryColumn,
     string? ApiBaseUrl,
     string? ApiPathTemplate,
     string? ResponseUrlPath);
