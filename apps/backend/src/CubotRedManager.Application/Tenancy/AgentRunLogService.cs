@@ -1,25 +1,26 @@
 using CubotRedManager.Application.Abstractions;
+using CubotRedManager.Domain.Enums;
 using Microsoft.EntityFrameworkCore;
 
 namespace CubotRedManager.Application.Tenancy;
 
 /// <summary>
-/// Implementacion adaptada desde CUBOT.travels. La version original hacia JOIN contra las tablas
-/// Conversations y Messages (bandeja WhatsApp) para enriquecer con ContactName/Phone/LineLabel y
-/// mostrar el hilo del chat. En redmanager esas entidades aun no se portaron (dependen del
-/// modulo Lead+Pipeline). Mientras tanto, este servicio agrupa por ConversationId leyendo solo
-/// de AiAgentRunLogs y AiAgentCacheFields/Values (que si existen). Cuando se porte
-/// Conversations/Messages, restaurar los joins verbatim del original.
+/// Bitacora del agente + reseteo de memoria. Ya con Conversations/Messages portados (Fase 1+2+3
+/// del chat inbound), los metodos de borrado tocan las 4 tablas relevantes: AiAgentRunLogs,
+/// AiAgentCacheValues, Messages y Conversation.AgentContextResetAt. Sin actualizar el reset el
+/// dispatcher seguia reconstruyendo el contexto a partir del historial de mensajes.
 /// </summary>
 public sealed class AgentRunLogService : IAgentRunLogService
 {
     private readonly IApplicationDbContext _db;
     private readonly ITenantContext _tenantContext;
+    private readonly TimeProvider _time;
 
-    public AgentRunLogService(IApplicationDbContext db, ITenantContext tenantContext)
+    public AgentRunLogService(IApplicationDbContext db, ITenantContext tenantContext, TimeProvider time)
     {
         _db = db;
         _tenantContext = tenantContext;
+        _time = time;
     }
 
     public async Task<IReadOnlyList<AgentRunLogConversationDto>> ListConversationsAsync(CancellationToken cancellationToken = default)
@@ -58,13 +59,20 @@ public sealed class AgentRunLogService : IAgentRunLogService
     public async Task<(int Logs, int Cache)> ClearAllAsync(CancellationToken cancellationToken = default)
     {
         if (_tenantContext.TenantId is not Guid) { return (0, 0); }
-        // Filtro global por tenant se aplica automaticamente (ambas entidades son TenantEntity);
-        // ExecuteDelete corre el DELETE en BD sin traer las filas a memoria.
-        // Borramos TAMBIEN el cache de datos capturados: "Limpiar historia" debe dejar al agente
-        // en cero. Antes solo se borraba la bitacora y el cache quedaba huerfano (ya no se podia
-        // seleccionar la conversacion en la UI para reiniciarlo). No tocamos mensajes ni leads.
+        // Filtro global por tenant se aplica automaticamente (todas TenantEntity); ExecuteDelete
+        // corre el DELETE en BD sin traer filas a memoria.
         var logs = await _db.AiAgentRunLogs.ExecuteDeleteAsync(cancellationToken);
         var cache = await _db.AiAgentCacheValues.ExecuteDeleteAsync(cancellationToken);
+        // CRITICO: sin borrar Messages y sin actualizar AgentContextResetAt, el dispatcher
+        // reconstruye el contexto del chat leyendo directamente de _db.Messages con filtro por
+        // AgentContextResetAt. Resultado sin este fix: "borrar bitacora" no afectaba lo que el
+        // agente recordaba. Ver AgentDispatcher: lee _db.Messages filtrado por resetAt.
+        await _db.Messages.ExecuteDeleteAsync(cancellationToken);
+        var now = _time.GetUtcNow();
+        await _db.Conversations.ExecuteUpdateAsync(
+            s => s.SetProperty(c => c.AgentContextResetAt, (DateTimeOffset?)now)
+                  .SetProperty(c => c.LastMessageAt, (DateTimeOffset?)null),
+            cancellationToken);
         return (logs, cache);
     }
 
@@ -98,25 +106,40 @@ public sealed class AgentRunLogService : IAgentRunLogService
             .ToList();
     }
 
-    public Task<IReadOnlyList<AgentConversationMessageDto>> GetConversationMessagesAsync(Guid conversationId, CancellationToken cancellationToken = default)
+    public async Task<IReadOnlyList<AgentConversationMessageDto>> GetConversationMessagesAsync(Guid conversationId, CancellationToken cancellationToken = default)
     {
-        // TODO(port-conversations): en travels lee de _db.Messages ordenado por SentAt y mapea
-        // Direction (Inbound/Outbound). En redmanager esa tabla aun no existe; se devuelve vacio.
-        _ = conversationId;
-        return Task.FromResult<IReadOnlyList<AgentConversationMessageDto>>(Array.Empty<AgentConversationMessageDto>());
+        return await _db.Messages.AsNoTracking()
+            .Where(m => m.ConversationId == conversationId)
+            .OrderBy(m => m.SentAt)
+            .Select(m => new AgentConversationMessageDto(
+                m.SentAt,
+                m.Direction == MessageDirection.Inbound ? "inbound" : "outbound",
+                m.Body ?? "",
+                m.SentByName))
+            .ToListAsync(cancellationToken);
     }
 
     public async Task<(int Logs, int Cache, int Messages)> ResetConversationMemoryAsync(Guid conversationId, CancellationToken cancellationToken = default)
     {
         if (_tenantContext.TenantId is not Guid) { return (0, 0, 0); }
-        // Filtro por tenant lo aplica el global filter. Borramos los logs y el cache de esta
-        // conversacion (sessionId == conversationId). Cuando exista _db.Messages tambien habra
-        // que borrar mensajes y resetear Conversation.LastMessageAt (ver original en travels).
+        // Filtro por tenant lo aplica el global filter en todas las tablas.
         var logs = await _db.AiAgentRunLogs.Where(l => l.ConversationId == conversationId)
             .ExecuteDeleteAsync(cancellationToken);
         var cache = await _db.AiAgentCacheValues.Where(v => v.SessionId == conversationId)
             .ExecuteDeleteAsync(cancellationToken);
-        return (logs, cache, Messages: 0);
+        var messages = await _db.Messages.Where(m => m.ConversationId == conversationId)
+            .ExecuteDeleteAsync(cancellationToken);
+        // Setear AgentContextResetAt asegura que si llegan mensajes tarde a esta conversacion,
+        // el dispatcher los filtre fuera del contexto. Sin esto, borrar la conversacion y hablar
+        // por WhatsApp seguido reconstruia contexto con los mensajes recien borrados que se
+        // guardaban en el intervalo entre reset y siguiente inbound.
+        var now = _time.GetUtcNow();
+        await _db.Conversations.Where(c => c.Id == conversationId)
+            .ExecuteUpdateAsync(
+                s => s.SetProperty(c => c.AgentContextResetAt, (DateTimeOffset?)now)
+                      .SetProperty(c => c.LastMessageAt, (DateTimeOffset?)null),
+                cancellationToken);
+        return (logs, cache, messages);
     }
 
     private sealed record ConvAggregate(Guid Id, int Events, DateTimeOffset Last);

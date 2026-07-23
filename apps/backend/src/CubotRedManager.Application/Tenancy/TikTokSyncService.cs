@@ -23,7 +23,12 @@ public sealed class TikTokSyncService : ITikTokSyncService
     private const int MaxVideosPerPage = 20;
     private const int MaxCommentsPerPage = 20;
     private const int MaxReplyPagesPerComment = 3;
-    private const int MaxVideosCap = 500;
+    // Techo defensivo: creadores con mucho contenido (varios anos activos) pueden tener miles.
+    // Subido de 500 a 2000 para permitir "Historico completo" real. TikTok pagina de 20 en 20,
+    // asi que hasta 100 requests + backoff. El bucle exterior tiene tope de pageNum<=50 tambien,
+    // asi que en la practica el limite efectivo por sync es min(cap, 50*20) = min(2000, 1000).
+    // TODO: subir tope de pageNum si algun cliente lo pide.
+    private const int MaxVideosCap = 2000;
 
     private readonly IApplicationDbContext _db;
     private readonly ITenantContext _tenantContext;
@@ -198,7 +203,9 @@ public sealed class TikTokSyncService : ITikTokSyncService
 
         trace.AppendLine($"[INFO] Sync videos: cuenta={businessId}, max={capped}");
 
-        while (hasMore && totalProcessed < capped && pageNum <= 50)
+        // Tope de paginas alineado con MaxVideosCap (2000/20=100 requests). Cualquier cuenta que
+        // supere esto probablemente necesite un sync incremental por fecha, no un "full".
+        while (hasMore && totalProcessed < capped && pageNum <= 100)
         {
             var batchSize = Math.Min(MaxVideosPerPage, capped - totalProcessed);
             trace.AppendLine($"[INFO] Pagina {pageNum} (cursor={cursor}): pidiendo {batchSize} videos...");

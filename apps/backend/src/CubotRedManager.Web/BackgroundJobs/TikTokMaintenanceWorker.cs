@@ -181,5 +181,7 @@ public sealed class TikTokMaintenanceOptions
     public TimeSpan CheckInterval { get; init; } = TimeSpan.FromMinutes(10);
     public TimeSpan SyncEvery { get; init; } = TimeSpan.FromMinutes(30);
     public TimeSpan RefreshIfExpiresWithin { get; init; } = TimeSpan.FromHours(24);
-    public int MaxVideosPerSync { get; init; } = 30;
+    // Cada 30min el worker sincroniza esta cantidad por cuenta. Con 100 videos y 20 por pagina son
+    // 5 requests -> ~seg. Cubre creadores activos que publican varias veces al dia sin dejar huecos.
+    public int MaxVideosPerSync { get; init; } = 100;
 }

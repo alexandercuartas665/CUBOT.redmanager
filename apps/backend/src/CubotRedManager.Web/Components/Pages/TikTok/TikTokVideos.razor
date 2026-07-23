@@ -78,9 +78,9 @@ else
         <label class="form-label">Buscar (caption / id)</label>
         <input class="form-control" @bind="_textFilter" @bind:after="Reload" placeholder="Texto..." />
     </div>
-    <div class="field" style="width:110px; margin:0;">
-        <label class="form-label">Max videos</label>
-        <input type="number" min="1" max="500" class="form-control" @bind="_maxVideos" />
+    <div class="field" style="width:120px; margin:0;">
+        <label class="form-label" title="Cuantos videos como maximo bajar del histoico. TikTok pagina de 20 en 20; con 200 son 10 requests.">Max videos</label>
+        <input type="number" min="1" max="2000" class="form-control" @bind="_maxVideos" />
     </div>
     <div style="display:flex; gap:8px; align-self:flex-end; flex-wrap:wrap;">
         <button class="btn @(_onlyWithPending ? "btn-warning" : "btn-outline-secondary")" @onclick="TogglePending">
@@ -89,7 +89,8 @@ else
         </button>
         <button class="btn btn-outline-secondary" @onclick="SyncVideos" disabled="@_busy">@(_busy && _stage == "v" ? "..." : "1. Videos")</button>
         <button class="btn btn-outline-secondary" @onclick="SyncComments" disabled="@_busy">@(_busy && _stage == "c" ? "..." : "2. Comentarios")</button>
-        <button class="btn btn-primary" @onclick="SyncAll" disabled="@_busy">@(_busy && _stage == "a" ? "Sincronizando..." : "Sincronizar todo")</button>
+        <button class="btn btn-primary" @onclick="SyncAll" disabled="@_busy" title="Videos + comentarios hasta el limite de 'Max videos' de arriba.">@(_busy && _stage == "a" ? "Sincronizando..." : "Sincronizar todo")</button>
+        <button class="btn btn-outline-primary" @onclick="SyncFullHistory" disabled="@_busy" title="Ignora 'Max videos' y baja hasta 2000 videos del histoico. Puede tardar varios minutos.">@(_busy && _stage == "full" ? "Bajando historico..." : "Histoico completo")</button>
         <button class="btn btn-outline-danger" @onclick="OpenDeleteAllConfirm" disabled="@(_busy || (_stats?.TotalVideos ?? 0) == 0)" title="Borra todos los videos sincronizados y sus comentarios. Mantiene config, cuentas y agentes.">Eliminar todos</button>
     </div>
 </div>
@@ -327,7 +328,9 @@ else
     private List<SocialAccountDto> _accounts = new();
     private List<TikTokVideoDto> _videos = new();
     private string _selectedAccount = "";
-    private int _maxVideos = 30;
+    // Default 200: cubre casi cualquier cuenta activa reciente (~1 ano de creator promedio) sin
+    // gastar demasiado en requests. El boton "Historico completo" ignora esto y usa 2000.
+    private int _maxVideos = 200;
     private string _textFilter = "";
     private bool _onlyWithPending;
     private TikTokSyncResult? _lastResult;
@@ -386,6 +389,9 @@ else
     private async Task SyncVideos() => await RunSync("v", id => SyncSvc.SyncVideosAsync(id, _maxVideos, _actor));
     private async Task SyncComments() => await RunSync("c", id => SyncSvc.SyncCommentsAsync(id, _actor));
     private async Task SyncAll() => await RunSync("a", id => SyncSvc.SyncAllAsync(id, _maxVideos, _actor));
+    // "Historico completo": ignora _maxVideos y usa el techo del servicio (2000). Sirve para
+    // llenar la base de datos con TODO el historial de la cuenta la primera vez.
+    private async Task SyncFullHistory() => await RunSync("full", id => SyncSvc.SyncAllAsync(id, 2000, _actor));
 
     private async Task RunSync(string stage, Func<Guid, Task<TikTokSyncResult>> op)
     {
