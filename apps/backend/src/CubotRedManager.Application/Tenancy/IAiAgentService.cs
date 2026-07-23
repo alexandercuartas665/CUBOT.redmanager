@@ -29,6 +29,16 @@ public interface IAiAgentService
     /// <summary>Importa un agente desde un JSON generado por <see cref="ExportAsync"/> en el tenant
     /// activo. Rechaza si ya existe un agente con el mismo nombre (case-insensitive).</summary>
     Task<AgentImportResult> ImportAsync(byte[] jsonBytes, Guid actorUserId, CancellationToken cancellationToken = default);
+
+    /// <summary>Guarda la configuracion de pagos FUXION del agente. El token, si viene, se cifra
+    /// con DataProtection antes de persistir y se parsea su exp para saber cuando caduca. Nunca
+    /// se devuelve el token en texto plano en el DTO de retorno (TokenPresent bool). Devuelve null
+    /// si el agente no existe.</summary>
+    Task<AgentPaymentConfigDto?> SetPaymentConfigAsync(Guid agentId, SetAgentPaymentConfigRequest request, Guid actorUserId, CancellationToken cancellationToken = default);
+
+    /// <summary>Devuelve el token descifrado del agente para uso INTERNO del cliente HTTP FUXION.
+    /// NUNCA exponer en API/UI. Devuelve null si no hay token guardado o no se puede descifrar.</summary>
+    Task<string?> GetDecryptedPaymentTokenAsync(Guid agentId, CancellationToken cancellationToken = default);
 }
 
 public sealed record AgentExportResult(string FileName, byte[] JsonBytes);

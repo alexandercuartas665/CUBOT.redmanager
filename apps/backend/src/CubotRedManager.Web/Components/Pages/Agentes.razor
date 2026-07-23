@@ -443,6 +443,108 @@ else
                         </div>
                     }
                 </div>
+
+                @* ===== Pagos FUXION - acordeon (integracion no-oficial con app-aware.fuxion.com) ===== *@
+                @if (_editId is not null)
+                {
+                <hr style="border-color:var(--border);margin:14px 0;" />
+                <div class="ag-accordion">
+                    <div class="ag-accordion-head" role="button" tabindex="0" @onclick="() => _paymentOpen = !_paymentOpen">
+                        <span class="ag-accordion-chev @(_paymentOpen ? "open" : "")">&#9656;</span>
+                        <span class="pl-stagegroup-title" style="margin:0;">Pagos FUXION</span>
+                        <span class="ag-accordion-spacer"></span>
+                        <span class="small @(_fPayEnabled && _fPayTokenPresent ? "" : "text-muted")" style="@(_fPayEnabled && _fPayTokenPresent ? "color:var(--success);" : "")">@PaymentStatusLabel()</span>
+                    </div>
+                    @if (_paymentOpen)
+                    {
+                        <div class="ag-accordion-body">
+                            <div class="text-muted" style="font-size:12px;margin-bottom:10px;">
+                                Cuando el LLM emita <code>[[link_pago: NOMBRE:cantidad, ...]]</code>, el agente llamara al
+                                API de <strong>app-aware.fuxion.com</strong> con tu token para generar un sales-link y lo
+                                sustituira en la respuesta al cliente. Esta es una integracion <strong>no oficial</strong>;
+                                si FUXION cambia el contrato, la config es editable aqui sin redeploy.
+                            </div>
+                            @if (!string.IsNullOrEmpty(_payError)) { <div class="alert alert-danger" style="font-size:12px;margin-bottom:8px;">@_payError</div> }
+                            @if (!string.IsNullOrEmpty(_payInfo)) { <div class="alert alert-success" style="font-size:12px;margin-bottom:8px;">@_payInfo</div> }
+
+                            <div class="field" style="display:flex;align-items:center;gap:10px;margin-bottom:12px;">
+                                <label class="ag-switch">
+                                    <input type="checkbox" checked="@_fPayEnabled" @onchange="e => _fPayEnabled = (bool)e.Value!" disabled="@_busy" />
+                                    <span class="ag-slider"></span>
+                                </label>
+                                <div style="font-weight:500;">@(_fPayEnabled ? "Generacion de link activada" : "Generacion de link desactivada")</div>
+                            </div>
+
+                            <div class="row" style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
+                                <div class="field">
+                                    <label class="form-label">User ID FUXION</label>
+                                    <input class="form-control" @bind="_fPayUserId" placeholder="ej. 3238" disabled="@_busy" />
+                                </div>
+                                <div class="field">
+                                    <label class="form-label">Pais (ISO2)</label>
+                                    <input class="form-control" @bind="_fPayCountry" placeholder="ej. pe / co" disabled="@_busy" />
+                                </div>
+                            </div>
+
+                            <div class="field" style="margin-top:10px;">
+                                <label class="form-label">Token Bearer (JWT)</label>
+                                <input class="form-control" type="password" @bind="_fPayNewToken" @bind:event="oninput" placeholder="@(_fPayTokenPresent ? "Token guardado. Escribe uno nuevo solo si quieres reemplazarlo." : "Pega aqui tu xcorptoken de app-aware.fuxion.com")" disabled="@_busy" />
+                                <div class="text-muted" style="font-size:11.5px;margin-top:4px;">
+                                    Copialo desde tu navegador con <code>localStorage.getItem('CapacitorStorage.xcorptoken')</code> en la consola de app-aware.fuxion.com.
+                                    Se cifra con DataProtection antes de guardar; no vuelve a aparecer en pantalla.
+                                    @if (_fPayTokenPresent)
+                                    {
+                                        <span> - <strong>Estado:</strong> guardado@(_fPayTokenExpiresAt is not null ? $", expira {_fPayTokenExpiresAt.Value:yyyy-MM-dd HH:mm}" : "")</span>
+                                    }
+                                </div>
+                            </div>
+
+                            <div style="border-top:1px solid var(--border);margin:14px 0 10px;padding-top:10px;">
+                                <div class="small" style="margin-bottom:6px;"><strong>Catalogo de productos (contenedor de datos)</strong></div>
+                                <div class="text-muted" style="font-size:11.5px;margin-bottom:8px;">
+                                    El agente traduce el nombre que emita el LLM (<code>REXET:2</code>) al <code>productId</code> de FUXION
+                                    consultando este contenedor. Debe tener al menos dos columnas: nombre y productId.
+                                </div>
+                                <div class="row" style="display:grid;grid-template-columns:2fr 1fr 1fr;gap:10px;">
+                                    <div class="field">
+                                        <label class="form-label">Nombre del contenedor</label>
+                                        <input class="form-control" @bind="_fPayContainer" placeholder="ej. productos_fuxion" disabled="@_busy" />
+                                    </div>
+                                    <div class="field">
+                                        <label class="form-label">Columna nombre</label>
+                                        <input class="form-control" @bind="_fPayNameCol" placeholder="nombre" disabled="@_busy" />
+                                    </div>
+                                    <div class="field">
+                                        <label class="form-label">Columna productId</label>
+                                        <input class="form-control" @bind="_fPayIdCol" placeholder="productId" disabled="@_busy" />
+                                    </div>
+                                </div>
+                            </div>
+
+                            <details style="margin-top:10px;">
+                                <summary class="small text-muted" style="cursor:pointer;">Avanzado (overrides del endpoint FUXION)</summary>
+                                <div class="text-muted" style="font-size:11.5px;margin:6px 0;">Solo tocar si FUXION cambia el contrato de la API. Vacio = usar defaults.</div>
+                                <div class="field" style="margin-bottom:6px;">
+                                    <label class="form-label">Base URL</label>
+                                    <input class="form-control" @bind="_fPayBaseUrl" placeholder="https://api-aware.fuxion.com" disabled="@_busy" />
+                                </div>
+                                <div class="field" style="margin-bottom:6px;">
+                                    <label class="form-label">Path template</label>
+                                    <input class="form-control" @bind="_fPayPath" placeholder="/api/products/user/{userId}/generate-power-link" disabled="@_busy" />
+                                </div>
+                                <div class="field">
+                                    <label class="form-label">JSON path del URL en la respuesta</label>
+                                    <input class="form-control" @bind="_fPayRespPath" placeholder="data.url" disabled="@_busy" />
+                                </div>
+                            </details>
+
+                            <div style="display:flex;gap:8px;margin-top:14px;">
+                                <button class="btn btn-primary" @onclick="SavePaymentConfigAsync" disabled="@_busy">Guardar configuracion</button>
+                            </div>
+                        </div>
+                    }
+                </div>
+                }
                </div>@* /ag-editor-left *@
 
                @if (_editId is not null)
@@ -975,6 +1077,69 @@ else
             .ToList();
     }
 
+    // ===== Pagos FUXION =====
+    private bool _paymentOpen;
+    private bool _fPayEnabled;
+    private string? _fPayUserId;
+    private string? _fPayCountry;
+    private bool _fPayTokenPresent;
+    private DateTimeOffset? _fPayTokenExpiresAt;
+    private DateTimeOffset? _fPayTokenLastVerifiedAt;
+    private string? _fPayNewToken; // solo mientras el operador escribe. Al Guardar se envia y se descarta.
+    private string? _fPayContainer;
+    private string? _fPayNameCol;
+    private string? _fPayIdCol;
+    private string? _fPayBaseUrl;
+    private string? _fPayPath;
+    private string? _fPayRespPath;
+    private string? _payError;
+    private string? _payInfo;
+
+    private string PaymentStatusLabel()
+    {
+        if (!_fPayEnabled) { return "Desactivado"; }
+        if (!_fPayTokenPresent) { return "Sin token"; }
+        if (_fPayTokenExpiresAt is DateTimeOffset exp)
+        {
+            var remaining = exp - DateTimeOffset.UtcNow;
+            if (remaining < TimeSpan.Zero) { return "Token expirado"; }
+            if (remaining < TimeSpan.FromDays(1)) { return $"Expira en {(int)remaining.TotalHours}h"; }
+            return $"Expira en {(int)remaining.TotalDays}d";
+        }
+        return "Activo";
+    }
+
+    private async Task SavePaymentConfigAsync()
+    {
+        _payError = null; _payInfo = null;
+        if (_editId is null) { return; }
+        _busy = true;
+        try
+        {
+            var actor = await ActorAsync();
+            var req = new SetAgentPaymentConfigRequest(
+                Enabled: _fPayEnabled,
+                UserId: _fPayUserId,
+                Country: _fPayCountry,
+                NewToken: _fPayNewToken,   // null si no se toco -> no cambia el guardado
+                CatalogContainerName: _fPayContainer,
+                CatalogNameColumn: _fPayNameCol,
+                CatalogProductIdColumn: _fPayIdCol,
+                ApiBaseUrl: _fPayBaseUrl,
+                ApiPathTemplate: _fPayPath,
+                ResponseUrlPath: _fPayRespPath);
+            var result = await AgentsSvc.SetPaymentConfigAsync(_editId.Value, req, actor);
+            if (result is null) { _payError = "No se pudo guardar la configuracion."; return; }
+            _fPayTokenPresent = result.TokenPresent;
+            _fPayTokenExpiresAt = result.TokenExpiresAt;
+            _fPayTokenLastVerifiedAt = result.TokenLastVerifiedAt;
+            _fPayNewToken = null; // limpiar el input tras guardar
+            _payInfo = "Configuracion guardada.";
+        }
+        catch (Exception ex) { _payError = "Error: " + ex.Message; }
+        finally { _busy = false; }
+    }
+
     // Estado de bindings (lineas WhatsApp atendidas por el agente que se esta editando).
     private List<AgentLineBindingRowDto> _bindings = new();
     private string? _bindingsError;
@@ -1076,6 +1241,13 @@ else
         _fReactionM = 4;
         _fReactionEmojis = null;
         _reactionsOpen = false;
+        _paymentOpen = false;
+        _fPayEnabled = false; _fPayUserId = null; _fPayCountry = null;
+        _fPayTokenPresent = false; _fPayTokenExpiresAt = null; _fPayTokenLastVerifiedAt = null;
+        _fPayNewToken = null;
+        _fPayContainer = null; _fPayNameCol = null; _fPayIdCol = null;
+        _fPayBaseUrl = null; _fPayPath = null; _fPayRespPath = null;
+        _payError = null; _payInfo = null;
         _resources = new();
         _cacheFields = new();
         _cacheValues = new();
@@ -1115,6 +1287,22 @@ else
         _fReactionN = detail.Agent.ReactionRatioN;
         _fReactionM = detail.Agent.ReactionRatioM <= 0 ? 4 : detail.Agent.ReactionRatioM;
         _fReactionEmojis = detail.Agent.ReactionEmojis;
+        // Pagos FUXION - cargar desde detail.PaymentConfig (nunca el token descifrado).
+        var pc = detail.PaymentConfig;
+        _fPayEnabled = pc?.Enabled ?? false;
+        _fPayUserId = pc?.UserId;
+        _fPayCountry = pc?.Country;
+        _fPayTokenPresent = pc?.TokenPresent ?? false;
+        _fPayTokenExpiresAt = pc?.TokenExpiresAt;
+        _fPayTokenLastVerifiedAt = pc?.TokenLastVerifiedAt;
+        _fPayNewToken = null;
+        _fPayContainer = pc?.CatalogContainerName;
+        _fPayNameCol = pc?.CatalogNameColumn;
+        _fPayIdCol = pc?.CatalogProductIdColumn;
+        _fPayBaseUrl = pc?.ApiBaseUrl;
+        _fPayPath = pc?.ApiPathTemplate;
+        _fPayRespPath = pc?.ResponseUrlPath;
+        _payError = null; _payInfo = null;
         _resources = detail.Resources.ToList();
         _prompts = detail.Prompts.ToList();
         await ReloadCacheAsync(id);
@@ -1123,6 +1311,7 @@ else
         _resourcesOpen = false;
         _bindingsOpen = false;
         _reactionsOpen = false;
+        _paymentOpen = false;
         _perceivedModalOpen = false;
         ResetTest();
         _editorOpen = true;

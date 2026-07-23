@@ -49,5 +49,49 @@ public class AiAgent : TenantEntity
     /// <summary>Emojis para reaccionar al azar, separados por coma. Configurable por UI.</summary>
     public string? ReactionEmojis { get; set; }
 
+    // ===== Integracion con FUXION AWARE (generacion de sales-links / power-links) =====
+    // El agente puede generar un link de pago llamando al API interno de app-aware.fuxion.com
+    // cuando el LLM emite el marker [[link_pago: NOMBRE:qty, ...]]. Ver ADR pendiente sobre
+    // integracion no-oficial: FUXION no expone API publica, se usa el endpoint interno del SPA.
+
+    /// <summary>Feature flag: habilita la generacion de sales-links en respuestas del agente.</summary>
+    public bool PaymentEnabled { get; set; }
+
+    /// <summary>ID del distribuidor en FUXION AWARE (aparece en la URL de la API, ej. 3238).</summary>
+    public string? PaymentUserId { get; set; }
+
+    /// <summary>Codigo ISO2 lowercase del pais del catalogo (pe, co, mx, ...).</summary>
+    public string? PaymentCountry { get; set; }
+
+    /// <summary>Token Bearer JWT cifrado con DataProtection (string ciphertext). NUNCA loggear,
+    /// NUNCA mostrar en UI. Misma convencion que SocialAccount.AccessTokenEncrypted.</summary>
+    public string? PaymentTokenEncrypted { get; set; }
+
+    /// <summary>Fecha de expiracion del JWT (parseado de la claim exp al guardar). UI muestra "expira en X".</summary>
+    public DateTimeOffset? PaymentTokenExpiresAt { get; set; }
+
+    /// <summary>Ultima verify-session exitosa. Null si nunca se verifico o si el ultimo intento fallo.</summary>
+    public DateTimeOffset? PaymentTokenLastVerifiedAt { get; set; }
+
+    /// <summary>Nombre del DataContainer del tenant que contiene el catalogo de productos.</summary>
+    public string? PaymentCatalogContainerName { get; set; }
+
+    /// <summary>Columna del contenedor con el nombre del producto (default "nombre").</summary>
+    public string? PaymentCatalogNameColumn { get; set; }
+
+    /// <summary>Columna del contenedor con el productId de FUXION (default "productId").</summary>
+    public string? PaymentCatalogProductIdColumn { get; set; }
+
+    // Overrides opcionales para tolerar cambios de FUXION sin redeploy:
+
+    /// <summary>Base URL de la API (default https://api-aware.fuxion.com).</summary>
+    public string? PaymentApiBaseUrl { get; set; }
+
+    /// <summary>Path template del endpoint (default /api/products/user/{userId}/generate-power-link).</summary>
+    public string? PaymentApiPathTemplate { get; set; }
+
+    /// <summary>JSON path para extraer la URL de la respuesta (default data.url).</summary>
+    public string? PaymentResponseUrlPath { get; set; }
+
     public int SortOrder { get; set; }
 }

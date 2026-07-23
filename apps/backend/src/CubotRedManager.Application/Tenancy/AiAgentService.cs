@@ -12,12 +12,14 @@ public sealed class AiAgentService : IAiAgentService
     private readonly IApplicationDbContext _db;
     private readonly ITenantContext _tenantContext;
     private readonly IAuditWriter _audit;
+    private readonly ISecretProtector _protector;
 
-    public AiAgentService(IApplicationDbContext db, ITenantContext tenantContext, IAuditWriter audit)
+    public AiAgentService(IApplicationDbContext db, ITenantContext tenantContext, IAuditWriter audit, ISecretProtector protector)
     {
         _db = db;
         _tenantContext = tenantContext;
         _audit = audit;
+        _protector = protector;
     }
 
     public async Task<IReadOnlyList<AiAgentDto>> ListAsync(CancellationToken cancellationToken = default)
@@ -50,7 +52,20 @@ public sealed class AiAgentService : IAiAgentService
             .OrderBy(p => p.SortOrder)
             .Select(p => new AiAgentPromptDto(p.Id, p.AgentId, p.Name, p.Rule, p.Body, p.SortOrder))
             .ToListAsync(cancellationToken);
-        return new AiAgentDetailDto(Map(agent, resources.Count), resources, prompts);
+        var payment = new AgentPaymentConfigDto(
+            Enabled: agent.PaymentEnabled,
+            UserId: agent.PaymentUserId,
+            Country: agent.PaymentCountry,
+            TokenPresent: !string.IsNullOrEmpty(agent.PaymentTokenEncrypted),
+            TokenExpiresAt: agent.PaymentTokenExpiresAt,
+            TokenLastVerifiedAt: agent.PaymentTokenLastVerifiedAt,
+            CatalogContainerName: agent.PaymentCatalogContainerName,
+            CatalogNameColumn: agent.PaymentCatalogNameColumn,
+            CatalogProductIdColumn: agent.PaymentCatalogProductIdColumn,
+            ApiBaseUrl: agent.PaymentApiBaseUrl,
+            ApiPathTemplate: agent.PaymentApiPathTemplate,
+            ResponseUrlPath: agent.PaymentResponseUrlPath);
+        return new AiAgentDetailDto(Map(agent, resources.Count), resources, prompts, payment);
     }
 
     public async Task<AiAgentDto?> CreateAsync(CreateAiAgentRequest request, Guid actorUserId, CancellationToken cancellationToken = default)
@@ -387,6 +402,104 @@ public sealed class AiAgentService : IAiAgentService
 
     private static AiAgentPromptDto MapPrompt(AiAgentPrompt p) =>
         new(p.Id, p.AgentId, p.Name, p.Rule, p.Body, p.SortOrder);
+
+    // ===== Pagos FUXION =====
+
+    public async Task<AgentPaymentConfigDto?> SetPaymentConfigAsync(Guid agentId, SetAgentPaymentConfigRequest request, Guid actorUserId, CancellationToken cancellationToken = default)
+    {
+        var agent = await _db.AiAgents.FirstOrDefaultAsync(a => a.Id == agentId, cancellationToken);
+        if (agent is null) { return null; }
+
+        agent.PaymentEnabled = request.Enabled;
+        agent.PaymentUserId = Trim(request.UserId);
+        agent.PaymentCountry = Trim(request.Country)?.ToLowerInvariant();
+        agent.PaymentCatalogContainerName = Trim(request.CatalogContainerName);
+        agent.PaymentCatalogNameColumn = Trim(request.CatalogNameColumn);
+        agent.PaymentCatalogProductIdColumn = Trim(request.CatalogProductIdColumn);
+        agent.PaymentApiBaseUrl = Trim(request.ApiBaseUrl);
+        agent.PaymentApiPathTemplate = Trim(request.ApiPathTemplate);
+        agent.PaymentResponseUrlPath = Trim(request.ResponseUrlPath);
+
+        // Token: null=no tocar, ""=borrar, otro=reemplazar
+        if (request.NewToken is not null)
+        {
+            var t = request.NewToken.Trim();
+            if (t.Length == 0)
+            {
+                agent.PaymentTokenEncrypted = null;
+                agent.PaymentTokenExpiresAt = null;
+                agent.PaymentTokenLastVerifiedAt = null;
+            }
+            else
+            {
+                agent.PaymentTokenEncrypted = _protector.Protect(t);
+                agent.PaymentTokenExpiresAt = TryReadJwtExpiration(t);
+                agent.PaymentTokenLastVerifiedAt = null; // se marca en la primera verify-session exitosa
+            }
+        }
+
+        // Auditoria SIN el token: solo cambios de metadata visible.
+        _audit.Write(actorUserId, "ai-agent.payment-config.set", nameof(AiAgent), agent.Id,
+            previousValue: null,
+            newValue: new
+            {
+                agent.PaymentEnabled, agent.PaymentUserId, agent.PaymentCountry,
+                TokenPresent = agent.PaymentTokenEncrypted is not null,
+                agent.PaymentTokenExpiresAt,
+                agent.PaymentCatalogContainerName, agent.PaymentCatalogNameColumn, agent.PaymentCatalogProductIdColumn
+            },
+            tenantId: agent.TenantId);
+        await _db.SaveChangesAsync(cancellationToken);
+
+        return new AgentPaymentConfigDto(
+            Enabled: agent.PaymentEnabled,
+            UserId: agent.PaymentUserId,
+            Country: agent.PaymentCountry,
+            TokenPresent: !string.IsNullOrEmpty(agent.PaymentTokenEncrypted),
+            TokenExpiresAt: agent.PaymentTokenExpiresAt,
+            TokenLastVerifiedAt: agent.PaymentTokenLastVerifiedAt,
+            CatalogContainerName: agent.PaymentCatalogContainerName,
+            CatalogNameColumn: agent.PaymentCatalogNameColumn,
+            CatalogProductIdColumn: agent.PaymentCatalogProductIdColumn,
+            ApiBaseUrl: agent.PaymentApiBaseUrl,
+            ApiPathTemplate: agent.PaymentApiPathTemplate,
+            ResponseUrlPath: agent.PaymentResponseUrlPath);
+    }
+
+    public async Task<string?> GetDecryptedPaymentTokenAsync(Guid agentId, CancellationToken cancellationToken = default)
+    {
+        var ciphertext = await _db.AiAgents.AsNoTracking()
+            .Where(a => a.Id == agentId)
+            .Select(a => a.PaymentTokenEncrypted)
+            .FirstOrDefaultAsync(cancellationToken);
+        if (string.IsNullOrEmpty(ciphertext)) { return null; }
+        try { return _protector.Unprotect(ciphertext); }
+        catch { return null; } // Llave DataProtection rotada o token corrupto: tratar como ausente.
+    }
+
+    private static string? Trim(string? s)
+        => string.IsNullOrWhiteSpace(s) ? null : s.Trim();
+
+    /// <summary>Parsea la claim "exp" (unix seconds) del JWT sin validar firma. Solo se usa para
+    /// mostrar "expira en X" en la UI y para alertas proactivas; la validez real la determina la
+    /// API de FUXION al usar el token. Devuelve null si el token no es JWT o no tiene exp.</summary>
+    private static DateTimeOffset? TryReadJwtExpiration(string token)
+    {
+        try
+        {
+            var parts = token.Split('.');
+            if (parts.Length != 3) { return null; }
+            var payload = parts[1];
+            // base64url -> base64
+            var padded = payload.Replace('-', '+').Replace('_', '/');
+            switch (padded.Length % 4) { case 2: padded += "=="; break; case 3: padded += "="; break; }
+            var json = Encoding.UTF8.GetString(Convert.FromBase64String(padded));
+            using var doc = JsonDocument.Parse(json);
+            if (!doc.RootElement.TryGetProperty("exp", out var exp)) { return null; }
+            return DateTimeOffset.FromUnixTimeSeconds(exp.GetInt64());
+        }
+        catch { return null; }
+    }
 }
 
 // --- Schema del JSON export/import (v1) ---

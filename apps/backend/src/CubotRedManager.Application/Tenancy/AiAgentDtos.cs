@@ -30,10 +30,44 @@ public sealed record AiAgentResourceDto(
 
 public sealed record AiAgentPromptDto(Guid Id, Guid AgentId, string Name, string? Rule, string Body, int SortOrder);
 
-public sealed record AiAgentDetailDto(AiAgentDto Agent, IReadOnlyList<AiAgentResourceDto> Resources, IReadOnlyList<AiAgentPromptDto> Prompts);
+public sealed record AiAgentDetailDto(AiAgentDto Agent, IReadOnlyList<AiAgentResourceDto> Resources, IReadOnlyList<AiAgentPromptDto> Prompts, AgentPaymentConfigDto? PaymentConfig = null);
 
 public sealed record CreateAiAgentRequest(string Name, string? Role, AiProvider Provider, string? Model, string SystemPrompt, bool EnableDataContainerMcp = false, bool ReactionsEnabled = false, int ReactionRatioN = 3, int ReactionRatioM = 4, string? ReactionEmojis = null);
 public sealed record UpdateAiAgentRequest(string Name, string? Role, AiProvider Provider, string? Model, string SystemPrompt, bool EnableDataContainerMcp = false, bool ReactionsEnabled = false, int ReactionRatioN = 3, int ReactionRatioM = 4, string? ReactionEmojis = null);
+
+// --- Configuracion de pagos FUXION (capa 3.5 - integracion externa) ---
+// El TokenPresent es bool porque JAMAS se expone el token descifrado al cliente. Para saber si
+// hay token guardado la UI mira este flag. Para renovarlo, el operador escribe uno nuevo que
+// se cifra al guardarlo (SetAgentPaymentConfigRequest.NewToken).
+public sealed record AgentPaymentConfigDto(
+    bool Enabled,
+    string? UserId,
+    string? Country,
+    bool TokenPresent,
+    DateTimeOffset? TokenExpiresAt,
+    DateTimeOffset? TokenLastVerifiedAt,
+    string? CatalogContainerName,
+    string? CatalogNameColumn,
+    string? CatalogProductIdColumn,
+    string? ApiBaseUrl,
+    string? ApiPathTemplate,
+    string? ResponseUrlPath);
+
+// NewToken:
+//   null -> no tocar el token guardado (usuario solo edita otros campos).
+//   ""   -> BORRAR el token guardado (usuario limpia la config).
+//   otro -> reemplazar con este nuevo token; se cifra al guardar y se parsea su exp.
+public sealed record SetAgentPaymentConfigRequest(
+    bool Enabled,
+    string? UserId,
+    string? Country,
+    string? NewToken,
+    string? CatalogContainerName,
+    string? CatalogNameColumn,
+    string? CatalogProductIdColumn,
+    string? ApiBaseUrl,
+    string? ApiPathTemplate,
+    string? ResponseUrlPath);
 
 public sealed record CreateAgentResourceRequest(Guid AgentId, string Name, AgentResourceType ResourceType, string? Detail, string? FileUrl, string? FileName, byte[]? FileContent = null, string? FileMimeType = null);
 public sealed record UpdateAgentResourceRequest(string Name, AgentResourceType ResourceType, string? Detail, string? FileUrl, string? FileName, byte[]? FileContent = null, string? FileMimeType = null, bool ClearFile = false);
