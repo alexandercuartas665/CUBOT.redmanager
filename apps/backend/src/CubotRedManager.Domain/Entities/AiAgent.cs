@@ -73,6 +73,11 @@ public class AiAgent : TenantEntity
     /// <summary>Ultima verify-session exitosa. Null si nunca se verifico o si el ultimo intento fallo.</summary>
     public DateTimeOffset? PaymentTokenLastVerifiedAt { get; set; }
 
+    /// <summary>Ultima vez que se notifico al operador (via TenantAlertConfig) que el token esta
+    /// por expirar o fue rechazado. Sirve para no spammear: el worker no re-notifica si esto es
+    /// dentro de las ultimas 24h. Se resetea automaticamente al guardar un token nuevo.</summary>
+    public DateTimeOffset? PaymentTokenExpiryNotifiedAt { get; set; }
+
     /// <summary>Nombre del DataContainer del tenant que contiene el catalogo de productos.</summary>
     public string? PaymentCatalogContainerName { get; set; }
 

@@ -429,12 +429,16 @@ public sealed class AiAgentService : IAiAgentService
                 agent.PaymentTokenEncrypted = null;
                 agent.PaymentTokenExpiresAt = null;
                 agent.PaymentTokenLastVerifiedAt = null;
+                agent.PaymentTokenExpiryNotifiedAt = null;
             }
             else
             {
                 agent.PaymentTokenEncrypted = _protector.Protect(t);
                 agent.PaymentTokenExpiresAt = TryReadJwtExpiration(t);
                 agent.PaymentTokenLastVerifiedAt = null; // se marca en la primera verify-session exitosa
+                // Token nuevo -> resetear dedupe de alertas para que la proxima vez que este
+                // por expirar el worker vuelva a avisar (en vez de callarse por el flag viejo).
+                agent.PaymentTokenExpiryNotifiedAt = null;
             }
         }
 

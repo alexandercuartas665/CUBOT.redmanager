@@ -57,33 +57,51 @@ public sealed class FuxionPaymentClient : IFuxionPaymentClient
             items = req.Items.Select(i => new { itemId = i.ItemId, amount = i.Amount }).ToArray()
         };
         var json = JsonSerializer.Serialize(payload);
-        using var body = new StringContent(json, Encoding.UTF8, "application/json");
 
-        using var httpReq = new HttpRequestMessage(HttpMethod.Post, fullUrl);
-        httpReq.Content = body;
+        // Retry con backoff exponencial para errores transitorios (red / timeout / 5xx / 429).
+        // Errores logicos (400, 401, 403) NO se reintentan: son deterministas al mismo request.
         // El token va SOLO en el header. Nunca en logs, nunca en URL, nunca en el body.
-        httpReq.Headers.Authorization = new AuthenticationHeaderValue("Bearer", req.BearerToken);
-        httpReq.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
-
-        HttpResponseMessage resp;
-        try
-        {
-            resp = await _http.SendAsync(httpReq, cancellationToken);
-        }
-        catch (TaskCanceledException) when (!cancellationToken.IsCancellationRequested)
-        {
-            _logger.LogWarning("FuxionPayment: timeout llamando {Url}", fullUrl);
-            return FuxionGenerateLinkResult.Failure(FuxionGenerateLinkErrorKind.ServerError, "timeout llamando al API de FUXION.");
-        }
-        catch (HttpRequestException ex)
-        {
-            _logger.LogWarning(ex, "FuxionPayment: fallo de red llamando {Url}", fullUrl);
-            return FuxionGenerateLinkResult.Failure(FuxionGenerateLinkErrorKind.ServerError, $"error de red: {ex.Message}");
-        }
-
-        var status = (int)resp.StatusCode;
+        int status = 0;
         string respBody = "";
-        try { respBody = await resp.Content.ReadAsStringAsync(cancellationToken); } catch { /* body opcional */ }
+        var backoffs = new[] { TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(3) };
+        for (var attempt = 0; ; attempt++)
+        {
+            // Cada intento requiere una request nueva; HttpRequestMessage no es reusable tras SendAsync.
+            using var attemptReq = new HttpRequestMessage(HttpMethod.Post, fullUrl) { Content = new StringContent(json, Encoding.UTF8, "application/json") };
+            attemptReq.Headers.Authorization = new AuthenticationHeaderValue("Bearer", req.BearerToken);
+            attemptReq.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
+            try
+            {
+                using (var resp = await _http.SendAsync(attemptReq, cancellationToken))
+                {
+                    status = (int)resp.StatusCode;
+                    try { respBody = await resp.Content.ReadAsStringAsync(cancellationToken); } catch { /* body opcional */ }
+                }
+                var transient = status >= 500 || status == 429 || status == (int)HttpStatusCode.RequestTimeout;
+                if (!transient) { break; }
+                if (attempt >= backoffs.Length) { break; }
+                _logger.LogInformation("FuxionPayment: retry {Attempt} tras {Status} (backoff {Delay}s)", attempt + 1, status, backoffs[attempt].TotalSeconds);
+                await Task.Delay(backoffs[attempt], cancellationToken);
+            }
+            catch (TaskCanceledException) when (!cancellationToken.IsCancellationRequested)
+            {
+                if (attempt >= backoffs.Length)
+                {
+                    _logger.LogWarning("FuxionPayment: timeout tras {Attempts} intentos {Url}", attempt + 1, fullUrl);
+                    return FuxionGenerateLinkResult.Failure(FuxionGenerateLinkErrorKind.ServerError, "timeout llamando al API de FUXION.");
+                }
+                await Task.Delay(backoffs[attempt], cancellationToken);
+            }
+            catch (HttpRequestException ex)
+            {
+                if (attempt >= backoffs.Length)
+                {
+                    _logger.LogWarning(ex, "FuxionPayment: fallo de red tras {Attempts} intentos {Url}", attempt + 1, fullUrl);
+                    return FuxionGenerateLinkResult.Failure(FuxionGenerateLinkErrorKind.ServerError, $"error de red: {ex.Message}");
+                }
+                await Task.Delay(backoffs[attempt], cancellationToken);
+            }
+        }
 
         if (status == 401 || status == 403)
         {
@@ -143,4 +161,35 @@ public sealed class FuxionPaymentClient : IFuxionPaymentClient
 
     private static string TruncateForLog(string s, int max = 500)
         => string.IsNullOrEmpty(s) ? "" : (s.Length > max ? s.Substring(0, max) + "..." : s);
+
+    public async Task<FuxionVerifySessionResult> VerifySessionAsync(string baseUrl, string bearerToken, CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(baseUrl) || string.IsNullOrWhiteSpace(bearerToken))
+        {
+            return new FuxionVerifySessionResult(FuxionVerifySessionOutcome.Rejected, null, "config incompleta");
+        }
+        var url = baseUrl.TrimEnd('/') + "/api/auth/user/verify-session";
+        using var req = new HttpRequestMessage(HttpMethod.Post, url);
+        req.Headers.Authorization = new AuthenticationHeaderValue("Bearer", bearerToken);
+        req.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
+        try
+        {
+            using var resp = await _http.SendAsync(req, cancellationToken);
+            var status = (int)resp.StatusCode;
+            if (status == 401 || status == 403)
+            {
+                return new FuxionVerifySessionResult(FuxionVerifySessionOutcome.Rejected, status, "token rechazado");
+            }
+            if (status >= 200 && status < 300)
+            {
+                return new FuxionVerifySessionResult(FuxionVerifySessionOutcome.Valid, status, null);
+            }
+            return new FuxionVerifySessionResult(FuxionVerifySessionOutcome.Unreachable, status, $"HTTP {status}");
+        }
+        catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException)
+        {
+            _logger.LogInformation("FuxionPayment.VerifySession: red/timeout {Msg}", ex.Message);
+            return new FuxionVerifySessionResult(FuxionVerifySessionOutcome.Unreachable, null, ex.Message);
+        }
+    }
 }

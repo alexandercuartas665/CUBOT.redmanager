@@ -54,6 +54,18 @@ var arOpts = builder.Configuration.GetSection("AutoReply").Get<CubotRedManager.W
 builder.Services.AddSingleton(arOpts);
 builder.Services.AddHostedService<CubotRedManager.Web.BackgroundJobs.AutoReplyWorker>();
 
+// FuxionPaymentMaintenance (Fase 3 pagos). Cada CheckInterval (4h) verifica el token FUXION de
+// cada agente con Payment habilitado via /api/auth/user/verify-session y notifica al operador via
+// TenantAlertConfig cuando el token esta por expirar o fue rechazado. Sin este worker, el user
+// solo se entera de un token muerto cuando un cliente ya intento pagar y recibio el fallback.
+var fxOpts = builder.Configuration.GetSection("FuxionPaymentMaintenance").Get<CubotRedManager.Web.BackgroundJobs.FuxionPaymentMaintenanceOptions>()
+             ?? new CubotRedManager.Web.BackgroundJobs.FuxionPaymentMaintenanceOptions();
+builder.Services.AddSingleton(fxOpts);
+if (fxOpts.Enabled)
+{
+    builder.Services.AddHostedService<CubotRedManager.Web.BackgroundJobs.FuxionPaymentMaintenanceWorker>();
+}
+
 // AgentDispatchQueue: procesador en background del agente IA. Se registra como singleton triple
 // (patron travels) para que el mismo objeto sea IAgentDispatchQueue (donde el ChatIngestService
 // encola) y BackgroundService (donde .NET lo levanta como hosted service).

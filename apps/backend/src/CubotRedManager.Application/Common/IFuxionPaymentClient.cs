@@ -14,6 +14,11 @@ public interface IFuxionPaymentClient
     /// <summary>Llama POST /api/products/user/{userId}/generate-power-link y devuelve la URL
     /// del sales-link generado, o un error tipificado. Nunca lanza excepciones al caller.</summary>
     Task<FuxionGenerateLinkResult> GenerateSalesLinkAsync(FuxionGenerateLinkRequest request, CancellationToken cancellationToken = default);
+
+    /// <summary>Llama POST /api/auth/user/verify-session con el Bearer token y devuelve si el
+    /// token esta vivo (2xx) o rechazado (401/403). Usado por el worker de vigilancia para
+    /// detectar tokens caducados antes de que un cliente intente pagar. No lanza excepciones.</summary>
+    Task<FuxionVerifySessionResult> VerifySessionAsync(string baseUrl, string bearerToken, CancellationToken cancellationToken = default);
 }
 
 public sealed record FuxionSalesLinkItem(string ItemId, int Amount);
@@ -49,3 +54,15 @@ public sealed record FuxionGenerateLinkResult(
     public static FuxionGenerateLinkResult Failure(FuxionGenerateLinkErrorKind kind, string? detail, int? status = null) =>
         new(false, null, kind, detail, status);
 }
+
+public enum FuxionVerifySessionOutcome
+{
+    Valid = 0,       // 2xx - token vivo
+    Rejected = 1,    // 401/403 - token invalido o expirado
+    Unreachable = 2  // red, timeout, 5xx - no se pudo determinar
+}
+
+public sealed record FuxionVerifySessionResult(
+    FuxionVerifySessionOutcome Outcome,
+    int? HttpStatus,
+    string? ErrorDetail);
