@@ -359,7 +359,7 @@ public sealed class AgentDispatcher : IAgentDispatcher
             var a = atts[ai];
             try
             {
-                var ok = await SendAttachmentAsync(whatsAppLineId.Value, conv.ContactPhone, tenantId, conversationId, a, cancellationToken);
+                var ok = await SendAttachmentAsync(whatsAppLineId.Value, conv.ContactPhone, tenantId, conversationId, binding.AgentId, a, cancellationToken);
                 if (ok) { attachmentsSent++; } else { attachmentsFailed++; }
             }
             catch { attachmentsFailed++; }
@@ -477,8 +477,25 @@ public sealed class AgentDispatcher : IAgentDispatcher
         {
             var emojis = (emojiCsv ?? string.Empty)
                 .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-            if (emojis.Length == 0) { return; }
-            if (ratioM <= 0 || ratioN <= 0) { return; }
+            if (emojis.Length == 0)
+            {
+                // Loggeamos a bitacora para que el operador vea POR QUE no reaccionamos.
+                // Sin esto, el toggle "activo" + stack vacio era silencioso y no habia forma
+                // de saber que faltaba llenar el stack de emojis en /agentes.
+                await LogRunAsync(tenantId, conversationId, agentId, AiAgentRunLogKind.Info,
+                    "Reacciones: stack de emojis vacio",
+                    "Reacciones estan activadas pero no hay emojis en el stack. Agrega al menos uno en /agentes -> Reacciones -> Stack de emojis.",
+                    null, ct);
+                return;
+            }
+            if (ratioM <= 0 || ratioN <= 0)
+            {
+                await LogRunAsync(tenantId, conversationId, agentId, AiAgentRunLogKind.Info,
+                    "Reacciones: ratio invalido",
+                    $"Ratio N/M actual = {ratioN}/{ratioM}. Debe ser N>=1 y M>=1. Ajusta la frecuencia en /agentes -> Reacciones.",
+                    null, ct);
+                return;
+            }
             if (ratioN < ratioM && Random.Shared.Next(ratioM) >= ratioN) { return; }
 
             var lastInbound = await _db.Messages
@@ -488,7 +505,17 @@ public sealed class AgentDispatcher : IAgentDispatcher
                          && m.ExternalId != null && m.Reaction == null)
                 .OrderByDescending(m => m.SentAt)
                 .FirstOrDefaultAsync(ct);
-            if (lastInbound is null || string.IsNullOrWhiteSpace(lastInbound.ExternalId)) { return; }
+            if (lastInbound is null || string.IsNullOrWhiteSpace(lastInbound.ExternalId))
+            {
+                // Este caso pasa cuando el mensaje entrante aun no se persistio en Messages
+                // (rare, race con ChatIngestService) o cuando el ExternalId de Evolution vino
+                // vacio. Loggeamos solo si Reactions esta activo pero no llegamos ni al POST.
+                await LogRunAsync(tenantId, conversationId, agentId, AiAgentRunLogKind.Info,
+                    "Reacciones: sin mensaje inbound al que reaccionar",
+                    "No se encontro un mensaje entrante con ExternalId sin reaccion. Puede ser normal si el mensaje del cliente vino por otra via.",
+                    null, ct);
+                return;
+            }
 
             var emoji = emojis[Random.Shared.Next(emojis.Length)];
             var res = await _connector.SendReactionAsync(lineId, phone, lastInbound.ExternalId!, emoji, ct);
@@ -655,7 +682,7 @@ public sealed class AgentDispatcher : IAgentDispatcher
     }
 
     private async Task<bool> SendAttachmentAsync(
-        Guid lineId, string phone, Guid tenantId, Guid conversationId,
+        Guid lineId, string phone, Guid tenantId, Guid conversationId, Guid agentId,
         AiChatAttachment a, CancellationToken ct)
     {
         if (a.ResourceType == AgentResourceType.Text)
@@ -689,7 +716,19 @@ public sealed class AgentDispatcher : IAgentDispatcher
         }
 
         var media = await _mediaReader.TryReadAsync(a.FileUrl, ct);
-        if (media is null) { return false; }
+        if (media is null)
+        {
+            // Log a bitacora para que el operador sepa POR QUE no se envio el adjunto. Sin esto,
+            // el user veia el texto llegar y el marker consumido pero la imagen nunca aparecia,
+            // sin explicacion visible. Causa mas comun: recurso subido antes del fix de bytea
+            // (FileUrl apunta a /uploads/agents/* del filesystem efimero de Railway, que ya no
+            // existe). Solucion: re-subir el archivo en /agentes -> Recursos.
+            await LogRunAsync(tenantId, conversationId, agentId, AiAgentRunLogKind.Error,
+                "Adjunto no enviado: binario no accesible",
+                $"Recurso '{a.Name}' (FileUrl='{a.FileUrl ?? "(null)"}'). El binario no se pudo leer. Si el URL empieza con /uploads/, re-sube el archivo en /agentes -> Recursos para que quede guardado en la BD.",
+                null, ct);
+            return false;
+        }
 
         var mt = a.ResourceType switch
         {
