@@ -1,0 +1,244 @@
+@page "/cuenta/tokens-api"
+@attribute [Microsoft.AspNetCore.Authorization.Authorize(Policy = AppPolicies.TenantMember)]
+@rendermode @(new InteractiveServerRenderMode(prerender: false))
+@using System.Security.Claims
+@using Microsoft.AspNetCore.Components.Authorization
+@using CubotRedManager.Application.Tenancy
+@using CubotRedManager.Web.Authorization
+@inject IApiTokenService TokensSvc
+@inject AuthenticationStateProvider AuthProvider
+@inject IJSRuntime JS
+
+<PageTitle>Tokens de API - CUBOT.redmanager</PageTitle>
+
+<div class="module-head">
+    <div>
+        <div class="module-eyebrow">
+            <div class="module-icon">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 2l-2 2m-7.61 7.61a5.5 5.5 0 1 1-7.778 7.778 5.5 5.5 0 0 1 7.777-7.777zm0 0L15.5 7.5m0 0l3 3L22 7l-3-3m-3.5 3.5L19 4"/></svg>
+            </div>
+            <span>Mi agencia</span>
+        </div>
+        <h1 class="page-title" style="margin-top:12px;">Tokens de API</h1>
+        <p class="page-sub" style="margin-bottom:0;">Emite tokens opacos para consumir la API REST de tu tenant desde scripts o integraciones. Cada token se muestra <strong>una sola vez</strong>; guardalo apenas se genere.</p>
+    </div>
+</div>
+
+@if (_loading)
+{
+    <p><em>Cargando...</em></p>
+}
+else
+{
+    <div class="card" style="max-width:900px;padding:22px 24px;margin-bottom:16px;">
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:12px;">
+            <div>
+                <div class="wlbl">Nuevo token</div>
+                <div class="text-muted" style="font-size:12px;">Elige un nombre descriptivo y la duracion. Se generara y mostrara una vez.</div>
+            </div>
+            <button class="btn btn-primary" @onclick="OpenCreate" disabled="@_busy">Generar token</button>
+        </div>
+
+        @if (!string.IsNullOrEmpty(_lastError))
+        {
+            <div class="alert alert-danger" style="font-size:13px;">@_lastError</div>
+        }
+
+        @if (_tokens.Count == 0)
+        {
+            <div class="text-muted" style="font-size:13px;">Aun no hay tokens emitidos. Genera el primero con el boton de arriba.</div>
+        }
+        else
+        {
+            <table class="table table-sm" style="margin-bottom:0;">
+                <thead>
+                    <tr>
+                        <th>Nombre</th>
+                        <th>Prefijo</th>
+                        <th>Creado</th>
+                        <th>Expira</th>
+                        <th>Ultimo uso</th>
+                        <th>Estado</th>
+                        <th></th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @foreach (var t in _tokens)
+                    {
+                        <tr class="@(t.Revoked ? "text-muted" : "")">
+                            <td>@t.Label</td>
+                            <td style="font-family:monospace;font-size:12px;">@t.Prefix<span class="text-muted">...</span></td>
+                            <td style="font-size:12px;">@t.CreatedAt.LocalDateTime.ToString("yyyy-MM-dd HH:mm")</td>
+                            <td style="font-size:12px;">@t.ExpiresAt.LocalDateTime.ToString("yyyy-MM-dd HH:mm")</td>
+                            <td style="font-size:12px;">@(t.LastUsedAt?.LocalDateTime.ToString("yyyy-MM-dd HH:mm") ?? "-")</td>
+                            <td>
+                                @if (t.Revoked)
+                                {
+                                    <span class="badge bg-secondary">Revocado</span>
+                                }
+                                else
+                                {
+                                    <span class="badge bg-success">Activo</span>
+                                }
+                            </td>
+                            <td class="text-end">
+                                @if (!t.Revoked)
+                                {
+                                    <button class="btn btn-sm btn-outline-danger" @onclick="() => RevokeAsync(t.Id)" disabled="@_busy">Revocar</button>
+                                }
+                            </td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        }
+    </div>
+}
+
+@* ===== Modal Crear ===== *@
+@if (_createOpen)
+{
+    <div class="modal-overlay">
+        <div class="modal-dialog" style="max-width:520px;">
+            <div class="modal-head">
+                <h3>Generar token de API</h3>
+                <button class="modal-close" @onclick="() => _createOpen = false">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div class="field" style="margin-bottom:12px;">
+                    <label class="form-label">Nombre descriptivo</label>
+                    <input class="form-control" @bind="_newLabel" placeholder="Ej. Actualizar catalogo FUXION" />
+                </div>
+                <div class="field">
+                    <label class="form-label">Duracion</label>
+                    <select class="form-control" @bind="_newTtl">
+                        <option value="24h">24 horas</option>
+                        <option value="7d">7 dias</option>
+                        <option value="30d">30 dias</option>
+                    </select>
+                </div>
+                @if (!string.IsNullOrEmpty(_createError))
+                {
+                    <div class="alert alert-danger" style="margin-top:12px;font-size:12px;">@_createError</div>
+                }
+            </div>
+            <div class="modal-foot">
+                <button class="btn btn-outline-secondary" @onclick="() => _createOpen = false" disabled="@_busy">Cancelar</button>
+                <button class="btn btn-primary" @onclick="ConfirmCreate" disabled="@_busy">Generar</button>
+            </div>
+        </div>
+    </div>
+}
+
+@* ===== Modal Token generado (mostrar UNA vez) ===== *@
+@if (_shownToken is not null)
+{
+    <div class="modal-overlay">
+        <div class="modal-dialog" style="max-width:640px;">
+            <div class="modal-head">
+                <h3>Token generado</h3>
+                <button class="modal-close" @onclick="() => _shownToken = null">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div class="alert alert-warning" style="font-size:12px;margin-bottom:10px;">
+                    <strong>Guardalo AHORA.</strong> Este es el unico momento en que se muestra en texto plano. Si lo pierdes, tendras que revocarlo y generar uno nuevo.
+                </div>
+                <div class="field" style="margin-bottom:10px;">
+                    <label class="form-label">Token</label>
+                    <input class="form-control" type="text" readonly value="@_shownToken" style="font-family:monospace;font-size:12px;" />
+                </div>
+                <button class="btn btn-outline-primary" @onclick="CopyToken">Copiar al portapapeles</button>
+                @if (_copied) { <span class="text-muted" style="margin-left:10px;font-size:12px;">Copiado</span> }
+                <div class="text-muted" style="font-size:11.5px;margin-top:12px;">
+                    Uso: envialo en el header <code>X-Api-Token: &lt;token&gt;</code> en cada request a <code>/api/data-containers</code>.
+                </div>
+            </div>
+            <div class="modal-foot">
+                <button class="btn btn-primary" @onclick="() => _shownToken = null">Cerrar</button>
+            </div>
+        </div>
+    </div>
+}
+
+@code {
+    [CascadingParameter] private Task<AuthenticationState>? AuthState { get; set; }
+    private bool _loading = true;
+    private bool _busy;
+    private Guid _userId;
+    private List<ApiTokenDto> _tokens = new();
+    private string? _lastError;
+
+    private bool _createOpen;
+    private string _newLabel = "";
+    private string _newTtl = "24h";
+    private string? _createError;
+
+    private string? _shownToken;
+    private bool _copied;
+
+    protected override async Task OnInitializedAsync()
+    {
+        var st = await (AuthState ?? Task.FromResult<AuthenticationState>(null!));
+        if (st?.User?.Identity?.IsAuthenticated == true)
+        {
+            Guid.TryParse(st.User.FindFirst(ClaimTypes.NameIdentifier)?.Value, out _userId);
+        }
+        await Reload();
+        _loading = false;
+    }
+
+    private async Task Reload()
+    {
+        try { _tokens = (await TokensSvc.ListForCurrentUserAsync(_userId)).ToList(); }
+        catch (Exception ex) { _lastError = ex.Message; }
+    }
+
+    private void OpenCreate()
+    {
+        _newLabel = "";
+        _newTtl = "24h";
+        _createError = null;
+        _createOpen = true;
+    }
+
+    private async Task ConfirmCreate()
+    {
+        _createError = null;
+        if (string.IsNullOrWhiteSpace(_newLabel)) { _createError = "El nombre es obligatorio."; return; }
+        var ttl = _newTtl switch { "7d" => TimeSpan.FromDays(7), "30d" => TimeSpan.FromDays(30), _ => TimeSpan.FromHours(24) };
+        _busy = true;
+        try
+        {
+            var created = await TokensSvc.CreateAsync(_newLabel, ttl, _userId);
+            if (created is null) { _createError = "No se pudo crear el token."; return; }
+            _createOpen = false;
+            _shownToken = created.PlainToken;
+            _copied = false;
+            await Reload();
+        }
+        catch (Exception ex) { _createError = "Error: " + ex.Message; }
+        finally { _busy = false; }
+    }
+
+    private async Task RevokeAsync(Guid id)
+    {
+        _busy = true;
+        try
+        {
+            await TokensSvc.RevokeAsync(id, _userId);
+            await Reload();
+        }
+        finally { _busy = false; }
+    }
+
+    private async Task CopyToken()
+    {
+        if (_shownToken is null) { return; }
+        try
+        {
+            await JS.InvokeVoidAsync("navigator.clipboard.writeText", _shownToken);
+            _copied = true;
+        }
+        catch { /* clipboard bloqueado */ }
+    }
+}

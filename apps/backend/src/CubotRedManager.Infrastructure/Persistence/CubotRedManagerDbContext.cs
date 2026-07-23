@@ -98,6 +98,7 @@ public class CubotRedManagerDbContext : DbContext, IApplicationDbContext, IDataP
     public DbSet<TenantBlockedNumber> TenantBlockedNumbers => Set<TenantBlockedNumber>();
     public DbSet<Conversation> Conversations => Set<Conversation>();
     public DbSet<Message> Messages => Set<Message>();
+    public DbSet<ApiToken> ApiTokens => Set<ApiToken>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -117,6 +118,13 @@ public class CubotRedManagerDbContext : DbContext, IApplicationDbContext, IDataP
         modelBuilder.Entity<AiAgentResource>().Property(x => x.ResourceType).HasConversion<string>();
         modelBuilder.Entity<AiAgentResource>().Property(x => x.FileContent).HasColumnType("bytea");
         modelBuilder.Entity<AiAgentResource>().Property(x => x.FileMimeType).HasMaxLength(120);
+
+        // API tokens: hash unico global (case-sensitive), index para lookup por prefijo/tenant.
+        modelBuilder.Entity<ApiToken>().Property(x => x.Label).HasMaxLength(120).IsRequired();
+        modelBuilder.Entity<ApiToken>().Property(x => x.TokenHash).HasMaxLength(64).IsRequired();
+        modelBuilder.Entity<ApiToken>().Property(x => x.TokenPrefix).HasMaxLength(12).IsRequired();
+        modelBuilder.Entity<ApiToken>().HasIndex(x => x.TokenHash).IsUnique();
+        modelBuilder.Entity<ApiToken>().HasIndex(x => new { x.TenantId, x.UserId });
         modelBuilder.Entity<AiUsageLog>().Property(x => x.Provider).HasConversion<string>();
         modelBuilder.Entity<WhatsAppLine>().Property(x => x.Status).HasConversion<string>();
         modelBuilder.Entity<EvolutionMasterConfig>().Property(x => x.Status).HasConversion<string>();

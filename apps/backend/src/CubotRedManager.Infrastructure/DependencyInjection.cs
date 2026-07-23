@@ -90,6 +90,7 @@ public static class DependencyInjection
         services.AddScoped<IInboxService, InboxService>();
         services.AddScoped<IMessageTemplateService, MessageTemplateService>();
         services.AddScoped<IDataContainerService, DataContainerService>();
+        services.AddScoped<IApiTokenService, ApiTokenService>();
         // MCP simplificado: expone DataContainers como placeholders del prompt para los agentes IA.
         services.AddScoped<IDataContainerMcpService, DataContainerMcpService>();
         services.AddScoped<IAiAgentService, AiAgentService>();

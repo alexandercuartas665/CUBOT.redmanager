@@ -85,5 +85,8 @@ public interface IApplicationDbContext
     DbSet<Conversation> Conversations { get; }
     DbSet<Message> Messages { get; }
 
+    // Tokens opacos de API (X-Api-Token header) emitidos por usuarios del tenant para uso programatico.
+    DbSet<ApiToken> ApiTokens { get; }
+
     Task<int> SaveChangesAsync(CancellationToken cancellationToken = default);
 }

@@ -293,6 +293,124 @@ app.MapGet("/api/agent-resources/{id:guid}/file", async (
     return Results.File(res.FileContent, mime, res.FileName);
 }).RequireAuthorization();
 
+// ===== REST API autenticada por X-Api-Token (DataContainers) =====
+// Endpoints /api/data-containers/* para uso programatico (scripts, integraciones). Se autentican
+// con header "X-Api-Token: cubot_..." (token opaco generado por el user en /cuenta).
+// El token va cifrado con SHA256 en la BD; el validador setea el ambient tenant scope segun la
+// claim del token. Todas las escrituras respetan HasQueryFilter, o sea aisladas por tenant.
+//
+// Helper: valida el header y setea el ambient scope. Retorna la identidad o null (401).
+static async Task<CubotRedManager.Application.Tenancy.ApiTokenIdentity?> AuthenticateApiTokenAsync(
+    HttpContext http,
+    CubotRedManager.Application.Tenancy.IApiTokenService tokens,
+    CubotRedManager.Application.Abstractions.IAmbientTenantOverride ambient)
+{
+    var header = http.Request.Headers["X-Api-Token"].ToString();
+    if (string.IsNullOrWhiteSpace(header)) { return null; }
+    var identity = await tokens.ValidateAsync(header, http.RequestAborted);
+    if (identity is null) { return null; }
+    ambient.Set(identity.TenantId, identity.UserId);
+    return identity;
+}
+
+// GET /api/data-containers - lista de contenedores del tenant (id, nombre, columnas, filas)
+app.MapGet("/api/data-containers", async (
+    HttpContext http,
+    CubotRedManager.Application.Tenancy.IApiTokenService tokens,
+    CubotRedManager.Application.Abstractions.IAmbientTenantOverride ambient,
+    CubotRedManager.Application.Tenancy.IDataContainerService svc,
+    CancellationToken ct) =>
+{
+    var id = await AuthenticateApiTokenAsync(http, tokens, ambient);
+    if (id is null) { return Results.Unauthorized(); }
+    try
+    {
+        var list = await svc.ListAsync(ct);
+        return Results.Ok(list);
+    }
+    finally { ambient.Set(null, null); }
+}).AllowAnonymous().DisableAntiforgery();
+
+// GET /api/data-containers/{id} - detalle con columnas (id, nombre, tipo, sortOrder, isRequired)
+app.MapGet("/api/data-containers/{id:guid}", async (
+    Guid id,
+    HttpContext http,
+    CubotRedManager.Application.Tenancy.IApiTokenService tokens,
+    CubotRedManager.Application.Abstractions.IAmbientTenantOverride ambient,
+    CubotRedManager.Application.Tenancy.IDataContainerService svc,
+    CancellationToken ct) =>
+{
+    var ident = await AuthenticateApiTokenAsync(http, tokens, ambient);
+    if (ident is null) { return Results.Unauthorized(); }
+    try
+    {
+        var detail = await svc.GetAsync(id, ct);
+        return detail is null ? Results.NotFound() : Results.Ok(detail);
+    }
+    finally { ambient.Set(null, null); }
+}).AllowAnonymous().DisableAntiforgery();
+
+// GET /api/data-containers/{id}/rows?take=N&search=texto - filas con valores por columna
+app.MapGet("/api/data-containers/{id:guid}/rows", async (
+    Guid id,
+    HttpContext http,
+    CubotRedManager.Application.Tenancy.IApiTokenService tokens,
+    CubotRedManager.Application.Abstractions.IAmbientTenantOverride ambient,
+    CubotRedManager.Application.Tenancy.IDataContainerService svc,
+    int? take,
+    string? search,
+    CancellationToken ct) =>
+{
+    var ident = await AuthenticateApiTokenAsync(http, tokens, ambient);
+    if (ident is null) { return Results.Unauthorized(); }
+    try
+    {
+        var rows = await svc.ListRowsAsync(id, string.IsNullOrWhiteSpace(search) ? null : search, take ?? 2000, ct);
+        return Results.Ok(rows);
+    }
+    finally { ambient.Set(null, null); }
+}).AllowAnonymous().DisableAntiforgery();
+
+// PATCH /api/data-containers/{id}/rows/{rowId} - actualiza SOLO las celdas incluidas en el body
+// Body: { "valuesByColumnId": { "<guid>": "<value>", "<guid>": null } }
+// null en el body borra el valor; columnas NO incluidas quedan intactas (esto es lo que preserva
+// tus otras columnas como beneficio/precio cuando yo solo mando productId).
+app.MapMethods("/api/data-containers/{id:guid}/rows/{rowId:guid}", new[] { "PATCH" }, async (
+    Guid id,
+    Guid rowId,
+    HttpContext http,
+    CubotRedManager.Application.Tenancy.IApiTokenService tokens,
+    CubotRedManager.Application.Abstractions.IAmbientTenantOverride ambient,
+    CubotRedManager.Application.Tenancy.IDataContainerService svc,
+    CancellationToken ct) =>
+{
+    var ident = await AuthenticateApiTokenAsync(http, tokens, ambient);
+    if (ident is null) { return Results.Unauthorized(); }
+    try
+    {
+        // Body parse: { valuesByColumnId: { "<guid>": "<value?>" } }
+        var body = await System.Text.Json.JsonDocument.ParseAsync(http.Request.Body, cancellationToken: ct);
+        if (!body.RootElement.TryGetProperty("valuesByColumnId", out var vElem) || vElem.ValueKind != System.Text.Json.JsonValueKind.Object)
+        {
+            return Results.BadRequest(new { error = "body debe tener 'valuesByColumnId' como objeto {columnId: valor}" });
+        }
+        // Cargar fila existente para preservar columnas NO incluidas en el PATCH.
+        var existing = await svc.ListRowsAsync(id, null, take: 5000, ct);
+        var current = existing.FirstOrDefault(r => r.Id == rowId);
+        if (current is null) { return Results.NotFound(new { error = "row no encontrada en este contenedor" }); }
+        var merged = new Dictionary<Guid, string?>(current.ValuesByColumnId);
+        foreach (var p in vElem.EnumerateObject())
+        {
+            if (!Guid.TryParse(p.Name, out var colId)) { continue; }
+            merged[colId] = p.Value.ValueKind == System.Text.Json.JsonValueKind.Null ? null : p.Value.ToString();
+        }
+        var req = new CubotRedManager.Application.Tenancy.SaveDataRowRequest(id, rowId, merged);
+        var saved = await svc.SaveRowAsync(req, ident.UserId, ct);
+        return saved is null ? Results.NotFound() : Results.Ok(saved);
+    }
+    finally { ambient.Set(null, null); }
+}).AllowAnonymous().DisableAntiforgery();
+
 // ===== Login unificado (Web :5036 hospeda el formulario real para SuperAdmin y Tenant) =====
 // Portado verbatim del SuperAdmin de CUBOT.travels. Despues del login exitoso:
 //   - Si el usuario es operador de plataforma (claim platform_role): redirige a SuperAdmin (:5037).
