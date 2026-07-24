@@ -507,7 +507,17 @@ public sealed class AgentDispatcher : IAgentDispatcher
                     null, ct);
                 return;
             }
-            if (ratioN < ratioM && Random.Shared.Next(ratioM) >= ratioN) { return; }
+            if (ratioN < ratioM)
+            {
+                var roll = Random.Shared.Next(ratioM);
+                if (roll >= ratioN)
+                {
+                    await LogRunAsync(tenantId, conversationId, agentId, AiAgentRunLogKind.Info,
+                        "Reacciones: skip por ratio", $"roll={roll} de {ratioM}, umbral<{ratioN}. Este mensaje no reacciona por diseno de la frecuencia.",
+                        null, ct);
+                    return;
+                }
+            }
 
             var lastInbound = await _db.Messages
                 .IgnoreQueryFilters()
@@ -529,6 +539,10 @@ public sealed class AgentDispatcher : IAgentDispatcher
             }
 
             var emoji = emojis[Random.Shared.Next(emojis.Length)];
+            await LogRunAsync(tenantId, conversationId, agentId, AiAgentRunLogKind.Info,
+                "Reacciones: llamando al connector",
+                $"emoji={emoji} externalId={lastInbound.ExternalId} phone={phone}",
+                null, ct);
             var res = await _connector.SendReactionAsync(lineId, phone, lastInbound.ExternalId!, emoji, ct);
             if (res.Ok)
             {
@@ -539,11 +553,23 @@ public sealed class AgentDispatcher : IAgentDispatcher
             }
             else
             {
-                _logger.LogInformation("Dispatcher: reaccion no enviada conv {ConvId}: {Err}", conversationId, res.Error);
+                // Antes iba solo a ILogger, invisible en la bitacora del agente. Ahora queda
+                // en run-logs para poder diagnosticar por que Evolution rechaza la reaccion
+                // (formato del JID, permisos de la instancia, mensaje demasiado viejo, etc).
+                await LogRunAsync(tenantId, conversationId, agentId, AiAgentRunLogKind.Error,
+                    "Reaccion no enviada por el connector",
+                    $"emoji={emoji} externalId={lastInbound.ExternalId} phone={phone} error={res.Error ?? "(sin detalle)"}",
+                    null, ct);
             }
         }
         catch (Exception ex)
         {
+            // Idem: la excepcion silenciosa era el otro punto ciego. Ahora si algo revienta
+            // (deserializacion del ExternalId, HTTP timeout, etc), queda en la bitacora.
+            await LogRunAsync(tenantId, conversationId, agentId, AiAgentRunLogKind.Error,
+                "Reacciones: excepcion en MaybeReactAsync",
+                $"{ex.GetType().Name}: {ex.Message}",
+                null, ct);
             _logger.LogWarning(ex, "Dispatcher: fallo al reaccionar conv {ConvId}", conversationId);
         }
     }
