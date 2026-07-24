@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Text.RegularExpressions;
 using CubotRedManager.Application.Abstractions;
 using CubotRedManager.Application.Common;
 using CubotRedManager.Domain.Entities;
@@ -270,7 +271,7 @@ public sealed class AgentDispatcher : IAgentDispatcher
         var closeScanText = textToSend;
         if (result.Attachments is { Count: > 0 })
         {
-            closeScanText += "\n" + string.Join("\n", result.Attachments.Select(a => a.Detail ?? a.Name ?? string.Empty));
+            closeScanText += "\n" + string.Join("\n", result.Attachments.Select(a => a.EffectiveCaption ?? a.Name ?? string.Empty));
         }
         var tacitClose = await DetectTacitCloseAsync(tenantId, binding.AgentId, conversationId, closeScanText, leadResult, cancellationToken);
         if (tacitClose.shouldCreateLead)
@@ -447,7 +448,7 @@ public sealed class AgentDispatcher : IAgentDispatcher
         var leadResult = await _leadMarker.ProcessAsync(tenantId, binding.AgentId, conversationId, result.Text ?? string.Empty, cancellationToken);
         var pedidoClean = _pedidoMarker.StripMarkers(leadResult.CleanText);
         var atts = result.Attachments ?? (IReadOnlyList<AiChatAttachment>)Array.Empty<AiChatAttachment>();
-        var closeScan = pedidoClean + (atts.Count > 0 ? "\n" + string.Join("\n", atts.Select(a => a.Detail ?? a.Name ?? string.Empty)) : string.Empty);
+        var closeScan = pedidoClean + (atts.Count > 0 ? "\n" + string.Join("\n", atts.Select(a => a.EffectiveCaption ?? a.Name ?? string.Empty)) : string.Empty);
         var tacit = await DetectTacitCloseAsync(tenantId, binding.AgentId, conversationId, closeScan, leadResult, cancellationToken);
         if (tacit.shouldCreateLead)
         {
@@ -691,17 +692,26 @@ public sealed class AgentDispatcher : IAgentDispatcher
         }
     }
 
+    // Detecta placeholders del tipo {nombre_variable} que no fueron sustituidos por la IA en el caption.
+    // Excluye {{...}} (marcadores MCP DataContainer) que ya fueron resueltos antes en el pipeline.
+    private static readonly Regex UnresolvedPlaceholder = new(
+        @"(?<!\{)\{[a-zA-Z_][a-zA-Z0-9_]*\}(?!\})",
+        RegexOptions.Compiled);
+
     private async Task<bool> SendAttachmentAsync(
         Guid lineId, string phone, Guid tenantId, Guid conversationId, Guid agentId,
         AiChatAttachment a, CancellationToken ct)
     {
+        var caption = a.EffectiveCaption;
+        await WarnIfUnresolvedPlaceholdersAsync(caption, a.Name, tenantId, conversationId, agentId, ct);
+
         if (a.ResourceType == AgentResourceType.Text)
         {
-            if (string.IsNullOrWhiteSpace(a.Detail)) { return false; }
-            var r = await _connector.SendTestAsync(lineId, phone, a.Detail!, Guid.Empty, ct);
+            if (string.IsNullOrWhiteSpace(caption)) { return false; }
+            var r = await _connector.SendTestAsync(lineId, phone, caption!, Guid.Empty, ct);
             if (r.Ok)
             {
-                await PersistOutboundAsync(tenantId, conversationId, a.Detail!, "ai_attach_text", r.MessageId, ct);
+                await PersistOutboundAsync(tenantId, conversationId, caption!, "ai_attach_text", r.MessageId, ct);
             }
             return r.Ok;
         }
@@ -748,14 +758,27 @@ public sealed class AgentDispatcher : IAgentDispatcher
             _ => MessageMediaType.Document
         };
         var res = await _connector.SendMediaAsync(lineId, phone, mt, media.Base64,
-            media.MimeType, media.FileName ?? a.FileName, a.Detail, Guid.Empty, ct);
+            media.MimeType, media.FileName ?? a.FileName, caption, Guid.Empty, ct);
         if (res.Ok)
         {
             await PersistOutboundMediaAsync(tenantId, conversationId,
-                body: a.Detail ?? a.Name ?? "(adjunto)", mediaType: mt,
+                body: caption ?? a.Name ?? "(adjunto)", mediaType: mt,
                 mediaUrl: a.FileUrl, mimeType: media.MimeType, sourceTag: "ai_attach_media", externalId: res.MessageId, ct: ct);
         }
         return res.Ok;
+    }
+
+    private async Task WarnIfUnresolvedPlaceholdersAsync(string? caption, string resourceName,
+        Guid tenantId, Guid conversationId, Guid agentId, CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(caption)) { return; }
+        var matches = UnresolvedPlaceholder.Matches(caption);
+        if (matches.Count == 0) { return; }
+        var vars = string.Join(", ", matches.Select(m => m.Value).Distinct());
+        await LogRunAsync(tenantId, conversationId, agentId, AiAgentRunLogKind.Info,
+            $"WARNING: caption con variables sin resolver ({vars})",
+            $"Recurso '{resourceName}'. La IA envio el marker sin sustituir los placeholders. Corrige con la sintaxis [[enviar: {resourceName} | \"caption con los valores ya reemplazados\"]] y refuerza esa regla en el prompt base del agente.",
+            null, ct);
     }
 
     private async Task PersistOutboundMediaAsync(Guid tenantId, Guid conversationId,

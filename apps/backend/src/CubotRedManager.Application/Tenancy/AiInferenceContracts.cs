@@ -6,7 +6,17 @@ namespace CubotRedManager.Application.Tenancy;
 public sealed record AiChatTurn(string Role, string Text, IReadOnlyList<AiChatAttachment>? Attachments = null);
 
 /// <summary>Recurso que el agente decidio entregar en el chat (imagen, video, pdf, ubicacion o texto).</summary>
-public sealed record AiChatAttachment(string Name, AgentResourceType ResourceType, string? FileUrl, string? FileName, string? Detail);
+/// <param name="CaptionOverride">
+/// Caption personalizado que la IA envio junto al marker (sintaxis [[enviar: X | "texto"]]).
+/// Cuando viene con valor, reemplaza al Detail del recurso al enviar el archivo o mensaje.
+/// Sirve para que la IA resuelva placeholders {nombre_lider}, {nombre_clienta}, etc con los valores
+/// que ya capturo en la conversacion, en vez de que salga el caption literal con {xxx} sin sustituir.
+/// </param>
+public sealed record AiChatAttachment(string Name, AgentResourceType ResourceType, string? FileUrl, string? FileName, string? Detail, string? CaptionOverride = null)
+{
+    /// <summary>Caption efectivo a mostrar: el override de la IA si existe, si no el Detail del recurso.</summary>
+    public string? EffectiveCaption => string.IsNullOrWhiteSpace(CaptionOverride) ? Detail : CaptionOverride;
+}
 
 /// <summary>Entrada del log de depuracion de prompts (una por cada llamada al proveedor de IA).</summary>
 public sealed record AiDebugPrompt(string Title, DateTimeOffset SentAt, string Content, string? Response = null);

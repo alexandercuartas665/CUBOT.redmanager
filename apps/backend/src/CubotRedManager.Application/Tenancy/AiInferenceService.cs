@@ -153,6 +153,7 @@ public sealed class AiInferenceService : IAiInferenceService
             sb.AppendLine();
             sb.AppendLine();
             sb.AppendLine("Recursos disponibles. REGLA IMPORTANTE: cuando vayas a comunicar el contenido de un recurso (precios, politicas, textos, imagenes, videos, PDF, ubicacion), NO lo reescribas ni lo resumas: entregalo EXACTO incluyendo en tu respuesta el marcador [[enviar: Nombre exacto del recurso]]. El sistema agregara el contenido o el archivo tal cual. Puedes acompanarlo con una frase breve, pero el contenido del recurso lo entrega el marcador.");
+            sb.AppendLine("PERSONALIZACION DEL CAPTION: si el caption del recurso contiene variables como {nombre_lider}, {nombre_clienta}, {pais}, {edad} u otras {...}, DEBES enviar el caption ya resuelto usando la sintaxis extendida con pipe: [[enviar: Nombre del recurso | \"Caption con las variables ya reemplazadas por sus valores actuales\"]]. Reemplaza cada {variable} con el valor real (los del prompt base, los que ya capturaste del cliente, o los datos ya conocidos). Solo omite el pipe cuando el caption del recurso NO tiene variables o cuando quieres el texto tal cual.");
             foreach (var r in resources)
             {
                 var kind = r.ResourceType == AgentResourceType.Text ? "Texto" : r.ResourceType.ToString();
@@ -343,18 +344,46 @@ public sealed class AiInferenceService : IAiInferenceService
         });
     }
 
+    // Sintaxis del marker de envio de recurso:
+    //   [[enviar: NombreRecurso]]                              -> caption = Detail del recurso (comportamiento historico)
+    //   [[enviar: NombreRecurso | Caption personalizado]]      -> caption = lo que va despues del pipe
+    //   [[enviar: NombreRecurso | "Caption con comillas"]]     -> se aceptan comillas dobles o simples envolventes
+    // El pipe permite a la IA resolver placeholders {nombre_lider} etc con los valores capturados.
+    private static readonly Regex EnviarMarker = new(
+        @"\[\[\s*enviar\s*:\s*([^|\]]+?)\s*(?:\|\s*(.+?)\s*)?\]\]",
+        RegexOptions.IgnoreCase | RegexOptions.Compiled);
+
     private static (string, IReadOnlyList<AiChatAttachment>) ExtractAttachments(string text, IReadOnlyList<AiChatAttachment> resources)
     {
         var attachments = new List<AiChatAttachment>();
-        var clean = Regex.Replace(text, @"\[\[\s*enviar\s*:\s*([^\]]+?)\s*\]\]", m =>
+        var clean = EnviarMarker.Replace(text, m =>
         {
             var res = FindResource(resources, m.Groups[1].Value);
-            if (res is not null && attachments.All(a => a.Name != res.Name)) { attachments.Add(res); }
+            if (res is null) { return string.Empty; }
+            var override_ = m.Groups[2].Success ? StripEnclosingQuotes(m.Groups[2].Value) : null;
+            var eff = string.IsNullOrWhiteSpace(override_) ? res : res with { CaptionOverride = override_ };
+            // Dedup por (Name + CaptionOverride) para permitir el mismo recurso dos veces con captions distintos.
+            if (attachments.All(a => a.Name != eff.Name || (a.CaptionOverride ?? "") != (eff.CaptionOverride ?? "")))
+            {
+                attachments.Add(eff);
+            }
             return string.Empty;
-        }, RegexOptions.IgnoreCase);
+        });
 
         clean = Regex.Replace(clean, @"[ \t]+\n", "\n").Trim();
         return (clean, attachments);
+    }
+
+    private static string? StripEnclosingQuotes(string? s)
+    {
+        if (string.IsNullOrEmpty(s)) { return s; }
+        var t = s.Trim();
+        if (t.Length >= 2
+            && ((t[0] == '"' && t[^1] == '"') || (t[0] == '\'' && t[^1] == '\'')))
+        {
+            return t.Substring(1, t.Length - 2);
+        }
+        return t;
     }
 
     private static AiChatAttachment? FindResource(IReadOnlyList<AiChatAttachment> resources, string name)
@@ -397,13 +426,17 @@ public sealed class AiInferenceService : IAiInferenceService
     private static string ExpandMarkersForTranscript(string rawText, IReadOnlyList<AiChatAttachment> resources)
     {
         if (string.IsNullOrEmpty(rawText)) { return "(respuesta vacia)"; }
-        var expanded = Regex.Replace(rawText, @"\[\[\s*enviar\s*:\s*([^\]]+?)\s*\]\]", m =>
+        var expanded = EnviarMarker.Replace(rawText, m =>
         {
-            var res = FindResource(resources, m.Groups[1].Value);
-            if (res is null) { return $"[envio el recurso \"{m.Groups[1].Value.Trim()}\"]"; }
-            var desc = string.IsNullOrWhiteSpace(res.Detail) ? res.ResourceType.ToString() : res.Detail!.Trim();
+            var name = m.Groups[1].Value.Trim();
+            var overrideRaw = m.Groups[2].Success ? StripEnclosingQuotes(m.Groups[2].Value) : null;
+            var res = FindResource(resources, name);
+            if (res is null) { return $"[envio el recurso \"{name}\"]"; }
+            var desc = !string.IsNullOrWhiteSpace(overrideRaw)
+                ? overrideRaw!.Trim()
+                : (string.IsNullOrWhiteSpace(res.Detail) ? res.ResourceType.ToString() : res.Detail!.Trim());
             return $"[envio el recurso \"{res.Name}\" ({res.ResourceType}). Contenido: {desc}]";
-        }, RegexOptions.IgnoreCase);
+        });
         expanded = Regex.Replace(expanded, @"[ \t]+\n", "\n").Trim();
         return string.IsNullOrEmpty(expanded) ? "(respuesta vacia)" : expanded;
     }

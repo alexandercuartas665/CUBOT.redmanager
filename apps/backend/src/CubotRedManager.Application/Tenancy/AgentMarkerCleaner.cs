@@ -37,8 +37,9 @@ public static class AgentMarkerCleaner
 
         foreach (var a in attachments)
         {
-            if (string.IsNullOrWhiteSpace(a.Detail)) { continue; }
-            var normCap = NormalizeLoose(a.Detail);
+            var cap = a.EffectiveCaption;
+            if (string.IsNullOrWhiteSpace(cap)) { continue; }
+            var normCap = NormalizeLoose(cap);
             if (normCap.Length == 0) { continue; }
             if (normCap.Contains(normText) || normText.Contains(normCap))
             {
