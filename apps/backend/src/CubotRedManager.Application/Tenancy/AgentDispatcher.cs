@@ -122,6 +122,11 @@ public sealed class AgentDispatcher : IAgentDispatcher
 
         // 2b) Reaccion emoji (sin LLM, 0 tokens). Se hace incluso si el binding no autoConfirma
         // porque es un acknowledge visual que ayuda al cliente a saber que su mensaje llego.
+        // Log de diagnostico: sin esto no habia como saber en bitacora POR QUE no se llama a
+        // MaybeReactAsync (ej. ReactionsEnabled=false en runtime, aunque en la BD/UI se vea true).
+        await LogRunAsync(tenantId, conversationId, binding.AgentId, AiAgentRunLogKind.Info,
+            $"Reactions check: enabled={agentCfg.ReactionsEnabled} lineId={(whatsAppLineId is null ? "null" : "ok")} ratio={agentCfg.ReactionRatioN}/{agentCfg.ReactionRatioM} emojis={(string.IsNullOrEmpty(agentCfg.ReactionEmojis) ? "empty" : "ok")}",
+            null, null, cancellationToken);
         if (agentCfg.ReactionsEnabled && whatsAppLineId is not null)
         {
             await MaybeReactAsync(tenantId, conversationId, whatsAppLineId.Value, conv.ContactPhone,
@@ -475,6 +480,11 @@ public sealed class AgentDispatcher : IAgentDispatcher
     {
         try
         {
+            // Log de entrada para diagnostico: sin esto no sabiamos si el metodo se llamaba
+            // realmente cuando la config estaba activa pero la reaccion nunca llegaba al cliente.
+            await LogRunAsync(tenantId, conversationId, agentId, AiAgentRunLogKind.Info,
+                "MaybeReactAsync: iniciando", $"phone={phone} lineId={lineId} ratio={ratioN}/{ratioM}", null, ct);
+
             var emojis = (emojiCsv ?? string.Empty)
                 .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
             if (emojis.Length == 0)
