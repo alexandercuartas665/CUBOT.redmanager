@@ -411,6 +411,40 @@ app.MapMethods("/api/data-containers/{id:guid}/rows/{rowId:guid}", new[] { "PATC
     finally { ambient.Set(null, null); }
 }).AllowAnonymous().DisableAntiforgery();
 
+// POST /api/data-containers/{id}/rows - crea una fila nueva. Body: {"valuesByColumnId": {...}}
+// Devuelve la fila creada con su Id. Sirve para agregar variantes (ej. una fila por presentacion
+// distinta del mismo producto). Columnas no incluidas quedan vacias.
+app.MapPost("/api/data-containers/{id:guid}/rows", async (
+    Guid id,
+    HttpContext http,
+    CubotRedManager.Application.Tenancy.IApiTokenService tokens,
+    CubotRedManager.Application.Abstractions.IAmbientTenantOverride ambient,
+    CubotRedManager.Application.Tenancy.IDataContainerService svc,
+    CancellationToken ct) =>
+{
+    var ident = await AuthenticateApiTokenAsync(http, tokens, ambient);
+    if (ident is null) { return Results.Unauthorized(); }
+    try
+    {
+        var body = await System.Text.Json.JsonDocument.ParseAsync(http.Request.Body, cancellationToken: ct);
+        if (!body.RootElement.TryGetProperty("valuesByColumnId", out var vElem) || vElem.ValueKind != System.Text.Json.JsonValueKind.Object)
+        {
+            return Results.BadRequest(new { error = "body debe tener 'valuesByColumnId' como objeto {columnId: valor}" });
+        }
+        var values = new Dictionary<Guid, string?>();
+        foreach (var p in vElem.EnumerateObject())
+        {
+            if (!Guid.TryParse(p.Name, out var colId)) { continue; }
+            values[colId] = p.Value.ValueKind == System.Text.Json.JsonValueKind.Null ? null : p.Value.ToString();
+        }
+        // RowId=null indica al servicio que es un create, no update.
+        var req = new CubotRedManager.Application.Tenancy.SaveDataRowRequest(id, RowId: null, values);
+        var saved = await svc.SaveRowAsync(req, ident.UserId, ct);
+        return saved is null ? Results.NotFound() : Results.Created($"/api/data-containers/{id}/rows/{saved.Id}", saved);
+    }
+    finally { ambient.Set(null, null); }
+}).AllowAnonymous().DisableAntiforgery();
+
 // ===== Login unificado (Web :5036 hospeda el formulario real para SuperAdmin y Tenant) =====
 // Portado verbatim del SuperAdmin de CUBOT.travels. Despues del login exitoso:
 //   - Si el usuario es operador de plataforma (claim platform_role): redirige a SuperAdmin (:5037).
