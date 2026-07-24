@@ -37,6 +37,7 @@ public interface IEvolutionApiClient
     Task<EvolutionSendResult> SendMediaAsync(string baseUrl, string apiKey, string instanceName, string phone, string mediatype, string base64, string? mimeType, string? fileName, string? caption, CancellationToken cancellationToken = default);
     Task<EvolutionSendResult> SendAudioAsync(string baseUrl, string apiKey, string instanceName, string phone, string base64, CancellationToken cancellationToken = default);
     Task<EvolutionSendResult> SendLocationAsync(string baseUrl, string apiKey, string instanceName, string phone, double latitude, double longitude, string? name, string? address, CancellationToken cancellationToken = default);
+    Task<EvolutionSendResult> SendReactionAsync(string baseUrl, string apiKey, string instanceName, string remoteJid, string messageId, string emoji, CancellationToken cancellationToken = default);
     Task<EvolutionSendResult> SetWebhookAsync(string baseUrl, string apiKey, string instanceName, string webhookUrl, string token, CancellationToken cancellationToken = default);
 
     /// <summary>Lista los grupos de WhatsApp de la instancia (dropdown de destinatarios de resumen).</summary>

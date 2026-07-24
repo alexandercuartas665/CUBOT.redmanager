@@ -152,6 +152,14 @@ public sealed class EvolutionApiClient : IEvolutionApiClient
         return await PostSendAsync(baseUrl, apiKey, $"/message/sendLocation/{Uri.EscapeDataString(instanceName)}", body, cancellationToken);
     }
 
+    public async Task<EvolutionSendResult> SendReactionAsync(string baseUrl, string apiKey, string instanceName, string remoteJid, string messageId, string emoji, CancellationToken cancellationToken = default)
+    {
+        // Evolution v2: la reaccion se identifica por la clave del mensaje original. fromMe=false porque
+        // reaccionamos a un mensaje entrante (del cliente). reaction = "" quitaria la reaccion.
+        var body = new { key = new { remoteJid, fromMe = false, id = messageId }, reaction = emoji };
+        return await PostSendAsync(baseUrl, apiKey, $"/message/sendReaction/{Uri.EscapeDataString(instanceName)}", body, cancellationToken);
+    }
+
     public async Task<EvolutionSendResult> SetWebhookAsync(string baseUrl, string apiKey, string instanceName, string webhookUrl, string token, CancellationToken cancellationToken = default)
     {
         var body = new

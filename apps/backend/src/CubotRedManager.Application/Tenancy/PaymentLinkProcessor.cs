@@ -42,7 +42,7 @@ public sealed class PaymentLinkProcessor : IPaymentLinkProcessor
         var matches = MarkerRegex.Matches(agentText ?? string.Empty);
         if (matches.Count == 0)
         {
-            return new PaymentLinkResult(agentText ?? string.Empty, 0, 0, 0, Array.Empty<string>());
+            return new PaymentLinkResult(agentText ?? string.Empty, 0, 0, 0, Array.Empty<string>(), Array.Empty<string>());
         }
 
         // Cargar config del agente (una sola vez para todos los markers). No hace falta
@@ -80,6 +80,7 @@ public sealed class PaymentLinkProcessor : IPaymentLinkProcessor
         var token = await _agentService.GetDecryptedPaymentTokenAsync(agentId, cancellationToken);
         var defaultCountry = cfg.PaymentCountry ?? "pe";
         var errors = new List<string>();
+        var allGeneratedUrls = new List<string>();
         int generated = 0, failed = 0;
         var sb = new StringBuilder();
         int cursor = 0;
@@ -138,6 +139,7 @@ public sealed class PaymentLinkProcessor : IPaymentLinkProcessor
             if (groupUrls.Count > 0)
             {
                 sb.Append(string.Join('\n', groupUrls));
+                allGeneratedUrls.AddRange(groupUrls);
                 generated += groupOk;
                 failed += groupErr;
             }
@@ -149,7 +151,7 @@ public sealed class PaymentLinkProcessor : IPaymentLinkProcessor
         }
         sb.Append(agentText!, cursor, agentText!.Length - cursor);
 
-        return new PaymentLinkResult(sb.ToString(), matches.Count, generated, failed, errors);
+        return new PaymentLinkResult(sb.ToString(), matches.Count, generated, failed, errors, allGeneratedUrls);
     }
 
     private sealed record CatalogEntry(string ProductId, string? Country);
@@ -172,7 +174,7 @@ public sealed class PaymentLinkProcessor : IPaymentLinkProcessor
             cursor = m.Index + m.Length;
         }
         sb.Append(text, cursor, text.Length - cursor);
-        return new PaymentLinkResult(sb.ToString(), matches.Count, 0, matches.Count, new[] { reason });
+        return new PaymentLinkResult(sb.ToString(), matches.Count, 0, matches.Count, new[] { reason }, Array.Empty<string>());
     }
 
     /// <summary>Parsea "REXET:2, PRUNEX1:1" contra el catalogo. Resuelve nombre->productId y

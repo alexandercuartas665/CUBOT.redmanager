@@ -293,12 +293,27 @@ public sealed class WhatsAppConnectorService : IWhatsAppConnectorService
         return new LineGroupsResult(res.Ok, mapped, res.Error);
     }
 
-    public Task<LineSendResult> SendReactionAsync(Guid lineId, string phone, string externalMessageId, string emoji, CancellationToken cancellationToken = default)
+    public async Task<LineSendResult> SendReactionAsync(Guid lineId, string phone, string externalMessageId, string emoji, CancellationToken cancellationToken = default)
     {
-        // STUB Fase 3: cuando se porte el endpoint /sendReaction del Evolution client, este metodo
-        // llamara al connector real. Por ahora no envia (best-effort) para no romper el dispatcher.
-        _ = lineId; _ = phone; _ = externalMessageId; _ = emoji; _ = cancellationToken;
-        return Task.FromResult(new LineSendResult(false, "SendReactionAsync no implementado aun.", null));
+        if (string.IsNullOrWhiteSpace(externalMessageId) || string.IsNullOrWhiteSpace(emoji))
+        {
+            return new LineSendResult(false, "Falta el id del mensaje o el emoji.", null);
+        }
+        // IgnoreQueryFilters: lo llama el dispatcher del agente (webhook entrante, sin tenant context).
+        var line = await _db.WhatsAppLines.IgnoreQueryFilters().FirstOrDefaultAsync(l => l.Id == lineId, cancellationToken);
+        if (line is null) { return new LineSendResult(false, "La linea no existe.", null); }
+        if (line.Provider != WhatsAppProvider.Evolution)
+        {
+            return new LineSendResult(false, "Las reacciones por id solo aplican a lineas Evolution en este corte.", null);
+        }
+        if (line.Status != WhatsAppLineStatus.Connected) { return new LineSendResult(false, "La linea no esta conectada.", null); }
+        var server = await ResolveServerAsync(cancellationToken);
+        if (server is null) { return new LineSendResult(false, "No hay servidor Evolution configurado.", null); }
+        var (baseUrl, apiKey) = server.Value;
+        var digits = new string(phone.Where(char.IsDigit).ToArray());
+        var remoteJid = $"{digits}@s.whatsapp.net";
+        var result = await _client.SendReactionAsync(baseUrl, apiKey, EvoInstance(line), remoteJid, externalMessageId, emoji, cancellationToken);
+        return new LineSendResult(result.Ok, result.Error, null);
     }
 
     public Task<InboundMediaResult> FetchInboundMediaAsync(Guid lineId, string externalMessageId, CancellationToken cancellationToken = default)

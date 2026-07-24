@@ -19,4 +19,5 @@ public sealed record PaymentLinkResult(
     int MarkersFound,
     int LinksGenerated,
     int LinksFailed,
-    IReadOnlyList<string> Errors); // razones humanas legibles para bitacora
+    IReadOnlyList<string> Errors, // razones humanas legibles para bitacora
+    IReadOnlyList<string> GeneratedUrls); // URLs efectivamente sustituidas en el texto, para bitacora

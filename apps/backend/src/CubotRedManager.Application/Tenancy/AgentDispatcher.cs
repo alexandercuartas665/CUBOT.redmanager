@@ -239,9 +239,13 @@ public sealed class AgentDispatcher : IAgentDispatcher
             {
                 var summary = $"markers={payResult.MarkersFound} ok={payResult.LinksGenerated} fallidos={payResult.LinksFailed}";
                 var kind = payResult.LinksFailed > 0 ? AiAgentRunLogKind.Error : AiAgentRunLogKind.Tool;
+                var okBody = $"Sales-link(s) generado(s) correctamente para {payResult.LinksGenerated} marker(s)."
+                    + (payResult.GeneratedUrls.Count > 0
+                        ? "\nURLs sustituidas:\n- " + string.Join("\n- ", payResult.GeneratedUrls)
+                        : "");
                 var body = payResult.Errors.Count > 0
                     ? string.Join(" | ", payResult.Errors)
-                    : $"Sales-link(s) generado(s) correctamente para {payResult.LinksGenerated} marker(s).";
+                    : okBody;
                 await LogRunAsync(tenantId, conversationId, binding.AgentId, kind,
                     "Payment link processor: " + summary, body, null, cancellationToken);
             }
