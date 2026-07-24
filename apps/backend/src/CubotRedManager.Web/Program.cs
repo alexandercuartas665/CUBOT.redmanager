@@ -411,6 +411,95 @@ app.MapMethods("/api/data-containers/{id:guid}/rows/{rowId:guid}", new[] { "PATC
     finally { ambient.Set(null, null); }
 }).AllowAnonymous().DisableAntiforgery();
 
+// ===== REST API autenticada por X-Api-Token (Agentes IA) =====
+// GET /api/agents - lista agentes del tenant (id, nombre, provider, activo, resourceCount)
+app.MapGet("/api/agents", async (
+    HttpContext http,
+    CubotRedManager.Application.Tenancy.IApiTokenService tokens,
+    CubotRedManager.Application.Abstractions.IAmbientTenantOverride ambient,
+    CubotRedManager.Application.Tenancy.IAiAgentService svc,
+    CancellationToken ct) =>
+{
+    var ident = await AuthenticateApiTokenAsync(http, tokens, ambient);
+    if (ident is null) { return Results.Unauthorized(); }
+    try { return Results.Ok(await svc.ListAsync(ct)); }
+    finally { ambient.Set(null, null); }
+}).AllowAnonymous().DisableAntiforgery();
+
+// GET /api/agents/{id} - detalle del agente incluyendo su PaymentConfig (con TokenPresent bool,
+// NO expone el token descifrado). Sirve para revisar el estado actual antes del PATCH.
+app.MapGet("/api/agents/{id:guid}", async (
+    Guid id,
+    HttpContext http,
+    CubotRedManager.Application.Tenancy.IApiTokenService tokens,
+    CubotRedManager.Application.Abstractions.IAmbientTenantOverride ambient,
+    CubotRedManager.Application.Tenancy.IAiAgentService svc,
+    CancellationToken ct) =>
+{
+    var ident = await AuthenticateApiTokenAsync(http, tokens, ambient);
+    if (ident is null) { return Results.Unauthorized(); }
+    try
+    {
+        var detail = await svc.GetAsync(id, ct);
+        return detail is null ? Results.NotFound() : Results.Ok(detail);
+    }
+    finally { ambient.Set(null, null); }
+}).AllowAnonymous().DisableAntiforgery();
+
+// PATCH /api/agents/{id}/payment-config - actualiza la config de Pagos FUXION del agente. Body:
+// {
+//   "enabled": true,
+//   "userId": "3238",
+//   "country": "pe",
+//   "newToken": "cubot_..."  // null=no tocar, ""=borrar, otro=reemplazar (se cifra)
+//   "catalogContainerName": "PRECIOS PRODUCTOS",
+//   "catalogNameColumn": "Producto",
+//   "catalogProductIdColumn": "IdProducto",
+//   "catalogCountryColumn": "Pais",
+//   "apiBaseUrl": null, "apiPathTemplate": null, "responseUrlPath": null  // overrides opcionales
+// }
+// Devuelve el DTO actualizado (TokenPresent bool, expira, etc). Nunca expone el token descifrado.
+app.MapMethods("/api/agents/{id:guid}/payment-config", new[] { "PATCH" }, async (
+    Guid id,
+    HttpContext http,
+    CubotRedManager.Application.Tenancy.IApiTokenService tokens,
+    CubotRedManager.Application.Abstractions.IAmbientTenantOverride ambient,
+    CubotRedManager.Application.Tenancy.IAiAgentService svc,
+    CancellationToken ct) =>
+{
+    var ident = await AuthenticateApiTokenAsync(http, tokens, ambient);
+    if (ident is null) { return Results.Unauthorized(); }
+    try
+    {
+        var body = await System.Text.Json.JsonDocument.ParseAsync(http.Request.Body, cancellationToken: ct);
+        var root = body.RootElement;
+        string? Str(string key) => root.TryGetProperty(key, out var e) && e.ValueKind == System.Text.Json.JsonValueKind.String ? e.GetString() : null;
+        bool Bool(string key, bool def) => root.TryGetProperty(key, out var e) && (e.ValueKind == System.Text.Json.JsonValueKind.True || e.ValueKind == System.Text.Json.JsonValueKind.False) ? e.GetBoolean() : def;
+        // NewToken tri-estado: si la propiedad NO viene en el body -> null (no tocar);
+        // si viene como string -> ese string (puede ser "" para borrar).
+        string? newToken = null;
+        if (root.TryGetProperty("newToken", out var tokElem) && tokElem.ValueKind == System.Text.Json.JsonValueKind.String)
+        {
+            newToken = tokElem.GetString();
+        }
+        var req = new CubotRedManager.Application.Tenancy.SetAgentPaymentConfigRequest(
+            Enabled: Bool("enabled", false),
+            UserId: Str("userId"),
+            Country: Str("country"),
+            NewToken: newToken,
+            CatalogContainerName: Str("catalogContainerName"),
+            CatalogNameColumn: Str("catalogNameColumn"),
+            CatalogProductIdColumn: Str("catalogProductIdColumn"),
+            CatalogCountryColumn: Str("catalogCountryColumn"),
+            ApiBaseUrl: Str("apiBaseUrl"),
+            ApiPathTemplate: Str("apiPathTemplate"),
+            ResponseUrlPath: Str("responseUrlPath"));
+        var result = await svc.SetPaymentConfigAsync(id, req, ident.UserId, ct);
+        return result is null ? Results.NotFound() : Results.Ok(result);
+    }
+    finally { ambient.Set(null, null); }
+}).AllowAnonymous().DisableAntiforgery();
+
 // POST /api/data-containers/{id}/rows - crea una fila nueva. Body: {"valuesByColumnId": {...}}
 // Devuelve la fila creada con su Id. Sirve para agregar variantes (ej. una fila por presentacion
 // distinta del mismo producto). Columnas no incluidas quedan vacias.
