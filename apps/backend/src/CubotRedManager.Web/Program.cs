@@ -446,6 +446,34 @@ app.MapGet("/api/agents/{id:guid}", async (
     finally { ambient.Set(null, null); }
 }).AllowAnonymous().DisableAntiforgery();
 
+// GET /api/agents/{id}/run-logs?take=N - ultimas N entradas de bitacora del agente (todas las
+// conversaciones que atendio). Sirve para diagnosticar por que no responde con imagen o por que
+// no marca reacciones. Sin este endpoint habia que abrir la UI /agentes -> Bitacora manualmente.
+app.MapGet("/api/agents/{id:guid}/run-logs", async (
+    Guid id,
+    HttpContext http,
+    CubotRedManager.Application.Tenancy.IApiTokenService tokens,
+    CubotRedManager.Application.Abstractions.IAmbientTenantOverride ambient,
+    CubotRedManager.Application.Abstractions.IApplicationDbContext db,
+    int? take,
+    CancellationToken ct) =>
+{
+    var ident = await AuthenticateApiTokenAsync(http, tokens, ambient);
+    if (ident is null) { return Results.Unauthorized(); }
+    try
+    {
+        var n = Math.Clamp(take ?? 50, 1, 500);
+        var logs = await db.AiAgentRunLogs.AsNoTracking()
+            .Where(l => l.AgentId == id)
+            .OrderByDescending(l => l.OccurredAt)
+            .Take(n)
+            .Select(l => new { l.OccurredAt, l.Kind, l.Title, l.Content, l.Response, l.ConversationId })
+            .ToListAsync(ct);
+        return Results.Ok(logs);
+    }
+    finally { ambient.Set(null, null); }
+}).AllowAnonymous().DisableAntiforgery();
+
 // PATCH /api/agents/{id}/payment-config - actualiza la config de Pagos FUXION del agente. Body:
 // {
 //   "enabled": true,

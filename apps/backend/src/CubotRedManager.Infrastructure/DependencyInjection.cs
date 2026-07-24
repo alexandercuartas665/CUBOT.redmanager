@@ -58,9 +58,10 @@ public static class DependencyInjection
         // Chat broadcaster (NoOp por defecto; el host puede reemplazar por SignalR).
         services.AddScoped<IChatBroadcaster, NoOpChatBroadcaster>();
         // Media reader real: lee el binario del recurso desde ai_agent_resources.file_content
-        // (URLs /api/agent-resources/{id}/file). Cae al filesystem local para URLs /uploads/*
-        // en instalaciones de desarrollo. Sobrevive a restarts del host.
-        services.AddScoped<CubotRedManager.Application.Common.IAgentMediaReader,
+        // (URLs /api/agent-resources/{id}/file), descarga URLs http(s) externas (imagenes de
+        // catalogos FUXION, etc), y cae al filesystem local para URLs /uploads/*. Registrado con
+        // AddHttpClient para tener HttpClient inyectado con soporte de retry/logging estandar.
+        services.AddHttpClient<CubotRedManager.Application.Common.IAgentMediaReader,
             CubotRedManager.Infrastructure.Persistence.DbAgentMediaReader>();
         // Procesadores de markers del dispatcher.
         services.AddScoped<ILeadMarkerProcessor, LeadMarkerProcessor>();
