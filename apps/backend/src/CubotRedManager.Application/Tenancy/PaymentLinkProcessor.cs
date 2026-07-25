@@ -64,9 +64,10 @@ public sealed class PaymentLinkProcessor : IPaymentLinkProcessor
             return SubstituteAllWithFallback(agentText!, matches, "PaymentEnabled=false");
         }
 
-        // Diccionario nombre -> (productId, pais). El pais es null si el contenedor no tiene columna
-        // pais o si la fila no tiene valor - se cae al PaymentCountry del agente.
-        Dictionary<string, CatalogEntry> catalog;
+        // Diccionario nombre -> lista de (productId, pais). Un mismo nombre puede aparecer en varios
+        // paises (misma marca en Bolivia, Colombia, Peru...) y guardamos TODAS para que ParseItems
+        // elija la variante correcta segun el pais del agente o el override @pais del marcador.
+        Dictionary<string, List<CatalogEntry>> catalog;
         try
         {
             catalog = await LoadCatalogAsync(cfg, cancellationToken);
@@ -213,33 +214,70 @@ public sealed class PaymentLinkProcessor : IPaymentLinkProcessor
         return CountryNameToIso2.TryGetValue(trimmed, out var iso) ? iso : trimmed.ToLowerInvariant();
     }
 
-    /// <summary>Parsea "REXET:2, PRUNEX1:1" contra el catalogo. Resuelve nombre->productId y
-    /// deriva el pais efectivo: el de la fila del contenedor si existe, si no <paramref name="defaultCountry"/>.
+    /// <summary>Parsea "REXET:2, PRUNEX1:1, OFF@co:1" contra el catalogo. Resuelve nombre->productId y
+    /// deriva el pais efectivo:
+    ///  - Sintaxis extendida: "NOMBRE@pais:qty" fuerza el pais (ISO2 o nombre completo).
+    ///  - Sin @: si el catalogo tiene varias filas para el mismo nombre (mismo producto en varios paises),
+    ///    prefiere la fila cuyo pais coincida con <paramref name="defaultCountry"/>. Si ninguna coincide,
+    ///    toma la primera del catalogo.
     /// Nombres sin ":qty" se toman como cantidad 1. No encontrados se agregan a "unresolved" y se omiten.</summary>
-    private static List<ParsedItem> ParseItems(string args, Dictionary<string, CatalogEntry> catalog, string defaultCountry, out List<string> unresolved)
+    private static List<ParsedItem> ParseItems(string args, Dictionary<string, List<CatalogEntry>> catalog, string defaultCountry, out List<string> unresolved)
     {
         unresolved = new List<string>();
         var items = new List<ParsedItem>();
         if (string.IsNullOrWhiteSpace(args)) { return items; }
 
+        var defaultIso = NormalizeCountryToIso2(defaultCountry);
         foreach (var raw in args.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
         {
             var parts = raw.Split(':', 2, StringSplitOptions.TrimEntries);
-            var name = parts[0];
+            var namePart = parts[0];
             var qty = 1;
             if (parts.Length == 2 && !int.TryParse(parts[1], out qty)) { qty = 1; }
             if (qty <= 0) { continue; }
-            if (string.IsNullOrWhiteSpace(name)) { continue; }
-            if (catalog.TryGetValue(name.Trim(), out var entry))
+            if (string.IsNullOrWhiteSpace(namePart)) { continue; }
+
+            // Separar override de pais: "OFF@co" -> name=OFF, forcedIso=co
+            string name = namePart;
+            string? forcedIso = null;
+            var atIdx = namePart.LastIndexOf('@');
+            if (atIdx > 0 && atIdx < namePart.Length - 1)
             {
-                var rawCountry = string.IsNullOrWhiteSpace(entry.Country) ? defaultCountry : entry.Country!;
-                var country = NormalizeCountryToIso2(rawCountry);
-                items.Add(new ParsedItem(entry.ProductId, qty, country));
+                name = namePart.Substring(0, atIdx).Trim();
+                forcedIso = NormalizeCountryToIso2(namePart.Substring(atIdx + 1).Trim());
+            }
+
+            if (!catalog.TryGetValue(name.Trim(), out var candidates) || candidates.Count == 0)
+            {
+                unresolved.Add(name);
+                continue;
+            }
+
+            // Seleccion de la variante:
+            //   1) Si el marcador incluyo @pais, matchea exacto por ISO.
+            //   2) Sino, prefiere la fila cuyo pais coincida con el default del agente.
+            //   3) Fallback: primera del catalogo (comportamiento historico).
+            CatalogEntry pick;
+            if (forcedIso is not null && forcedIso.Length > 0)
+            {
+                var byForced = candidates.FirstOrDefault(e => !string.IsNullOrWhiteSpace(e.Country)
+                    && string.Equals(NormalizeCountryToIso2(e.Country!), forcedIso, StringComparison.OrdinalIgnoreCase));
+                pick = byForced ?? candidates[0];
+            }
+            else if (!string.IsNullOrEmpty(defaultIso))
+            {
+                var byDefault = candidates.FirstOrDefault(e => !string.IsNullOrWhiteSpace(e.Country)
+                    && string.Equals(NormalizeCountryToIso2(e.Country!), defaultIso, StringComparison.OrdinalIgnoreCase));
+                pick = byDefault ?? candidates[0];
             }
             else
             {
-                unresolved.Add(name);
+                pick = candidates[0];
             }
+
+            var rawCountry = string.IsNullOrWhiteSpace(pick.Country) ? defaultCountry : pick.Country!;
+            var country = forcedIso ?? NormalizeCountryToIso2(rawCountry);
+            items.Add(new ParsedItem(pick.ProductId, qty, country));
         }
         return items;
     }
@@ -248,9 +286,9 @@ public sealed class PaymentLinkProcessor : IPaymentLinkProcessor
     /// Si el operador configuro PaymentCatalogCountryColumn Y esa columna existe, se lee el pais
     /// por fila (permite un mismo agente vender en varios paises). Si no, el pais efectivo se
     /// cae al PaymentCountry del agente en ParseItems.</summary>
-    private async Task<Dictionary<string, CatalogEntry>> LoadCatalogAsync(AgentPaymentSnapshot cfg, CancellationToken ct)
+    private async Task<Dictionary<string, List<CatalogEntry>>> LoadCatalogAsync(AgentPaymentSnapshot cfg, CancellationToken ct)
     {
-        var result = new Dictionary<string, CatalogEntry>(StringComparer.OrdinalIgnoreCase);
+        var result = new Dictionary<string, List<CatalogEntry>>(StringComparer.OrdinalIgnoreCase);
         if (string.IsNullOrWhiteSpace(cfg.PaymentCatalogContainerName)) { return result; }
 
         var containers = await _containers.ListAsync(ct);
@@ -284,8 +322,15 @@ public sealed class PaymentLinkProcessor : IPaymentLinkProcessor
             {
                 country = cVal.Trim();
             }
-            // Si hay duplicados, gana el primero.
-            result.TryAdd(nameVal.Trim(), new CatalogEntry(idVal.Trim(), country));
+            var key = nameVal.Trim();
+            if (!result.TryGetValue(key, out var list))
+            {
+                list = new List<CatalogEntry>();
+                result[key] = list;
+            }
+            // El mismo producto vale en varios paises: preservamos TODAS las variantes.
+            // La seleccion final (que fila usar) la hace ParseItems segun el pais del agente.
+            list.Add(new CatalogEntry(idVal.Trim(), country));
         }
         return result;
     }
