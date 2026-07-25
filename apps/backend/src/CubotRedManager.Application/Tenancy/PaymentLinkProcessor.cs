@@ -139,7 +139,17 @@ public sealed class PaymentLinkProcessor : IPaymentLinkProcessor
             if (groupUrls.Count > 0)
             {
                 sb.Append(string.Join('\n', groupUrls));
-                allGeneratedUrls.AddRange(groupUrls);
+                // Traza detallada: cada URL con el resumen de items (productId x qty en el country) que se
+                // pidieron a FUXION. Sirve para diagnosticar cuando FUXION emite un URL "valido" (201 OK)
+                // pero la tienda publica no carga el carrito (ej. item deshabilitado en la tienda pese a
+                // estar en el catalogo, o country/item combo no permitido).
+                var groupsList = groups.ToList();
+                for (int i = 0; i < groupsList.Count && i < groupUrls.Count; i++)
+                {
+                    var g = groupsList[i];
+                    var itemsStr = string.Join(",", g.Select(x => $"{x.ProductId}x{x.Amount}"));
+                    allGeneratedUrls.Add($"{groupUrls[i]} (pais={g.Key} items=[{itemsStr}])");
+                }
                 generated += groupOk;
                 failed += groupErr;
             }
