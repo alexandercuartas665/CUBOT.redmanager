@@ -65,7 +65,8 @@ public sealed class AiAgentService : IAiAgentService
             CatalogCountryColumn: agent.PaymentCatalogCountryColumn,
             ApiBaseUrl: agent.PaymentApiBaseUrl,
             ApiPathTemplate: agent.PaymentApiPathTemplate,
-            ResponseUrlPath: agent.PaymentResponseUrlPath);
+            ResponseUrlPath: agent.PaymentResponseUrlPath,
+            LastPriceSyncAt: agent.PaymentLastPriceSyncAt);
         return new AiAgentDetailDto(Map(agent, resources.Count), resources, prompts, payment);
     }
 
@@ -470,7 +471,8 @@ public sealed class AiAgentService : IAiAgentService
             CatalogCountryColumn: agent.PaymentCatalogCountryColumn,
             ApiBaseUrl: agent.PaymentApiBaseUrl,
             ApiPathTemplate: agent.PaymentApiPathTemplate,
-            ResponseUrlPath: agent.PaymentResponseUrlPath);
+            ResponseUrlPath: agent.PaymentResponseUrlPath,
+            LastPriceSyncAt: agent.PaymentLastPriceSyncAt);
     }
 
     public async Task<string?> GetDecryptedPaymentTokenAsync(Guid agentId, CancellationToken cancellationToken = default)

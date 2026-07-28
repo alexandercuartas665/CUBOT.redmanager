@@ -19,6 +19,23 @@ public interface IFuxionPaymentClient
     /// token esta vivo (2xx) o rechazado (401/403). Usado por el worker de vigilancia para
     /// detectar tokens caducados antes de que un cliente intente pagar. No lanza excepciones.</summary>
     Task<FuxionVerifySessionResult> VerifySessionAsync(string baseUrl, string bearerToken, CancellationToken cancellationToken = default);
+
+    /// <summary>Llama GET /api/products?country=XX&amp;language=es y devuelve el diccionario
+    /// itemCode -> price del catalogo actual de FUXION para ese pais. Usado por el "Sincronizar
+    /// precios" del agente para mantener el DataContainer alineado con el portal. No lanza excepciones.</summary>
+    Task<FuxionCatalogResult> GetProductsByCountryAsync(string baseUrl, string bearerToken, string countryIso2, CancellationToken cancellationToken = default);
+}
+
+public sealed record FuxionCatalogResult(
+    bool Ok,
+    IReadOnlyDictionary<string, decimal> Prices, // itemCode -> price
+    string? ErrorDetail,
+    int? HttpStatus)
+{
+    public static FuxionCatalogResult Success(IReadOnlyDictionary<string, decimal> prices) =>
+        new(true, prices, null, null);
+    public static FuxionCatalogResult Failure(string detail, int? status = null) =>
+        new(false, new Dictionary<string, decimal>(), detail, status);
 }
 
 public sealed record FuxionSalesLinkItem(string ItemId, int Amount);

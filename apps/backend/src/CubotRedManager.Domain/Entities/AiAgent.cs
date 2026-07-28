@@ -78,6 +78,11 @@ public class AiAgent : TenantEntity
     /// dentro de las ultimas 24h. Se resetea automaticamente al guardar un token nuevo.</summary>
     public DateTimeOffset? PaymentTokenExpiryNotifiedAt { get; set; }
 
+    /// <summary>Ultima vez que se ejecuto exitosamente el "Sincronizar precios" (manual desde UI o
+    /// via API). Se muestra en la UI del agente para que el operador sepa si el catalogo esta al
+    /// dia respecto al portal FUXION.</summary>
+    public DateTimeOffset? PaymentLastPriceSyncAt { get; set; }
+
     /// <summary>Nombre del DataContainer del tenant que contiene el catalogo de productos.</summary>
     public string? PaymentCatalogContainerName { get; set; }
 

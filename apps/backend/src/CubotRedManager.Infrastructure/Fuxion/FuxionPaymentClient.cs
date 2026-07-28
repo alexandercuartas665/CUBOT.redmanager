@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Net;
 using System.Net.Http.Headers;
 using System.Text;
@@ -161,6 +162,56 @@ public sealed class FuxionPaymentClient : IFuxionPaymentClient
 
     private static string TruncateForLog(string s, int max = 500)
         => string.IsNullOrEmpty(s) ? "" : (s.Length > max ? s.Substring(0, max) + "..." : s);
+
+    public async Task<FuxionCatalogResult> GetProductsByCountryAsync(string baseUrl, string bearerToken, string countryIso2, CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(baseUrl) || string.IsNullOrWhiteSpace(bearerToken) || string.IsNullOrWhiteSpace(countryIso2))
+        {
+            return FuxionCatalogResult.Failure("config incompleta (baseUrl/token/country)");
+        }
+        var url = baseUrl.TrimEnd('/') + $"/api/products?country={Uri.EscapeDataString(countryIso2.ToLowerInvariant())}&language=es";
+        using var req = new HttpRequestMessage(HttpMethod.Get, url);
+        req.Headers.Authorization = new AuthenticationHeaderValue("Bearer", bearerToken);
+        req.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
+        try
+        {
+            using var resp = await _http.SendAsync(req, cancellationToken);
+            var status = (int)resp.StatusCode;
+            var body = await resp.Content.ReadAsStringAsync(cancellationToken);
+            if (status == 401 || status == 403) { return FuxionCatalogResult.Failure("token rechazado", status); }
+            if (status >= 400) { return FuxionCatalogResult.Failure($"HTTP {status}: {TruncateForLog(body, 200)}", status); }
+            using var doc = JsonDocument.Parse(body);
+            if (!doc.RootElement.TryGetProperty("data", out var data) || data.ValueKind != JsonValueKind.Array)
+            {
+                return FuxionCatalogResult.Failure("respuesta sin data[]", status);
+            }
+            var dict = new Dictionary<string, decimal>();
+            foreach (var item in data.EnumerateArray())
+            {
+                var code = ReadStr(item, "itemCode");
+                if (string.IsNullOrWhiteSpace(code)) { continue; }
+                if (!item.TryGetProperty("price", out var priceEl)) { continue; }
+                // price puede venir como number o string; tolerante.
+                decimal price;
+                if (priceEl.ValueKind == JsonValueKind.Number) { price = priceEl.GetDecimal(); }
+                else if (priceEl.ValueKind == JsonValueKind.String
+                         && decimal.TryParse(priceEl.GetString(), NumberStyles.Any, CultureInfo.InvariantCulture, out var p2))
+                {
+                    price = p2;
+                }
+                else { continue; }
+                dict[code!] = price;
+            }
+            return FuxionCatalogResult.Success(dict);
+        }
+        catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or JsonException)
+        {
+            return FuxionCatalogResult.Failure($"{ex.GetType().Name}: {ex.Message}");
+        }
+    }
+
+    private static string? ReadStr(JsonElement root, string prop)
+        => root.TryGetProperty(prop, out var v) && v.ValueKind == JsonValueKind.String ? v.GetString() : null;
 
     public async Task<FuxionVerifySessionResult> VerifySessionAsync(string baseUrl, string bearerToken, CancellationToken cancellationToken = default)
     {

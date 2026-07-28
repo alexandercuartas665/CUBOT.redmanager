@@ -16,6 +16,7 @@
 @inject IWebHostEnvironment Env
 @inject CubotRedManager.Application.Common.IAgentMediaReader MediaReader
 @inject IDataContainerService ContainersSvc
+@inject IPriceSyncService PriceSync
 @inject IJSRuntime JS
 
 <PageTitle>Agentes IA - CUBOT.redmanager</PageTitle>
@@ -577,9 +578,26 @@ else
                                 </div>
                             </details>
 
-                            <div style="display:flex;gap:8px;margin-top:14px;">
+                            <div style="display:flex;gap:8px;margin-top:14px;flex-wrap:wrap;align-items:center;">
                                 <button class="btn btn-primary" @onclick="SavePaymentConfigAsync" disabled="@_busy">Guardar configuracion</button>
+                                <button class="btn btn-outline-primary" @onclick="SyncPricesAsync" disabled="@_busy || _priceSyncBusy" title="Baja los precios reales del catalogo FUXION y actualiza la columna Precio del contenedor">
+                                    @(_priceSyncBusy ? "Sincronizando..." : "Sincronizar precios ahora")
+                                </button>
+                                <span class="text-muted" style="font-size:12px;">
+                                    @if (_fPayLastPriceSyncAt is DateTimeOffset ts)
+                                    {
+                                        <span>Ultima sync: <strong>@ts.LocalDateTime.ToString("dd/MM/yyyy HH:mm")</strong></span>
+                                    }
+                                    else
+                                    {
+                                        <span>Sin sincronizaciones previas.</span>
+                                    }
+                                </span>
                             </div>
+                            @if (_priceSyncMsg is not null)
+                            {
+                                <div class="alert @(_priceSyncOk ? "alert-success" : "alert-warning")" style="margin-top:10px;padding:8px 12px;font-size:13px;">@_priceSyncMsg</div>
+                            }
                         </div>
                     }
                 </div>
@@ -1132,6 +1150,10 @@ else
     private string? _fPayBaseUrl;
     private string? _fPayPath;
     private string? _fPayRespPath;
+    private DateTimeOffset? _fPayLastPriceSyncAt;
+    private bool _priceSyncBusy;
+    private string? _priceSyncMsg;
+    private bool _priceSyncOk;
     private string? _payError;
     private string? _payInfo;
 
@@ -1206,6 +1228,31 @@ else
         }
         catch (Exception ex) { _payError = "Error: " + ex.Message; }
         finally { _busy = false; }
+    }
+
+    private async Task SyncPricesAsync()
+    {
+        if (_editId is null) { return; }
+        _priceSyncBusy = true; _priceSyncMsg = null; _priceSyncOk = false;
+        try
+        {
+            var actor = await ActorAsync();
+            var r = await PriceSync.SyncPricesAsync(_editId.Value, actor);
+            if (!r.Ok)
+            {
+                _priceSyncOk = false;
+                _priceSyncMsg = "No se pudo sincronizar: " + string.Join(" | ", r.Errors);
+                return;
+            }
+            _fPayLastPriceSyncAt = r.SyncedAt;
+            _priceSyncOk = true;
+            var sb = new System.Text.StringBuilder();
+            sb.Append($"Sincronizacion completada. Revisadas: {r.RowsChecked}, actualizadas: {r.RowsUpdated}, ya alineadas: {r.RowsAlreadyOk}, saltadas: {r.RowsSkipped}.");
+            if (r.Errors.Count > 0) { sb.Append(" Errores: ").Append(string.Join(" | ", r.Errors)); }
+            _priceSyncMsg = sb.ToString();
+        }
+        catch (Exception ex) { _priceSyncOk = false; _priceSyncMsg = "Excepcion: " + ex.Message; }
+        finally { _priceSyncBusy = false; }
     }
 
     // Estado de bindings (lineas WhatsApp atendidas por el agente que se esta editando).
@@ -1378,6 +1425,8 @@ else
         _fPayBaseUrl = pc?.ApiBaseUrl;
         _fPayPath = pc?.ApiPathTemplate;
         _fPayRespPath = pc?.ResponseUrlPath;
+        _fPayLastPriceSyncAt = pc?.LastPriceSyncAt;
+        _priceSyncBusy = false; _priceSyncMsg = null; _priceSyncOk = false;
         _payError = null; _payInfo = null;
         _resources = detail.Resources.ToList();
         _prompts = detail.Prompts.ToList();

@@ -52,7 +52,8 @@ public sealed record AgentPaymentConfigDto(
     string? CatalogCountryColumn,
     string? ApiBaseUrl,
     string? ApiPathTemplate,
-    string? ResponseUrlPath);
+    string? ResponseUrlPath,
+    DateTimeOffset? LastPriceSyncAt = null);
 
 // NewToken:
 //   null -> no tocar el token guardado (usuario solo edita otros campos).

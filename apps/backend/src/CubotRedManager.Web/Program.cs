@@ -528,6 +528,27 @@ app.MapMethods("/api/agents/{id:guid}/payment-config", new[] { "PATCH" }, async 
     finally { ambient.Set(null, null); }
 }).AllowAnonymous().DisableAntiforgery();
 
+// POST /api/agents/{id}/sync-prices - sincroniza la columna Precio del DataContainer con los
+// precios actuales del catalogo FUXION (baja /api/products?country=XX por cada pais con filas y
+// PATCHea solo lo que difiere). Devuelve el detalle de la corrida.
+app.MapPost("/api/agents/{id:guid}/sync-prices", async (
+    Guid id,
+    HttpContext http,
+    CubotRedManager.Application.Tenancy.IApiTokenService tokens,
+    CubotRedManager.Application.Abstractions.IAmbientTenantOverride ambient,
+    CubotRedManager.Application.Tenancy.IPriceSyncService priceSync,
+    CancellationToken ct) =>
+{
+    var ident = await AuthenticateApiTokenAsync(http, tokens, ambient);
+    if (ident is null) { return Results.Unauthorized(); }
+    try
+    {
+        var result = await priceSync.SyncPricesAsync(id, ident.UserId, ct);
+        return Results.Ok(result);
+    }
+    finally { ambient.Set(null, null); }
+}).AllowAnonymous().DisableAntiforgery();
+
 // POST /api/data-containers/{id}/rows - crea una fila nueva. Body: {"valuesByColumnId": {...}}
 // Devuelve la fila creada con su Id. Sirve para agregar variantes (ej. una fila por presentacion
 // distinta del mismo producto). Columnas no incluidas quedan vacias.

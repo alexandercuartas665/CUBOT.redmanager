@@ -188,31 +188,8 @@ public sealed class PaymentLinkProcessor : IPaymentLinkProcessor
         return new PaymentLinkResult(sb.ToString(), matches.Count, 0, matches.Count, new[] { reason }, Array.Empty<string>());
     }
 
-    // El API FUXION exige codigo ISO2 en country (bo, co, pe, ...). Pero la columna Pais del contenedor
-    // suele tener el nombre completo ("Bolivia", "Colombia", "Perú"). Si se manda el nombre completo,
-    // FUXION acepta el generate-link y devuelve 201, pero el link resultante no carga en la tienda
-    // publica (POST /external/review => HTTP 500). Este mapa es la misma tabla que usa el importador.
-    private static readonly Dictionary<string, string> CountryNameToIso2 = new(StringComparer.OrdinalIgnoreCase)
-    {
-        ["argentina"]="ar",["austria"]="at",["belgica"]="be",["bélgica"]="be",
-        ["bolivia"]="bo",["brasil"]="br",["chile"]="cl",["colombia"]="co",
-        ["costa rica"]="cr",["alemania"]="de",["ecuador"]="ec",["espana"]="es",["españa"]="es",
-        ["francia"]="fr",["guatemala"]="gt",["honduras"]="hn",["croacia"]="hr",
-        ["irlanda"]="ie",["italia"]="it",["luxemburgo"]="lu",["mexico"]="mx",["méxico"]="mx",
-        ["netherlands"]="nl",["holanda"]="nl",["paises bajos"]="nl",["países bajos"]="nl",
-        ["panama"]="pa",["panamá"]="pa",["peru"]="pe",["perú"]="pe",
-        ["portugal"]="pt",["europa - portugal"]="pt",
-        ["eslovenia"]="si",["eslovaquia"]="sk",
-        ["estados unidos"]="us",["usa"]="us",["uruguay"]="uy",
-    };
-
-    private static string NormalizeCountryToIso2(string raw)
-    {
-        var trimmed = (raw ?? "").Trim();
-        if (trimmed.Length == 0) { return ""; }
-        if (trimmed.Length == 2) { return trimmed.ToLowerInvariant(); }
-        return CountryNameToIso2.TryGetValue(trimmed, out var iso) ? iso : trimmed.ToLowerInvariant();
-    }
+    // Nombres de pais -> ISO2 (compartido con PriceSyncService via CountryIsoMapper).
+    private static string NormalizeCountryToIso2(string raw) => CountryIsoMapper.ToIso2(raw);
 
     /// <summary>Parsea "REXET:2, PRUNEX1:1, OFF@co:1" contra el catalogo. Resuelve nombre->productId y
     /// deriva el pais efectivo:
