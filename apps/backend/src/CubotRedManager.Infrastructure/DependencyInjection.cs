@@ -68,6 +68,7 @@ public static class DependencyInjection
         services.AddScoped<IPedidoMarkerProcessor, PedidoMarkerProcessor>();
         services.AddScoped<IPaymentLinkProcessor, PaymentLinkProcessor>();
         services.AddScoped<IPriceSyncService, PriceSyncService>();
+        services.AddScoped<IProductLookupService, ProductLookupService>();
         // Cliente HTTP tipado para el API de app-aware.fuxion.com. La configuracion por agente
         // (token, userId, path) vive en AiAgent.Payment* y se pasa por request.
         services.AddHttpClient<CubotRedManager.Application.Common.IFuxionPaymentClient,

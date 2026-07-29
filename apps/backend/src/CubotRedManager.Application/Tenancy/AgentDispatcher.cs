@@ -27,6 +27,7 @@ public sealed class AgentDispatcher : IAgentDispatcher
     private readonly ILeadMarkerProcessor _leadMarker;
     private readonly IPedidoMarkerProcessor _pedidoMarker;
     private readonly IPaymentLinkProcessor _paymentLinker;
+    private readonly IProductLookupService _productLookup;
     private readonly IAgentMediaReader _mediaReader;
     private readonly TimeProvider _timeProvider;
     private readonly ILogger<AgentDispatcher> _logger;
@@ -39,6 +40,7 @@ public sealed class AgentDispatcher : IAgentDispatcher
         ILeadMarkerProcessor leadMarker,
         IPedidoMarkerProcessor pedidoMarker,
         IPaymentLinkProcessor paymentLinker,
+        IProductLookupService productLookup,
         IAgentMediaReader mediaReader,
         TimeProvider timeProvider,
         ILogger<AgentDispatcher> logger)
@@ -49,6 +51,7 @@ public sealed class AgentDispatcher : IAgentDispatcher
         _broadcaster = broadcaster;
         _leadMarker = leadMarker;
         _pedidoMarker = pedidoMarker;
+        _productLookup = productLookup;
         _paymentLinker = paymentLinker;
         _mediaReader = mediaReader;
         _timeProvider = timeProvider;
@@ -177,7 +180,7 @@ public sealed class AgentDispatcher : IAgentDispatcher
 
         _logger.LogInformation("Dispatcher: ejecutando inferencia agente {AgentId} conv {ConvId} ({TurnCount} turnos, {TotalChars} chars)",
             binding.AgentId, conversationId, turns.Count, totalChars);
-        var result = await _inference.TestChatAsync(binding.AgentId, turns, systemPromptOverride: null, cancellationToken: cancellationToken);
+        var result = await RunInferenceWithToolLoopAsync(binding.AgentId, tenantId, conversationId, turns, cancellationToken);
 
         // Prompts / sub-llamadas en bitacora.
         if (result.DebugPrompts is not null)
@@ -446,7 +449,7 @@ public sealed class AgentDispatcher : IAgentDispatcher
         }
         if (turns.Count == 0) { turns.Add(new AiChatTurn("user", inboundBody)); }
 
-        var result = await _inference.TestChatAsync(binding.AgentId, turns, systemPromptOverride: null, cancellationToken: cancellationToken);
+        var result = await RunInferenceWithToolLoopAsync(binding.AgentId, tenantId, conversationId, turns, cancellationToken);
         if (!result.Ok) { return Skip($"La inferencia fallo: {result.Error ?? "(sin detalle)"}"); }
 
         var leadResult = await _leadMarker.ProcessAsync(tenantId, binding.AgentId, conversationId, result.Text ?? string.Empty, cancellationToken);
@@ -866,5 +869,54 @@ public sealed class AgentDispatcher : IAgentDispatcher
         var dto = new MessageDto(message.Id, message.ConversationId, message.Direction, message.Body,
             message.MessageType, message.SentAt, message.MediaType, message.MediaUrl, message.MediaMimeType, message.SentByName);
         await _broadcaster.MessageAddedAsync(tenantId, conversationId, dto, ct);
+    }
+
+    /// <summary>
+    /// Ejecuta la inferencia con soporte de tool-call para <c>[[buscar_producto: X]]</c>: si el LLM
+    /// emite uno o mas marcadores de busqueda, ejecuta las busquedas contra el contenedor Payment
+    /// del agente, agrega el turno del model + un turno "user" con los resultados y reinvoca al
+    /// LLM. Se corta a MaxToolIterations para evitar bucles si el LLM insiste en buscar.
+    /// </summary>
+    private const int MaxToolIterations = 3;
+    private async Task<AiChatResult> RunInferenceWithToolLoopAsync(
+        Guid agentId, Guid tenantId, Guid conversationId, List<AiChatTurn> turns, CancellationToken ct)
+    {
+        AiChatResult result = await _inference.TestChatAsync(agentId, turns, systemPromptOverride: null, cancellationToken: ct);
+        for (int iter = 0; iter < MaxToolIterations; iter++)
+        {
+            if (!result.Ok || string.IsNullOrWhiteSpace(result.Text)) { return result; }
+            var queries = ProductLookupMarker.Extract(result.Text);
+            if (queries.Count == 0) { return result; }
+
+            var toolBlocks = new System.Text.StringBuilder();
+            foreach (var q in queries)
+            {
+                var lr = await _productLookup.LookupAsync(agentId, q.Text, q.CountryIso2, ct);
+                var header = q.CountryIso2 is null
+                    ? $"[buscar_producto: {q.Text}] -> {(lr.Ok ? $"{lr.RowsMatched} fila(s)" : $"ERROR: {lr.ErrorDetail}")}"
+                    : $"[buscar_producto: {q.Text} @{q.CountryIso2}] -> {(lr.Ok ? $"{lr.RowsMatched} fila(s)" : $"ERROR: {lr.ErrorDetail}")}";
+                await LogRunAsync(tenantId, conversationId, agentId, AiAgentRunLogKind.Tool,
+                    header, lr.FormattedText, null, ct);
+                toolBlocks.AppendLine(lr.Ok ? lr.FormattedText : $"ERROR en busqueda '{q.Text}': {lr.ErrorDetail}");
+                toolBlocks.AppendLine();
+            }
+            // Agregar el turno del model (que emitio el marker) y el turno tool_result como "user"
+            // (los providers IA soportan bien role=user con contenido tipo "SYSTEM: aqui van los
+            // resultados"; usar role=tool nativo requeriria refactor del contrato).
+            turns.Add(new AiChatTurn("model", result.Text!));
+            turns.Add(new AiChatTurn("user",
+                "RESULTADOS DE BUSQUEDA (datos EXACTOS del catalogo del tenant; usa estos precios/ids " +
+                "y descarta cualquier valor que hayas mencionado antes en tu ultimo turno):\n\n" + toolBlocks));
+
+            result = await _inference.TestChatAsync(agentId, turns, systemPromptOverride: null, cancellationToken: ct);
+        }
+        // Si tras MaxToolIterations el LLM sigue emitiendo markers, devolvemos el ultimo resultado
+        // tal cual (con markers): el ScrubResidualMarkers los limpiara antes de enviarlo al cliente
+        // y el operador vera la conversacion mocha en bitacora.
+        await LogRunAsync(tenantId, conversationId, agentId, AiAgentRunLogKind.Info,
+            "buscar_producto: max iteraciones alcanzadas",
+            $"El LLM siguio pidiendo busquedas despues de {MaxToolIterations} rondas. Ultimo texto conservado tal cual.",
+            null, ct);
+        return result;
     }
 }

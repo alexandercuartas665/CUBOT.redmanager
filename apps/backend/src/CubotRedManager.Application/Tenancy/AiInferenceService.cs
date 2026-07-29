@@ -148,6 +148,32 @@ public sealed class AiInferenceService : IAiInferenceService
             }
         }
 
+        // Instruccion de la herramienta [[buscar_producto: X]] cuando el agente tiene Payment
+        // configurado con un contenedor de catalogo. Escala mejor que dumpear el contenedor entero
+        // en el prompt (que se trunca a 100 filas y fuerza a la IA a inventar cuando faltan datos).
+        var paymentCatalog = await _db.AiAgents.AsNoTracking()
+            .Where(a => a.Id == agentId && a.PaymentEnabled)
+            .Select(a => new { a.PaymentCatalogContainerName, a.PaymentCountry })
+            .FirstOrDefaultAsync(ct);
+        if (paymentCatalog is not null && !string.IsNullOrWhiteSpace(paymentCatalog.PaymentCatalogContainerName))
+        {
+            sb.AppendLine();
+            sb.AppendLine();
+            sb.AppendLine("HERRAMIENTA DE BUSQUEDA DE PRODUCTOS (obligatoria para dar precios o IDs).");
+            sb.AppendLine($"El contenedor de catalogo \"{paymentCatalog.PaymentCatalogContainerName}\" tiene mas filas de las que caben en este prompt, asi que NO lo tienes cargado entero. Cuando necesites un precio, un IdProducto, un beneficio o una url de imagen para responder, EMITE PRIMERO el marcador:");
+            sb.AppendLine("  [[buscar_producto: NOMBRE_DEL_PRODUCTO]]           (usa el pais default del agente)");
+            sb.AppendLine("  [[buscar_producto: NOMBRE_DEL_PRODUCTO @pais]]     (fuerza un pais especifico, ej. @co, @pe, @bo)");
+            sb.AppendLine("Reglas OBLIGATORIAS al usar el marcador:");
+            sb.AppendLine("  1) NO agregues ningun precio, cantidad, kit ni IdProducto en el MISMO mensaje donde emites [[buscar_producto:...]]. El sistema va a ejecutar la busqueda y te va a re-preguntar con los resultados reales; ahi si arma la respuesta al cliente.");
+            sb.AppendLine("  2) Puedes emitir varios [[buscar_producto:...]] en un mismo turno si el cliente pide varios productos.");
+            sb.AppendLine("  3) NUNCA inventes ni recuerdes precios que hayas visto en conversaciones anteriores; siempre busca de nuevo.");
+            sb.AppendLine("  4) Los nombres son parciales: [[buscar_producto: PRUNEX]] devuelve todas las variantes de PRUNEX.");
+            if (!string.IsNullOrWhiteSpace(paymentCatalog.PaymentCountry))
+            {
+                sb.AppendLine($"El pais default del agente es '{paymentCatalog.PaymentCountry}'; usa @otro-pais solo si el cliente lo pide.");
+            }
+        }
+
         if (resources.Count > 0)
         {
             sb.AppendLine();
