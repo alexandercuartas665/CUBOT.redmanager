@@ -119,6 +119,7 @@ else
     }
     else
     {
+        var visibleRows = FilteredRows();
         <div class="card" style="padding:0;overflow:auto;">
             <table class="table dc-table" @ref="_tableRef">
                 <thead>
@@ -131,9 +132,30 @@ else
                         }
                         <th style="width:140px;text-align:right;">Acciones</th>
                     </tr>
+                    <tr class="dc-filter-row">
+                        @foreach (var col in _selected.Columns)
+                        {
+                            var cid = col.Id;
+                            <th>
+                                <input class="form-control form-control-sm" placeholder="filtrar..."
+                                       value="@GetColFilter(cid)"
+                                       @oninput="e => SetColFilter(cid, e.Value?.ToString())" />
+                            </th>
+                        }
+                        <th style="text-align:right;">
+                            @if (HasAnyColFilter())
+                            {
+                                <button class="btn btn-sm btn-link" @onclick="ClearColFilters" title="Quitar todos los filtros por columna">limpiar</button>
+                            }
+                        </th>
+                    </tr>
                 </thead>
                 <tbody>
-                    @foreach (var row in _rows)
+                    @if (visibleRows.Count == 0)
+                    {
+                        <tr><td colspan="@(_selected.Columns.Count + 1)" style="text-align:center;color:var(--muted-foreground);padding:24px;">Ninguna fila coincide con los filtros.</td></tr>
+                    }
+                    @foreach (var row in visibleRows)
                     {
                         <tr>
                             @foreach (var col in _selected.Columns)
@@ -335,6 +357,53 @@ else
     private List<DataContainerRowDto> _rows = new();
     private string _search = "";
 
+    // Filtros por columna (client-side, AND entre columnas). Aplicados sobre _rows ya cargadas.
+    // Al cambiar de contenedor se resetean.
+    private readonly Dictionary<Guid, string> _colFilters = new();
+
+    private string GetColFilter(Guid colId)
+        => _colFilters.TryGetValue(colId, out var v) ? v : "";
+
+    private void SetColFilter(Guid colId, string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value)) { _colFilters.Remove(colId); }
+        else { _colFilters[colId] = value; }
+    }
+
+    private bool HasAnyColFilter() => _colFilters.Count > 0;
+    private void ClearColFilters() => _colFilters.Clear();
+
+    private List<DataContainerRowDto> FilteredRows()
+    {
+        if (_colFilters.Count == 0) { return _rows; }
+        return _rows.Where(r =>
+        {
+            foreach (var kv in _colFilters)
+            {
+                var cellRaw = r.ValuesByColumnId.GetValueOrDefault(kv.Key) ?? "";
+                if (!ContainsLoose(cellRaw, kv.Value)) { return false; }
+            }
+            return true;
+        }).ToList();
+    }
+
+    // Match tolerante: minusculas, sin acentos, ambos lados. Asi "colombia" matchea "Colombia"
+    // y "cafe" matchea "Café". Se usa lo mismo en el bot.
+    private static bool ContainsLoose(string haystack, string needle)
+    {
+        static string Norm(string s)
+        {
+            var sb = new System.Text.StringBuilder(s.Length);
+            foreach (var c in s.Normalize(System.Text.NormalizationForm.FormD))
+            {
+                if (System.Globalization.CharUnicodeInfo.GetUnicodeCategory(c) == System.Globalization.UnicodeCategory.NonSpacingMark) { continue; }
+                sb.Append(char.ToLowerInvariant(c));
+            }
+            return sb.ToString();
+        }
+        return Norm(haystack).Contains(Norm(needle));
+    }
+
     // Ref al <table> para pasarselo al JS del resizer. Guid del ultimo container inicializado
     // en JS para no re-wire-ar el mismo listener multiples veces en cada re-render de Blazor.
     private ElementReference _tableRef;
@@ -412,6 +481,7 @@ else
         _selected = await DataSvc.GetAsync(id);
         if (_selected is null) { return; }
         _search = "";
+        _colFilters.Clear();
         await ReloadRowsAsync();
     }
 
@@ -426,6 +496,7 @@ else
         _selected = null;
         _rows = new();
         _search = "";
+        _colFilters.Clear();
         await ReloadListAsync();
     }
 
@@ -875,6 +946,18 @@ else
     }
     .dc-resizer:hover {
         background: color-mix(in srgb, var(--primary, #A03DC9) 40%, transparent);
+    }
+    /* Fila de filtros por columna: mas compacta que el header, misma alineacion */
+    .dc-table tr.dc-filter-row th {
+        padding: 4px 6px;
+        background: var(--card, #fff);
+        font-weight: normal;
+    }
+    .dc-table tr.dc-filter-row input.form-control {
+        font-size: 12px;
+        padding: 2px 6px;
+        height: auto;
+        min-height: 24px;
     }
     .dc-cols {
         display: flex;
