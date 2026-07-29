@@ -549,6 +549,29 @@ app.MapPost("/api/agents/{id:guid}/sync-prices", async (
     finally { ambient.Set(null, null); }
 }).AllowAnonymous().DisableAntiforgery();
 
+// DELETE /api/data-containers/{id}/rows/{rowId} - borra una fila del contenedor. Usado para
+// limpiar duplicados (tarea one-shot) o rows creadas por error via API. Devuelve 204 si borro,
+// 404 si no existia. La validacion de que la fila pertenezca al contenedor la hace el servicio.
+app.MapDelete("/api/data-containers/{id:guid}/rows/{rowId:guid}", async (
+    Guid id,
+    Guid rowId,
+    HttpContext http,
+    CubotRedManager.Application.Tenancy.IApiTokenService tokens,
+    CubotRedManager.Application.Abstractions.IAmbientTenantOverride ambient,
+    CubotRedManager.Application.Tenancy.IDataContainerService svc,
+    CancellationToken ct) =>
+{
+    _ = id; // no lo pasamos al servicio (borra por rowId directo, tenant-scoped via ambient)
+    var ident = await AuthenticateApiTokenAsync(http, tokens, ambient);
+    if (ident is null) { return Results.Unauthorized(); }
+    try
+    {
+        var ok = await svc.DeleteRowAsync(rowId, ident.UserId, ct);
+        return ok ? Results.NoContent() : Results.NotFound();
+    }
+    finally { ambient.Set(null, null); }
+}).AllowAnonymous().DisableAntiforgery();
+
 // POST /api/data-containers/{id}/rows - crea una fila nueva. Body: {"valuesByColumnId": {...}}
 // Devuelve la fila creada con su Id. Sirve para agregar variantes (ej. una fila por presentacion
 // distinta del mismo producto). Columnas no incluidas quedan vacias.
