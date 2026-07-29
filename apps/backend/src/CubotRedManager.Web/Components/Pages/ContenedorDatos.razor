@@ -120,12 +120,14 @@ else
     else
     {
         <div class="card" style="padding:0;overflow:auto;">
-            <table class="table dc-table">
+            <table class="table dc-table" @ref="_tableRef">
                 <thead>
                     <tr>
                         @foreach (var col in _selected.Columns)
                         {
-                            <th title="@(col.Description ?? col.Type.ToString())">@col.Name</th>
+                            <th title="@(col.Description ?? col.Type.ToString())" data-col-id="@col.Id">
+                                @col.Name<div class="dc-resizer"></div>
+                            </th>
                         }
                         <th style="width:140px;text-align:right;">Acciones</th>
                     </tr>
@@ -332,6 +334,30 @@ else
     private DataContainerDetailDto? _selected;
     private List<DataContainerRowDto> _rows = new();
     private string _search = "";
+
+    // Ref al <table> para pasarselo al JS del resizer. Guid del ultimo container inicializado
+    // en JS para no re-wire-ar el mismo listener multiples veces en cada re-render de Blazor.
+    private ElementReference _tableRef;
+    private Guid? _lastResizerInitContainerId;
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        // Solo inicializar el resizer cuando cambio de contenedor seleccionado (o al primer render
+        // con uno ya cargado). No se llama a JS si _selected es null (no hay tabla).
+        if (_selected is null) { return; }
+        if (_lastResizerInitContainerId == _selected.Id) { return; }
+        try
+        {
+            await JS.InvokeVoidAsync("dcResize.init", _tableRef, _selected.Id.ToString());
+            _lastResizerInitContainerId = _selected.Id;
+        }
+        catch (JSException ex)
+        {
+            // dcResize.init aun no cargado (primer render pre-hidration). Blazor volvera a llamar
+            // OnAfterRenderAsync tras el hidration y ahi ya funciona. Sin log ruidoso.
+            _ = ex;
+        }
+    }
 
     // Modal: modelo
     private bool _containerModalOpen;
@@ -824,9 +850,31 @@ else
     .dc-table {
         margin: 0;
         font-size: 0.88rem;
+        table-layout: fixed; /* respeta los width que setea el resizer JS */
     }
     .dc-table th {
         white-space: nowrap;
+        position: relative;
+        overflow: hidden;
+        text-overflow: ellipsis;
+    }
+    .dc-table td {
+        overflow: hidden;
+        text-overflow: ellipsis;
+        vertical-align: top;
+    }
+    .dc-resizer {
+        position: absolute;
+        top: 0;
+        right: 0;
+        width: 6px;
+        height: 100%;
+        cursor: col-resize;
+        user-select: none;
+        z-index: 2;
+    }
+    .dc-resizer:hover {
+        background: color-mix(in srgb, var(--primary, #A03DC9) 40%, transparent);
     }
     .dc-cols {
         display: flex;
