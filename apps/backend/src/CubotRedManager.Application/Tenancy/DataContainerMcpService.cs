@@ -169,7 +169,10 @@ public sealed class DataContainerMcpService : IDataContainerMcpService
         return sb.ToString().TrimEnd();
     }
 
-    public async Task<string> ResolvePlaceholdersAsync(string text, bool mcpEnabled, CancellationToken ct = default)
+    public Task<string> ResolvePlaceholdersAsync(string text, bool mcpEnabled, CancellationToken ct = default)
+        => ResolvePlaceholdersAsync(text, mcpEnabled, paymentCatalogName: null, ct);
+
+    public async Task<string> ResolvePlaceholdersAsync(string text, bool mcpEnabled, string? paymentCatalogName, CancellationToken ct = default)
     {
         if (string.IsNullOrEmpty(text)) { return text; }
         if (!text.Contains("{{", StringComparison.Ordinal)) { return text; }
@@ -206,6 +209,19 @@ public sealed class DataContainerMcpService : IDataContainerMcpService
         var resolved = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         foreach (var name in unique)
         {
+            // Si este contenedor es el catalogo de pagos del agente, NO dumpeamos las primeras 100
+            // filas (que se trunca y hace que el LLM invente precios cuando el pais o el producto
+            // que busca cae en las 662 filas restantes). En su lugar, redirigimos al tool call.
+            if (!string.IsNullOrWhiteSpace(paymentCatalogName)
+                && string.Equals(name, paymentCatalogName, StringComparison.OrdinalIgnoreCase))
+            {
+                resolved[name] = "(Este catalogo de precios es demasiado grande para incluirse aqui. " +
+                    "PROHIBIDO leer, memorizar o adivinar valores. Para consultar cualquier precio, " +
+                    "IdProducto, beneficio o url de imagen, usa la herramienta " +
+                    "[[buscar_producto: NOMBRE_DEL_PRODUCTO]] (con @pais si necesitas otro pais " +
+                    "distinto al default del agente). El sistema te devolvera la fila exacta.)";
+                continue;
+            }
             resolved[name] = await QueryContainerAsync(name, 100, ct);
         }
 

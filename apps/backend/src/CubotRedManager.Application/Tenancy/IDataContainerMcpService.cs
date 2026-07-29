@@ -22,4 +22,11 @@ public interface IDataContainerMcpService
     /// informativa para que el LLM sepa que el acceso a contenedores esta deshabilitado.
     /// </summary>
     Task<string> ResolvePlaceholdersAsync(string text, bool mcpEnabled, CancellationToken ct = default);
+
+    /// <summary>Igual que <see cref="ResolvePlaceholdersAsync"/> pero si el placeholder
+    /// {{CONTAINER:X}} matchea con <paramref name="paymentCatalogName"/>, en vez de dumpear las
+    /// primeras 100 filas del catalogo (que se truncan y hacen que el LLM invente precios) se
+    /// sustituye por una instruccion corta pidiendole que use la herramienta
+    /// <c>[[buscar_producto: nombre]]</c>. Sirve para agentes con Pagos FUXION activo.</summary>
+    Task<string> ResolvePlaceholdersAsync(string text, bool mcpEnabled, string? paymentCatalogName, CancellationToken ct = default);
 }

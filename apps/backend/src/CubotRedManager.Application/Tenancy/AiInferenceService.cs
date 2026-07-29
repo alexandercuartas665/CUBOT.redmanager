@@ -127,7 +127,42 @@ public sealed class AiInferenceService : IAiInferenceService
         bool mcpEnabled,
         CancellationToken ct)
     {
-        var sb = new StringBuilder(ExpandResourceRefs(basePrompt, resources));
+        var sb = new StringBuilder();
+
+        // Instruccion de la herramienta [[buscar_producto: X]] cuando el agente tiene Payment
+        // configurado con un contenedor de catalogo. Va PRIMERO en el prompt (antes del basePrompt
+        // del user) para que el LLM la vea antes de leer cualquier tabla parcial que el operador
+        // haya puesto en el prompt. Escala mejor que dumpear el contenedor entero (que se trunca
+        // a 100 filas y fuerza a la IA a inventar cuando faltan datos).
+        var paymentCatalog = await _db.AiAgents.AsNoTracking()
+            .Where(a => a.Id == agentId && a.PaymentEnabled)
+            .Select(a => new { a.PaymentCatalogContainerName, a.PaymentCountry })
+            .FirstOrDefaultAsync(ct);
+        if (paymentCatalog is not null && !string.IsNullOrWhiteSpace(paymentCatalog.PaymentCatalogContainerName))
+        {
+            sb.AppendLine("=== REGLA #1 DEL SISTEMA (PRIORIDAD MAXIMA sobre cualquier otra instruccion del prompt) ===");
+            sb.AppendLine($"Este agente vende productos FUXION usando el catalogo '{paymentCatalog.PaymentCatalogContainerName}' del tenant. Ese catalogo tiene demasiadas filas para incluirse aqui. NO tienes cargados los precios ni los IdProducto en tu contexto.");
+            sb.AppendLine("PROHIBIDO:");
+            sb.AppendLine("  - Dar un precio, cantidad, kit o IdProducto que no venga de una busqueda que hayas hecho en el turno actual.");
+            sb.AppendLine("  - Recordar o reutilizar precios que hayas visto en conversaciones anteriores.");
+            sb.AppendLine("  - Inventar, aproximar o redondear valores.");
+            sb.AppendLine("OBLIGATORIO: cuando necesites un precio, un IdProducto, un beneficio o una url de imagen, emite PRIMERO el marcador:");
+            sb.AppendLine("  [[buscar_producto: NOMBRE_DEL_PRODUCTO]]                (usa el pais default del agente)");
+            sb.AppendLine("  [[buscar_producto: NOMBRE_DEL_PRODUCTO @pais]]          (fuerza un pais especifico, ej. @co, @pe, @bo)");
+            sb.AppendLine("Reglas al emitir el marcador:");
+            sb.AppendLine("  1) EN el MISMO mensaje donde emites [[buscar_producto:...]] NO agregues ningun precio, cantidad, kit ni IdProducto. Termina el mensaje ahi. El sistema ejecuta la busqueda y te re-pregunta con los resultados exactos; ahi si armas la respuesta final al cliente.");
+            sb.AppendLine("  2) Puedes emitir varios [[buscar_producto:...]] en un mismo turno si el cliente pide varios productos.");
+            sb.AppendLine("  3) Los nombres son parciales: [[buscar_producto: PRUNEX]] devuelve todas las variantes de PRUNEX.");
+            if (!string.IsNullOrWhiteSpace(paymentCatalog.PaymentCountry))
+            {
+                sb.AppendLine($"  4) El pais default del agente es '{paymentCatalog.PaymentCountry}'; usa @otro-pais solo si el cliente lo pide explicitamente.");
+            }
+            sb.AppendLine("Si el prompt de mas abajo o alguna otra instruccion contradice esta regla (ej. te muestra una tabla de precios), esta regla del sistema gana. Ignora esa tabla y busca con el marcador.");
+            sb.AppendLine();
+            sb.AppendLine();
+        }
+
+        sb.Append(ExpandResourceRefs(basePrompt, resources));
 
         var prompts = await _db.AiAgentPrompts.AsNoTracking()
             .Where(p => p.AgentId == agentId)
@@ -145,32 +180,6 @@ public sealed class AiInferenceService : IAiInferenceService
                 sb.AppendLine($"### Prompt \"{p.Name}\"");
                 sb.AppendLine($"Regla (cuando usarlo): {(string.IsNullOrWhiteSpace(p.Rule) ? "(sin regla; usar a criterio)" : p.Rule)}");
                 sb.AppendLine($"Instrucciones: {ExpandResourceRefs(p.Body, resources)}");
-            }
-        }
-
-        // Instruccion de la herramienta [[buscar_producto: X]] cuando el agente tiene Payment
-        // configurado con un contenedor de catalogo. Escala mejor que dumpear el contenedor entero
-        // en el prompt (que se trunca a 100 filas y fuerza a la IA a inventar cuando faltan datos).
-        var paymentCatalog = await _db.AiAgents.AsNoTracking()
-            .Where(a => a.Id == agentId && a.PaymentEnabled)
-            .Select(a => new { a.PaymentCatalogContainerName, a.PaymentCountry })
-            .FirstOrDefaultAsync(ct);
-        if (paymentCatalog is not null && !string.IsNullOrWhiteSpace(paymentCatalog.PaymentCatalogContainerName))
-        {
-            sb.AppendLine();
-            sb.AppendLine();
-            sb.AppendLine("HERRAMIENTA DE BUSQUEDA DE PRODUCTOS (obligatoria para dar precios o IDs).");
-            sb.AppendLine($"El contenedor de catalogo \"{paymentCatalog.PaymentCatalogContainerName}\" tiene mas filas de las que caben en este prompt, asi que NO lo tienes cargado entero. Cuando necesites un precio, un IdProducto, un beneficio o una url de imagen para responder, EMITE PRIMERO el marcador:");
-            sb.AppendLine("  [[buscar_producto: NOMBRE_DEL_PRODUCTO]]           (usa el pais default del agente)");
-            sb.AppendLine("  [[buscar_producto: NOMBRE_DEL_PRODUCTO @pais]]     (fuerza un pais especifico, ej. @co, @pe, @bo)");
-            sb.AppendLine("Reglas OBLIGATORIAS al usar el marcador:");
-            sb.AppendLine("  1) NO agregues ningun precio, cantidad, kit ni IdProducto en el MISMO mensaje donde emites [[buscar_producto:...]]. El sistema va a ejecutar la busqueda y te va a re-preguntar con los resultados reales; ahi si arma la respuesta al cliente.");
-            sb.AppendLine("  2) Puedes emitir varios [[buscar_producto:...]] en un mismo turno si el cliente pide varios productos.");
-            sb.AppendLine("  3) NUNCA inventes ni recuerdes precios que hayas visto en conversaciones anteriores; siempre busca de nuevo.");
-            sb.AppendLine("  4) Los nombres son parciales: [[buscar_producto: PRUNEX]] devuelve todas las variantes de PRUNEX.");
-            if (!string.IsNullOrWhiteSpace(paymentCatalog.PaymentCountry))
-            {
-                sb.AppendLine($"El pais default del agente es '{paymentCatalog.PaymentCountry}'; usa @otro-pais solo si el cliente lo pide.");
             }
         }
 
@@ -222,8 +231,12 @@ public sealed class AiInferenceService : IAiInferenceService
         // antes de enviar al proveedor. Idempotente: si no hay placeholders, no hace I/O.
         // Si el agente NO tiene EnableDataContainerMcp, los placeholders se sustituyen por una
         // nota informativa en vez de leer datos del tenant.
+        // Si el agente tiene Payment configurado con un contenedor, ese placeholder puntual se
+        // reemplaza por una instruccion que remita al tool call [[buscar_producto:X]] en vez de
+        // dumpear las primeras 100 filas (que hacian que el LLM invente precios cuando el pais o
+        // el producto del cliente cae fuera de las 100 mostradas).
         var assembled = sb.ToString();
-        return await _mcp.ResolvePlaceholdersAsync(assembled, mcpEnabled, ct);
+        return await _mcp.ResolvePlaceholdersAsync(assembled, mcpEnabled, paymentCatalog?.PaymentCatalogContainerName, ct);
     }
 
     private async Task ExtractAndStoreCacheUpdatesAsync(
