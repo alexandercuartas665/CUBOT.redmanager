@@ -477,7 +477,26 @@ else
         }
         catch (Exception ex)
         {
-            _lastResult = new TikTokSyncResult(false, 0, 0, 0, 0, 0, 1, "[ERROR] " + ex.Message, ex.Message);
+            // Extender el mensaje con toda la cadena de InnerException. EF suele envolver el error
+            // real (violacion de FK, columna null, etc) dentro de 1-2 niveles de wrappers ("An
+            // error occurred while saving the entity changes."). Sin esto solo veiamos el wrapper.
+            var sb = new System.Text.StringBuilder();
+            sb.AppendLine("[ERROR] " + ex.Message);
+            var inner = ex.InnerException;
+            var depth = 0;
+            while (inner is not null && depth < 5)
+            {
+                sb.AppendLine($"  Inner ({inner.GetType().Name}): {inner.Message}");
+                inner = inner.InnerException; depth++;
+            }
+            if (!string.IsNullOrEmpty(ex.StackTrace))
+            {
+                sb.AppendLine();
+                sb.AppendLine("Stack (top 10 frames):");
+                foreach (var line in ex.StackTrace.Split('\n').Take(10)) { sb.AppendLine(line.TrimEnd()); }
+            }
+            var trace = sb.ToString();
+            _lastResult = new TikTokSyncResult(false, 0, 0, 0, 0, 0, 1, trace, ex.Message);
         }
         finally
         {
