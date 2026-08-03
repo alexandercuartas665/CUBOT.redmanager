@@ -183,7 +183,10 @@ public sealed class TikTokSyncService : ITikTokSyncService
         return new TikTokSyncResult(errors == 0, 0, 0, totalIns, totalUpd, totalReplies, errors, trace.ToString(), null);
     }
 
-    public async Task<TikTokSyncResult> SyncVideosAsync(Guid socialAccountId, int maxVideos, Guid actorUserId, CancellationToken cancellationToken = default)
+    public Task<TikTokSyncResult> SyncVideosAsync(Guid socialAccountId, int maxVideos, Guid actorUserId, CancellationToken cancellationToken = default)
+        => SyncVideosAsync(socialAccountId, maxVideos, actorUserId, progress: null, cancellationToken);
+
+    public async Task<TikTokSyncResult> SyncVideosAsync(Guid socialAccountId, int maxVideos, Guid actorUserId, IProgress<TikTokSyncProgress>? progress = null, CancellationToken cancellationToken = default)
     {
         var trace = new StringBuilder();
         var (account, token, businessId, errInit) = await LoadAccountAsync(socialAccountId, trace, cancellationToken);
@@ -192,6 +195,7 @@ public sealed class TikTokSyncService : ITikTokSyncService
             return new TikTokSyncResult(false, 0, 0, 0, 0, 0, 1, trace.ToString(), errInit);
         }
 
+        var accountLabel = ResolveAccountLabel(account);
         var totalInserted = 0;
         var totalUpdated = 0;
         var capped = Math.Clamp(maxVideos, 1, MaxVideosCap);
@@ -299,6 +303,8 @@ public sealed class TikTokSyncService : ITikTokSyncService
 
             await _db.SaveChangesAsync(cancellationToken);
             trace.AppendLine($"[OK] Pagina {pageNum}: procesados={processedPage} (acum: +{totalInserted}/~{totalUpdated})");
+            // Reporte de progreso: total exacto es "capped" (limite pedido); current es lo procesado.
+            progress?.Report(new TikTokSyncProgress(accountLabel, "videos", totalProcessed, capped, $"pagina {pageNum}"));
 
             // Leer cursor + has_more (tolerante)
             if (data.TryGetProperty("cursor", out var cElem))
@@ -325,7 +331,10 @@ public sealed class TikTokSyncService : ITikTokSyncService
         return new TikTokSyncResult(true, totalInserted, totalUpdated, 0, 0, 0, 0, trace.ToString(), null);
     }
 
-    public async Task<TikTokSyncResult> SyncCommentsAsync(Guid socialAccountId, Guid actorUserId, CancellationToken cancellationToken = default)
+    public Task<TikTokSyncResult> SyncCommentsAsync(Guid socialAccountId, Guid actorUserId, CancellationToken cancellationToken = default)
+        => SyncCommentsAsync(socialAccountId, actorUserId, progress: null, cancellationToken);
+
+    public async Task<TikTokSyncResult> SyncCommentsAsync(Guid socialAccountId, Guid actorUserId, IProgress<TikTokSyncProgress>? progress = null, CancellationToken cancellationToken = default)
     {
         var trace = new StringBuilder();
         var (account, token, businessId, errInit) = await LoadAccountAsync(socialAccountId, trace, cancellationToken);
@@ -334,6 +343,7 @@ public sealed class TikTokSyncService : ITikTokSyncService
             return new TikTokSyncResult(false, 0, 0, 0, 0, 0, 1, trace.ToString(), errInit);
         }
 
+        var accountLabel = ResolveAccountLabel(account);
         var videos = await _db.TikTokVideos.AsNoTracking()
             .Where(v => v.SocialAccountId == socialAccountId)
             .OrderByDescending(v => v.PublishedAt)
@@ -353,10 +363,14 @@ public sealed class TikTokSyncService : ITikTokSyncService
         var errors = 0;
         var refreshed = false;
 
+        var videosDone = 0;
         foreach (var video in videos)
         {
             if (cancellationToken.IsCancellationRequested) { break; }
             trace.AppendLine($"[VIDEO] {Truncate(video.Caption ?? video.ExternalId, 40)} ({video.ExternalId})");
+            // Reporte de progreso: current es el # de video que ESTAMOS por procesar (1-based),
+            // total es cuantos videos hay en total. La UI hace "videosDone/total".
+            progress?.Report(new TikTokSyncProgress(accountLabel, "comments", videosDone, videos.Count, Truncate(video.Caption ?? video.ExternalId, 30)));
 
             var page = 1;
             var hasMore = true;
@@ -412,6 +426,7 @@ public sealed class TikTokSyncService : ITikTokSyncService
                 if (!hasMore && processedInPage >= MaxCommentsPerPage) { hasMore = true; }
                 page++;
             }
+            videosDone++;
         }
 
         // Actualizar LastSyncAt
@@ -427,11 +442,14 @@ public sealed class TikTokSyncService : ITikTokSyncService
         return new TikTokSyncResult(errors == 0, 0, 0, totalCommentsInserted, totalCommentsUpdated, totalRepliesInserted, errors, trace.ToString(), null);
     }
 
-    public async Task<TikTokSyncResult> SyncAllAsync(Guid socialAccountId, int maxVideos, Guid actorUserId, CancellationToken cancellationToken = default)
+    public Task<TikTokSyncResult> SyncAllAsync(Guid socialAccountId, int maxVideos, Guid actorUserId, CancellationToken cancellationToken = default)
+        => SyncAllAsync(socialAccountId, maxVideos, actorUserId, progress: null, cancellationToken);
+
+    public async Task<TikTokSyncResult> SyncAllAsync(Guid socialAccountId, int maxVideos, Guid actorUserId, IProgress<TikTokSyncProgress>? progress = null, CancellationToken cancellationToken = default)
     {
-        var r1 = await SyncVideosAsync(socialAccountId, maxVideos, actorUserId, cancellationToken);
+        var r1 = await SyncVideosAsync(socialAccountId, maxVideos, actorUserId, progress, cancellationToken);
         if (!r1.Success) { return r1; }
-        var r2 = await SyncCommentsAsync(socialAccountId, actorUserId, cancellationToken);
+        var r2 = await SyncCommentsAsync(socialAccountId, actorUserId, progress, cancellationToken);
         return new TikTokSyncResult(
             r1.Success && r2.Success,
             r1.VideosInserted, r1.VideosUpdated,
@@ -439,6 +457,14 @@ public sealed class TikTokSyncService : ITikTokSyncService
             r1.Errors + r2.Errors,
             r1.Trace + Environment.NewLine + r2.Trace,
             r2.ErrorMessage ?? r1.ErrorMessage);
+    }
+
+    /// <summary>Etiqueta corta y humana de la cuenta para mostrar en los reportes de progreso.</summary>
+    private static string ResolveAccountLabel(SocialAccount account)
+    {
+        if (!string.IsNullOrWhiteSpace(account.Handle)) { return "@" + account.Handle; }
+        if (!string.IsNullOrWhiteSpace(account.DisplayName)) { return account.DisplayName!; }
+        return account.Id.ToString("N")[..8];
     }
 
     // ----- Helpers internos -----

@@ -103,7 +103,7 @@ public sealed class TikTokMaintenanceWorker : BackgroundService
                 await RunInTenantScopeAsync(account.TenantId, async sp =>
                 {
                     var sync = sp.GetRequiredService<ITikTokSyncService>();
-                    var r = await sync.SyncAllAsync(account.Id, _options.MaxVideosPerSync, SystemUserId, ct);
+                    var r = await sync.SyncAllAsync(account.Id, _options.MaxVideosPerSync, SystemUserId, cancellationToken: ct);
                     if (r.Success)
                     {
                         _logger.LogInformation(

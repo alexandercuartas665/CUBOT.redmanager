@@ -87,13 +87,27 @@ else
             @(_onlyWithPending ? "Mostrando solo pendientes" : "Solo con pendientes")
             @if (_stats?.PendingComments > 0) { <span class="badge bg-warning" style="margin-left:6px;">@_stats.PendingComments</span> }
         </button>
-        <button class="btn btn-outline-secondary" @onclick="SyncVideos" disabled="@_busy">@(_busy && _stage == "v" ? "..." : "1. Videos")</button>
-        <button class="btn btn-outline-secondary" @onclick="SyncComments" disabled="@_busy">@(_busy && _stage == "c" ? "..." : "2. Comentarios")</button>
-        <button class="btn btn-primary" @onclick="SyncAll" disabled="@_busy" title="Videos + comentarios hasta el limite de 'Max videos' de arriba.">@(_busy && _stage == "a" ? "Sincronizando..." : "Sincronizar todo")</button>
-        <button class="btn btn-outline-primary" @onclick="SyncFullHistory" disabled="@_busy" title="Ignora 'Max videos' y baja hasta 2000 videos del histoico. Puede tardar varios minutos.">@(_busy && _stage == "full" ? "Bajando historico..." : "Histoico completo")</button>
+        <button class="btn btn-outline-secondary" @onclick="SyncVideos" disabled="@_busy">@(_busy && _stage == "v" ? (_progressLabel ?? "...") : "1. Videos")</button>
+        <button class="btn btn-outline-secondary" @onclick="SyncComments" disabled="@_busy">@(_busy && _stage == "c" ? (_progressLabel ?? "...") : "2. Comentarios")</button>
+        <button class="btn btn-primary" @onclick="SyncAll" disabled="@_busy" title="Videos + comentarios hasta el limite de 'Max videos' de arriba.">@(_busy && _stage == "a" ? (_progressLabel ?? "Sincronizando...") : "Sincronizar todo")</button>
+        <button class="btn btn-outline-primary" @onclick="SyncFullHistory" disabled="@_busy" title="Ignora 'Max videos' y baja hasta 2000 videos del histoico. Puede tardar varios minutos.">@(_busy && _stage == "full" ? (_progressLabel ?? "Bajando historico...") : "Histoico completo")</button>
         <button class="btn btn-outline-danger" @onclick="OpenDeleteAllConfirm" disabled="@(_busy || (_stats?.TotalVideos ?? 0) == 0)" title="Borra todos los videos sincronizados y sus comentarios. Mantiene config, cuentas y agentes.">Eliminar todos</button>
     </div>
 </div>
+
+@* Barra de progreso: visible mientras corre una sync. Muestra el % + el label con la cuenta y
+   fase actual. Se actualiza via IProgress<TikTokSyncProgress> desde el servicio. *@
+@if (_busy && _progressLabel is not null)
+{
+    <div style="margin:8px 0 12px;">
+        <div class="progress" style="height:20px;background:var(--muted,#eee);border-radius:10px;overflow:hidden;">
+            <div class="progress-bar" role="progressbar" style="@ProgressBarStyle()">
+                <span style="padding:0 8px;font-size:12px;">@(_progressPercent >= 0 ? $"{_progressPercent}%" : "")</span>
+            </div>
+        </div>
+        <div class="text-muted" style="font-size:11.5px;margin-top:3px;">@_progressLabel</div>
+    </div>
+}
 
 @* === Modal confirmacion Eliminar todos los videos === *@
 @if (_deleteAllOpen)
@@ -386,14 +400,28 @@ else
 
     private async Task TogglePending() { _onlyWithPending = !_onlyWithPending; await Reload(); }
 
-    private async Task SyncVideos() => await RunSync("v", id => SyncSvc.SyncVideosAsync(id, _maxVideos, _actor));
-    private async Task SyncComments() => await RunSync("c", id => SyncSvc.SyncCommentsAsync(id, _actor));
-    private async Task SyncAll() => await RunSync("a", id => SyncSvc.SyncAllAsync(id, _maxVideos, _actor));
+    // Estado del progreso: se actualiza desde el IProgress<TikTokSyncProgress> que le pasamos al
+    // servicio. Cada Report() hace StateHasChanged para que el label del boton y la barra reflejen
+    // el avance en tiempo real.
+    private string? _progressLabel;
+    private int _progressCurrent;
+    private int _progressTotal;
+    private int _progressPercent = -1;
+
+    private string ProgressBarStyle()
+    {
+        var pct = _progressPercent >= 0 ? _progressPercent : 3; // barrita "viva" cuando no sabemos el total
+        return $"width:{pct}%;background:var(--primary,#A03DC9);color:#fff;transition:width .3s;";
+    }
+
+    private async Task SyncVideos() => await RunSync("v", (id, prog) => SyncSvc.SyncVideosAsync(id, _maxVideos, _actor, prog));
+    private async Task SyncComments() => await RunSync("c", (id, prog) => SyncSvc.SyncCommentsAsync(id, _actor, prog));
+    private async Task SyncAll() => await RunSync("a", (id, prog) => SyncSvc.SyncAllAsync(id, _maxVideos, _actor, prog));
     // "Historico completo": ignora _maxVideos y usa el techo del servicio (2000). Sirve para
     // llenar la base de datos con TODO el historial de la cuenta la primera vez.
-    private async Task SyncFullHistory() => await RunSync("full", id => SyncSvc.SyncAllAsync(id, 2000, _actor));
+    private async Task SyncFullHistory() => await RunSync("full", (id, prog) => SyncSvc.SyncAllAsync(id, 2000, _actor, prog));
 
-    private async Task RunSync(string stage, Func<Guid, Task<TikTokSyncResult>> op)
+    private async Task RunSync(string stage, Func<Guid, IProgress<TikTokSyncProgress>, Task<TikTokSyncResult>> op)
     {
         // Determina los target accounts: una sola o todas (si "Todas las cuentas").
         var targets = string.IsNullOrEmpty(_selectedAccount)
@@ -402,12 +430,31 @@ else
         if (targets.Count == 0) { return; }
 
         _busy = true; _stage = stage;
+        _progressLabel = "Preparando..."; _progressCurrent = 0; _progressTotal = 0; _progressPercent = -1;
+
+        // Progress<T> respeta el SynchronizationContext donde se creo: en Blazor Server eso significa
+        // que el handler corre en el hilo del circuito y podemos llamar StateHasChanged sin marshalar.
+        var progress = new Progress<TikTokSyncProgress>(p =>
+        {
+            _progressCurrent = p.Current;
+            _progressTotal = p.Total;
+            _progressPercent = p.Total > 0 ? Math.Clamp((int)Math.Round(100.0 * p.Current / p.Total), 0, 100) : -1;
+            var stageLabel = p.Stage switch { "videos" => "videos", "comments" => "comentarios", "replies" => "respuestas", _ => p.Stage };
+            var counter = p.Total > 0 ? $"{p.Current}/{p.Total} {stageLabel}" : $"{p.Current} {stageLabel}";
+            var detail = string.IsNullOrEmpty(p.Detail) ? "" : $" — {p.Detail}";
+            _progressLabel = targets.Count > 1
+                ? $"Cuenta {p.AccountLabel} ({_currentTargetIndex + 1}/{targets.Count}) — {counter}{detail}"
+                : $"{p.AccountLabel}: {counter}{detail}";
+            InvokeAsync(StateHasChanged);
+        });
+
         try
         {
             var results = new List<TikTokSyncResult>();
             for (var i = 0; i < targets.Count; i++)
             {
-                results.Add(await op(targets[i]));
+                _currentTargetIndex = i;
+                results.Add(await op(targets[i], progress));
             }
             // Agregar resultados en un solo TikTokSyncResult resumen.
             var trace = string.Join("\n---\n", results.Select((r, i) =>
@@ -432,8 +479,17 @@ else
         {
             _lastResult = new TikTokSyncResult(false, 0, 0, 0, 0, 0, 1, "[ERROR] " + ex.Message, ex.Message);
         }
-        finally { _busy = false; _stage = ""; }
+        finally
+        {
+            _busy = false; _stage = "";
+            _progressLabel = null; _progressCurrent = 0; _progressTotal = 0; _progressPercent = -1;
+            _currentTargetIndex = 0;
+        }
     }
+
+    // Indice del target que se esta procesando ahora mismo (0-based). Se usa en el label para
+    // mostrar "cuenta 2/5" cuando el user disparo la sync sobre "Todas las cuentas".
+    private int _currentTargetIndex;
 
     private async Task OpenDetail(TikTokVideoDto v)
     {

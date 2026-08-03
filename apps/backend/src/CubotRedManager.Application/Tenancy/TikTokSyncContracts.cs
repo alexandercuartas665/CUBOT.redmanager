@@ -1,5 +1,16 @@
 namespace CubotRedManager.Application.Tenancy;
 
+/// <summary>Reporte de progreso intermedio durante un SyncVideos/SyncComments/SyncAll. Emitido
+/// por el servicio cada vez que termina una pagina de la API TikTok (videos) o un video (comments).
+/// La UI lo usa para actualizar el label del boton "Sincronizando 245/486 videos - @handle".
+/// Es best-effort; nunca reemplaza al TikTokSyncResult final.</summary>
+public sealed record TikTokSyncProgress(
+    string AccountLabel,  // "@handle" o nombre del cliente, para mostrar en la UI
+    string Stage,         // "videos" | "comments" | "replies"
+    int Current,          // items procesados hasta ahora
+    int Total,            // total esperado (0 o -1 si aun no se sabe, ej. antes de la primera pagina)
+    string? Detail);      // texto libre opcional (ej. "video @foo/1234567")
+
 /// <summary>Resultado agregado de una operacion de sincronizacion (videos y/o comentarios).</summary>
 public sealed record TikTokSyncResult(
     bool Success,
@@ -50,14 +61,17 @@ public sealed record TikTokAccountStats(
 /// </summary>
 public interface ITikTokSyncService
 {
-    /// <summary>Sincroniza videos de una cuenta TikTok (cursor-based). Limita por maxVideos.</summary>
-    Task<TikTokSyncResult> SyncVideosAsync(Guid socialAccountId, int maxVideos, Guid actorUserId, CancellationToken cancellationToken = default);
+    /// <summary>Sincroniza videos de una cuenta TikTok (cursor-based). Limita por maxVideos.
+    /// <paramref name="progress"/> es opcional; si viene, el servicio reporta al final de cada pagina.</summary>
+    Task<TikTokSyncResult> SyncVideosAsync(Guid socialAccountId, int maxVideos, Guid actorUserId, IProgress<TikTokSyncProgress>? progress = null, CancellationToken cancellationToken = default);
 
-    /// <summary>Sincroniza comentarios + replies de TODOS los videos almacenados de una cuenta.</summary>
-    Task<TikTokSyncResult> SyncCommentsAsync(Guid socialAccountId, Guid actorUserId, CancellationToken cancellationToken = default);
+    /// <summary>Sincroniza comentarios + replies de TODOS los videos almacenados de una cuenta.
+    /// <paramref name="progress"/> es opcional; si viene, se reporta despues de cada video procesado.</summary>
+    Task<TikTokSyncResult> SyncCommentsAsync(Guid socialAccountId, Guid actorUserId, IProgress<TikTokSyncProgress>? progress = null, CancellationToken cancellationToken = default);
 
-    /// <summary>Sincroniza videos y luego comentarios en orden.</summary>
-    Task<TikTokSyncResult> SyncAllAsync(Guid socialAccountId, int maxVideos, Guid actorUserId, CancellationToken cancellationToken = default);
+    /// <summary>Sincroniza videos y luego comentarios en orden. Pasa <paramref name="progress"/>
+    /// a ambas fases; la UI ve un stream continuo Stage=videos -> Stage=comments.</summary>
+    Task<TikTokSyncResult> SyncAllAsync(Guid socialAccountId, int maxVideos, Guid actorUserId, IProgress<TikTokSyncProgress>? progress = null, CancellationToken cancellationToken = default);
 
     /// <summary>Lista videos almacenados localmente para una cuenta TikTok.</summary>
     Task<IReadOnlyList<TikTokVideoDto>> ListVideosAsync(Guid socialAccountId, bool onlyWithPending = false, string? textFilter = null, CancellationToken cancellationToken = default);
