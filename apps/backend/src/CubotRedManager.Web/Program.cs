@@ -1103,6 +1103,154 @@ app.MapGet("/version", () => Results.Ok(new
     startedAtUtc = CubotRedManager.Web.AppVersion.StartedAtUtc
 })).AllowAnonymous();
 
+// ============================================================================
+// REST API para la app Android (/api/mobile/*)
+// Login con email+password del usuario de la plataforma → devuelve ApiToken opaco
+// (TTL 30d) que la app manda como X-Api-Token en todas las llamadas siguientes.
+// Los endpoints protegidos usan el mismo AuthenticateApiTokenAsync helper.
+// ============================================================================
+
+// Rate limit MUY simple para login mobile: cache in-memory de intentos por IP.
+// Sin dependencias nuevas; si algun dia hace falta algo mas robusto, cambiamos a
+// System.Threading.RateLimiting o un middleware.
+var mobileLoginAttempts = new System.Collections.Concurrent.ConcurrentDictionary<string, (int Count, DateTimeOffset ResetAt)>();
+
+app.MapPost("/api/mobile/auth/login", async (
+    HttpContext http,
+    CubotRedManager.Application.Mobile.IMobileService mobile,
+    CancellationToken ct) =>
+{
+    // Anti brute-force: max 8 intentos por 5 min por IP. Al superar, 429 sin costo de BD.
+    var ip = http.Connection.RemoteIpAddress?.ToString() ?? "?";
+    var now = DateTimeOffset.UtcNow;
+    var slot = mobileLoginAttempts.AddOrUpdate(ip,
+        _ => (1, now.AddMinutes(5)),
+        (_, existing) => existing.ResetAt <= now ? (1, now.AddMinutes(5)) : (existing.Count + 1, existing.ResetAt));
+    if (slot.Count > 8)
+    {
+        return Results.StatusCode(429);
+    }
+
+    CubotRedManager.Application.Mobile.MobileLoginRequest? req;
+    try { req = await http.Request.ReadFromJsonAsync<CubotRedManager.Application.Mobile.MobileLoginRequest>(ct); }
+    catch { return Results.BadRequest(new { error = "body invalido" }); }
+    if (req is null || string.IsNullOrWhiteSpace(req.Email) || string.IsNullOrWhiteSpace(req.Password))
+    {
+        return Results.BadRequest(new { error = "email y password requeridos" });
+    }
+
+    var res = await mobile.LoginAsync(req, ct);
+    if (res is null) { return Results.Unauthorized(); }
+    return Results.Ok(res);
+}).AllowAnonymous().DisableAntiforgery();
+
+app.MapGet("/api/mobile/dashboard", async (
+    HttpContext http,
+    CubotRedManager.Application.Tenancy.IApiTokenService tokens,
+    CubotRedManager.Application.Abstractions.IAmbientTenantOverride ambient,
+    CubotRedManager.Application.Mobile.IMobileService mobile,
+    CancellationToken ct) =>
+{
+    var ident = await AuthenticateApiTokenAsync(http, tokens, ambient);
+    if (ident is null) { return Results.Unauthorized(); }
+    try
+    {
+        return Results.Ok(await mobile.GetDashboardAsync(ct));
+    }
+    finally { ambient.Set(null, null); }
+}).AllowAnonymous().DisableAntiforgery();
+
+app.MapGet("/api/mobile/conversations", async (
+    HttpContext http,
+    CubotRedManager.Application.Tenancy.IApiTokenService tokens,
+    CubotRedManager.Application.Abstractions.IAmbientTenantOverride ambient,
+    CubotRedManager.Application.Mobile.IMobileService mobile,
+    int? take,
+    CancellationToken ct) =>
+{
+    var ident = await AuthenticateApiTokenAsync(http, tokens, ambient);
+    if (ident is null) { return Results.Unauthorized(); }
+    try
+    {
+        return Results.Ok(await mobile.ListConversationsAsync(take ?? 30, ct));
+    }
+    finally { ambient.Set(null, null); }
+}).AllowAnonymous().DisableAntiforgery();
+
+app.MapGet("/api/mobile/conversations/{id:guid}/messages", async (
+    Guid id,
+    HttpContext http,
+    CubotRedManager.Application.Tenancy.IApiTokenService tokens,
+    CubotRedManager.Application.Abstractions.IAmbientTenantOverride ambient,
+    CubotRedManager.Application.Mobile.IMobileService mobile,
+    int? take,
+    CancellationToken ct) =>
+{
+    var ident = await AuthenticateApiTokenAsync(http, tokens, ambient);
+    if (ident is null) { return Results.Unauthorized(); }
+    try
+    {
+        return Results.Ok(await mobile.ListMessagesAsync(id, take ?? 100, ct));
+    }
+    finally { ambient.Set(null, null); }
+}).AllowAnonymous().DisableAntiforgery();
+
+app.MapGet("/api/mobile/agents", async (
+    HttpContext http,
+    CubotRedManager.Application.Tenancy.IApiTokenService tokens,
+    CubotRedManager.Application.Abstractions.IAmbientTenantOverride ambient,
+    CubotRedManager.Application.Mobile.IMobileService mobile,
+    CancellationToken ct) =>
+{
+    var ident = await AuthenticateApiTokenAsync(http, tokens, ambient);
+    if (ident is null) { return Results.Unauthorized(); }
+    try
+    {
+        return Results.Ok(await mobile.ListAgentsAsync(ct));
+    }
+    finally { ambient.Set(null, null); }
+}).AllowAnonymous().DisableAntiforgery();
+
+app.MapPost("/api/mobile/agents/{id:guid}/fuxion-token", async (
+    Guid id,
+    HttpContext http,
+    CubotRedManager.Application.Tenancy.IApiTokenService tokens,
+    CubotRedManager.Application.Abstractions.IAmbientTenantOverride ambient,
+    CubotRedManager.Application.Mobile.IMobileService mobile,
+    CancellationToken ct) =>
+{
+    var ident = await AuthenticateApiTokenAsync(http, tokens, ambient);
+    if (ident is null) { return Results.Unauthorized(); }
+    try
+    {
+        using var body = await System.Text.Json.JsonDocument.ParseAsync(http.Request.Body, cancellationToken: ct);
+        if (!body.RootElement.TryGetProperty("jwt", out var jwtEl) || jwtEl.ValueKind != System.Text.Json.JsonValueKind.String)
+        {
+            return Results.BadRequest(new { error = "body debe tener {jwt: '...'}" });
+        }
+        var updated = await mobile.UpdateFuxionTokenAsync(id, jwtEl.GetString() ?? "", ident.UserId, ct);
+        return updated is null ? Results.NotFound() : Results.Ok(updated);
+    }
+    finally { ambient.Set(null, null); }
+}).AllowAnonymous().DisableAntiforgery();
+
+app.MapPost("/api/mobile/agents/{id:guid}/sync-prices", async (
+    Guid id,
+    HttpContext http,
+    CubotRedManager.Application.Tenancy.IApiTokenService tokens,
+    CubotRedManager.Application.Abstractions.IAmbientTenantOverride ambient,
+    CubotRedManager.Application.Mobile.IMobileService mobile,
+    CancellationToken ct) =>
+{
+    var ident = await AuthenticateApiTokenAsync(http, tokens, ambient);
+    if (ident is null) { return Results.Unauthorized(); }
+    try
+    {
+        return Results.Ok(await mobile.SyncPricesAsync(id, ident.UserId, ct));
+    }
+    finally { ambient.Set(null, null); }
+}).AllowAnonymous().DisableAntiforgery();
+
 app.Run();
 
 // Helper: solo permite redirigir a URLs locales, a los hosts dev (:5036/:5037) o a los dominios
