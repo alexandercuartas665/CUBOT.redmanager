@@ -1,0 +1,18 @@
+# deps
+node_modules/
+dist/
+dist-ssr/
+
+# capacitor (native platforms - se generan con 'npx cap add android')
+android/
+ios/
+
+# builds android que salen de gradle (los ignoramos para no versionar APKs)
+*.apk
+*.aab
+
+# editor
+.vscode/
+.idea/
+*.log
+.DS_Store

@@ -1,0 +1,35 @@
+{
+  "name": "cubot-redmanager-mobile",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc -b && vite build",
+    "preview": "vite preview",
+    "cap:sync": "npm run build && cap sync android",
+    "cap:open": "cap open android",
+    "cap:run": "npm run build && cap sync android && cap run android"
+  },
+  "dependencies": {
+    "@capacitor/android": "^7.4.4",
+    "@capacitor/browser": "^7.0.4",
+    "@capacitor/core": "^7.4.4",
+    "@capacitor/preferences": "^7.0.4",
+    "@capacitor/status-bar": "^7.0.4",
+    "react": "^19.1.1",
+    "react-dom": "^19.1.1",
+    "react-router-dom": "^7.10.3"
+  },
+  "devDependencies": {
+    "@capacitor/cli": "^7.4.4",
+    "@types/react": "^19.2.17",
+    "@types/react-dom": "^19.2.3",
+    "@vitejs/plugin-react": "^4.3.4",
+    "autoprefixer": "^10.4.20",
+    "postcss": "^8.5.3",
+    "tailwindcss": "^3.4.17",
+    "typescript": "~5.6.3",
+    "vite": "^7.1.7"
+  }
+}
