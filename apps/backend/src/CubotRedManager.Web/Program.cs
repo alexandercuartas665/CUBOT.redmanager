@@ -131,6 +131,15 @@ builder.Services.AddAuthorizationBuilder()
     .AddPolicy(CubotRedManager.Web.Authorization.AppPolicies.TenantMember, p => p.RequireClaim("tenant_id"))
     .AddPolicy(CubotRedManager.Web.Authorization.AppPolicies.TenantAdmin, p => p.RequireClaim("tenant_role", "Owner", "Admin"));
 
+// CORS: solo para /api/mobile/*. La APK Android abre la WebView con origen "https://localhost"
+// (Capacitor con androidScheme: 'https'); iOS futuro seria "capacitor://localhost". El resto de la
+// web (Blazor Server) no necesita CORS porque es misma-origen.
+builder.Services.AddCors(o => o.AddPolicy("mobile", p =>
+    p.WithOrigins("https://localhost", "capacitor://localhost", "http://localhost")
+     .AllowAnyMethod()
+     .AllowAnyHeader()
+     .WithExposedHeaders("Content-Type")));
+
 var app = builder.Build();
 
 // ForwardedHeaders debe ir ANTES de cualquier middleware que mire el scheme (HttpsRedirection,
@@ -264,6 +273,11 @@ app.UseHttpsRedirection();
 // Sirve los archivos subidos por usuarios (wwwroot/uploads/...). La URL incluye un Guid v7 que
 // hace inenumerable el path; en produccion mover a almacenamiento dedicado (S3) con firma.
 app.UseStaticFiles();
+
+// CORS: aplica SOLO a /api/mobile/*. Antes de Authentication para que el preflight OPTIONS
+// pase limpio sin requerir credenciales.
+app.UseWhen(ctx => ctx.Request.Path.StartsWithSegments("/api/mobile"),
+    branch => branch.UseCors("mobile"));
 
 app.UseAuthentication();
 app.UseAuthorization();

@@ -14,6 +14,7 @@ export default function LoginPage() {
   const [tenants, setTenants] = useState<MobileTenant[] | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [showPass, setShowPass] = useState(false);
 
   async function doLogin(tenantId?: string) {
     setBusy(true); setError(null);
@@ -67,11 +68,21 @@ export default function LoginPage() {
           </div>
           <div>
             <label className="form-label" htmlFor="password">Contrasena</label>
-            <input
-              id="password" type="password" autoComplete="current-password"
-              value={password} onChange={(e) => setPassword(e.target.value)}
-              className="form-input" placeholder="********" required
-            />
+            <div className="relative">
+              <input
+                id="password" type={showPass ? 'text' : 'password'} autoComplete="current-password"
+                value={password} onChange={(e) => setPassword(e.target.value)}
+                className="form-input pr-16" placeholder="********" required
+              />
+              <button
+                type="button"
+                onClick={() => setShowPass((v) => !v)}
+                className="absolute inset-y-0 right-0 px-3 text-xs font-medium text-cubot-primary active:text-cubot-magenta"
+                aria-label={showPass ? 'Ocultar clave' : 'Ver clave'}
+              >
+                {showPass ? 'Ocultar' : 'Ver'}
+              </button>
+            </div>
           </div>
           {error && <div className="text-sm text-red-600 bg-red-50 border border-red-100 rounded-lg px-3 py-2">{error}</div>}
           <button type="submit" className="btn-primary" disabled={busy}>
