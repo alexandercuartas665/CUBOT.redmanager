@@ -14,4 +14,10 @@ public static class AppPolicies
 
     /// <summary>Operador de plataforma / Super Admin. NO se mezcla con la consola de agencia.</summary>
     public const string PlatformOperator = "PlatformOperator";
+
+    /// <summary>
+    /// Admin Agent API cross-tenant. Requiere Bearer JWT (scheme "SuperAdminJwt") + claim
+    /// "is_super_admin=true". No comparte token con la cookie de la consola /admin/*.
+    /// </summary>
+    public const string SuperAdminApi = "SuperAdminApi";
 }

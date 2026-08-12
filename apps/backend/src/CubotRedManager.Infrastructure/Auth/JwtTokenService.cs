@@ -47,6 +47,13 @@ public sealed class JwtTokenService : IJwtTokenService
         if (!string.IsNullOrWhiteSpace(input.PlatformRole))
         {
             claims.Add(new Claim("platform_role", input.PlatformRole));
+            // Claim binario para policies del API cross-tenant. Convencion de la familia CUBOT:
+            // la Admin Agent API se protege con RequireClaim("is_super_admin","true") — asi las
+            // policies no necesitan conocer los valores del enum PlatformRole.
+            if (string.Equals(input.PlatformRole, "SuperAdmin", StringComparison.OrdinalIgnoreCase))
+            {
+                claims.Add(new Claim("is_super_admin", "true"));
+            }
         }
 
         if (!string.IsNullOrWhiteSpace(input.TenantRole))

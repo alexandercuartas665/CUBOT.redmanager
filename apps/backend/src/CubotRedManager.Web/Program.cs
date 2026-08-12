@@ -6,12 +6,21 @@ using CubotRedManager.Infrastructure;
 using CubotRedManager.Infrastructure.Persistence;
 using CubotRedManager.Web.Auth;
 using CubotRedManager.Web.Components;
+using CubotRedManager.Web.Endpoints;
 using CubotRedManager.Web.Seed;
+using System.Text;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.Cookies;
+using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.DataProtection;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.IdentityModel.Tokens;
+
+// Nombre del scheme JWT dedicado a la Admin Agent API. Se declara aqui para que Program.cs
+// (registro del scheme + policy) y los endpoints (RequireAuthorization(scheme)) usen la MISMA
+// constante y no haya typos silenciosos.
+const string SuperAdminJwtScheme = "SuperAdminJwt";
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -105,6 +114,9 @@ builder.Services.Configure<Microsoft.AspNetCore.Builder.ForwardedHeadersOptions>
     options.KnownProxies.Clear();
 });
 
+// Config JWT compartida (misma seccion "Jwt" que emite JwtTokenService).
+var jwtSettings = builder.Configuration.GetSection(JwtSettings.SectionName).Get<JwtSettings>() ?? new JwtSettings();
+
 builder.Services
     .AddAuthentication(CookieAuthenticationDefaults.AuthenticationScheme)
     .AddCookie(options =>
@@ -123,13 +135,49 @@ builder.Services
             options.Cookie.SameSite = SameSiteMode.Lax;
             options.Cookie.SecurePolicy = CookieSecurePolicy.Always;
         }
+    })
+    // Scheme JWT SOLO para la Admin Agent API cross-tenant. NO es el default (para no romper
+    // Blazor Server / la consola /admin/* que sigue con Cookie). Las policies que lo necesitan
+    // fuerzan AuthenticationSchemes=SuperAdminJwtScheme.
+    //
+    // Nota: apagamos el DefaultInboundClaimTypeMap ANTES de registrar el handler (mas abajo, statico)
+    // para que los claims del JWT lleguen con sus nombres originales ("sub", "email", "is_super_admin")
+    // y no como URIs largas (ClaimTypes.NameIdentifier, etc.). Sin esto, un endpoint que lea
+    // http.User.FindFirstValue("sub") recibe null.
+    .AddJwtBearer(SuperAdminJwtScheme, options =>
+    {
+        options.RequireHttpsMetadata = builder.Environment.IsProduction();
+        options.SaveToken = true;
+        // MapInboundClaims=false hace que el handler NO renombre los claims a las URIs de
+        // ClaimTypes.*; el token queda tal cual salio del emisor.
+        options.MapInboundClaims = false;
+        options.TokenValidationParameters = new TokenValidationParameters
+        {
+            NameClaimType = "email",
+            RoleClaimType = "platform_role",
+            ValidateIssuer = true,
+            ValidateAudience = true,
+            ValidateLifetime = true,
+            ValidateIssuerSigningKey = true,
+            ValidIssuer = jwtSettings.Issuer,
+            ValidAudience = jwtSettings.Audience,
+            IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(jwtSettings.SigningKey)),
+            ClockSkew = TimeSpan.FromMinutes(1)
+        };
     });
 
 // Politicas alineadas a la familia CUBOT (ver SuperAdmin de travels).
 builder.Services.AddAuthorizationBuilder()
     .AddPolicy(CubotRedManager.Web.Authorization.AppPolicies.PlatformOperator, p => p.RequireClaim("platform_role"))
     .AddPolicy(CubotRedManager.Web.Authorization.AppPolicies.TenantMember, p => p.RequireClaim("tenant_id"))
-    .AddPolicy(CubotRedManager.Web.Authorization.AppPolicies.TenantAdmin, p => p.RequireClaim("tenant_role", "Owner", "Admin"));
+    .AddPolicy(CubotRedManager.Web.Authorization.AppPolicies.TenantAdmin, p => p.RequireClaim("tenant_role", "Owner", "Admin"))
+    // Policy para la Admin Agent API: exige Bearer JWT + claim binario is_super_admin=true.
+    // No mezcla con PlatformOperator (que es cookie): un operador de la consola web NO obtiene
+    // acceso al API cross-tenant sin loguear via POST /connect/login y obtener el JWT.
+    .AddPolicy(CubotRedManager.Web.Authorization.AppPolicies.SuperAdminApi, p => p
+        .AddAuthenticationSchemes(SuperAdminJwtScheme)
+        .RequireAuthenticatedUser()
+        .RequireClaim("is_super_admin", "true"));
 
 // CORS: solo para /api/mobile/*. La APK Android abre la WebView con origen "https://localhost"
 // (Capacitor con androidScheme: 'https'); iOS futuro seria "capacitor://localhost". El resto de la
@@ -694,6 +742,55 @@ app.MapPost("/auth/login", async (
     }
     return Results.Redirect("/dashboard");
 }).DisableAntiforgery();
+
+// -----------------------------------------------------------------------------------------------
+// Admin Agent API — login por JWT (para consumo sin UI, ej. Claude con Bearer token).
+// Este endpoint es la contraparte del /auth/login por cookie: valida la MISMA identidad
+// (PlatformUsers), pero solo emite token si el user es SuperAdmin. Un tenant admin recibe 401
+// aunque su clave sea correcta — la separacion es intencional (ver AppPolicies.SuperAdminApi).
+//
+// Contract:
+//   POST /connect/login  { email, password }
+//     -> 200 { kind:"superadmin", accessToken, expiresAt, userId, email, displayName, platformRole }
+//     -> 401 { error:"invalid_credentials" }   (ambos casos: unknown user y "no eres super admin")
+//                                              se colapsan para NO fugar por-email quien es super admin.
+// -----------------------------------------------------------------------------------------------
+app.MapPost("/connect/login", async (
+    HttpContext http,
+    [FromBody] SuperAdminLoginRequest req,
+    CubotRedManager.Application.Auth.ISuperAdminAuthService svc,
+    CancellationToken ct) =>
+{
+    if (req is null || string.IsNullOrWhiteSpace(req.Email) || string.IsNullOrWhiteSpace(req.Password))
+    {
+        return Results.Json(new { error = "invalid_credentials" }, statusCode: 401);
+    }
+
+    var result = await svc.LoginAsync(req.Email, req.Password, ct);
+    return result switch
+    {
+        CubotRedManager.Application.Auth.SuperAdminLoginResult.Ok ok => Results.Json(ok.Response),
+        _ => Results.Json(new { error = "invalid_credentials" }, statusCode: 401)
+    };
+}).DisableAntiforgery();
+
+// -----------------------------------------------------------------------------------------------
+// Admin Agent API: tenants, agents, tools, run-logs. Todo bajo /api/admin/*, todo con la policy
+// SuperAdminApi (Bearer JWT + is_super_admin=true).
+//
+// Prefijo /api/admin en vez de /admin: /admin/* esta reservado para paginas Blazor de la consola
+// (AdminHome.razor, Agencias.razor, etc.); el router Blazor devuelve 404 antes de que el
+// MinimalAPI vea la ruta. /api/admin evita esa colision y deja explicito "esto es API".
+// Line-binding + lines llegan en PR3.
+// -----------------------------------------------------------------------------------------------
+app.MapSuperAdminApi();
+// Ping para el checklist fail-closed del brief (401 sin token / 200 con super admin).
+app.MapGet("/api/admin/ping", (HttpContext http) => Results.Ok(new
+{
+    ok = true,
+    userId = http.User.FindFirstValue("sub"),
+    email = http.User.FindFirstValue("email")
+})).RequireAuthorization(CubotRedManager.Web.Authorization.AppPolicies.SuperAdminApi);
 
 // Recuperar contrasena (autogestion): envia un enlace de reseteo por correo.
 app.MapPost("/auth/forgot", async (
@@ -1282,3 +1379,6 @@ static class DemoTenant
 {
     public static readonly Guid Id = Guid.Parse("0192a000-0000-7000-8000-000000000001");
 }
+
+/// <summary>Payload JSON del POST /connect/login (Admin Agent API).</summary>
+public sealed record SuperAdminLoginRequest(string Email, string Password);

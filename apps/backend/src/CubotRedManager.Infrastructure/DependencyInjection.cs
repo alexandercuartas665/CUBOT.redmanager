@@ -135,6 +135,8 @@ public static class DependencyInjection
         services.AddSingleton<CubotRedManager.Application.Common.Auth.IJwtTokenService, CubotRedManager.Infrastructure.Auth.JwtTokenService>();
         services.AddHttpClient<CubotRedManager.Application.Auth.IGoogleOAuthClient, CubotRedManager.Infrastructure.Auth.GoogleOAuthClient>();
         services.AddScoped<CubotRedManager.Application.Auth.IAuthService, CubotRedManager.Application.Auth.AuthService>();
+        services.AddScoped<CubotRedManager.Application.Auth.ISuperAdminAuthService, CubotRedManager.Application.Auth.SuperAdminAuthService>();
+        services.AddScoped<CubotRedManager.Application.SuperAdminApi.IAdminAgentService, CubotRedManager.Application.SuperAdminApi.AdminAgentService>();
         services.AddScoped<CubotRedManager.Application.Auth.IGoogleSignInService, CubotRedManager.Application.Auth.GoogleSignInService>();
         services.AddScoped<CubotRedManager.Application.Auth.IPasswordResetService, CubotRedManager.Application.Auth.PasswordResetService>();
         services.AddScoped<CubotRedManager.Application.Admin.IPlatformBrandingService, CubotRedManager.Application.Admin.PlatformBrandingService>();
