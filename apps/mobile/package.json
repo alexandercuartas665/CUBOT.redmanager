@@ -13,7 +13,9 @@
   },
   "dependencies": {
     "@capacitor/android": "^7.4.4",
+    "@capacitor/app": "^7.1.2",
     "@capacitor/browser": "^7.0.4",
+    "@capacitor/clipboard": "^7.0.4",
     "@capacitor/core": "^7.4.4",
     "@capacitor/preferences": "^7.0.4",
     "@capacitor/status-bar": "^7.0.4",

@@ -4,9 +4,20 @@
 //  2) Sincronizar precios FUXION → llama al endpoint.
 
 import { Browser } from '@capacitor/browser';
-import { useEffect, useState } from 'react';
+import { Clipboard } from '@capacitor/clipboard';
+import { App } from '@capacitor/app';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { mobileApi } from '../api/client';
 import type { MobileAgent, MobileSyncPricesResult } from '../api/types';
+import { FuxionCapture } from '../plugins/fuxionCapture';
+
+// JWT clasico: header.payload.signature en base64url. Longitud minima ~100 chars.
+const JWT_RX = /^ey[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}$/;
+function looksLikeJwt(s: string | null | undefined): boolean {
+  if (!s) return false;
+  const t = s.trim();
+  return t.length >= 100 && t.length <= 8000 && JWT_RX.test(t);
+}
 
 export default function AgentsPage() {
   const [agents, setAgents] = useState<MobileAgent[]>([]);
@@ -15,6 +26,9 @@ export default function AgentsPage() {
   const [actionMsg, setActionMsg] = useState<{ agentId: string; text: string; ok: boolean } | null>(null);
   const [renewingAgent, setRenewingAgent] = useState<MobileAgent | null>(null);
   const [jwtInput, setJwtInput] = useState('');
+  const [clipJwt, setClipJwt] = useState<string | null>(null);
+  const agentsRef = useRef<MobileAgent[]>([]);
+  useEffect(() => { agentsRef.current = agents; }, [agents]);
 
   async function reload() {
     setBusy(true); setError(null);
@@ -24,10 +38,69 @@ export default function AgentsPage() {
   }
   useEffect(() => { void reload(); }, []);
 
+  // Detecta JWT en el portapapeles y ofrece pegarlo. Se dispara: al montar la pagina,
+  // cada vez que la app vuelve al foreground (Capacitor App resume), y al enfocar la
+  // pestana (visibilitychange, tambien cubre el navegador web dev).
+  const scanClipboard = useCallback(async () => {
+    try {
+      const { value } = await Clipboard.read();
+      if (looksLikeJwt(value) && agentsRef.current.some(a => a.paymentEnabled)) {
+        setClipJwt(value.trim());
+      }
+    } catch { /* clipboard bloqueado o vacio: ignorar */ }
+  }, []);
+  useEffect(() => {
+    void scanClipboard();
+    const onVis = () => { if (document.visibilityState === 'visible') void scanClipboard(); };
+    document.addEventListener('visibilitychange', onVis);
+    const sub = App.addListener('appStateChange', (s) => { if (s.isActive) void scanClipboard(); });
+    return () => {
+      document.removeEventListener('visibilitychange', onVis);
+      void sub.then(h => h.remove());
+    };
+  }, [scanClipboard]);
+
+  async function saveClipboardTo(agent: MobileAgent) {
+    if (!clipJwt) return;
+    setBusy(true); setActionMsg(null);
+    try {
+      const updated = await mobileApi.updateFuxionToken(agent.id, clipJwt);
+      setAgents(prev => prev.map(a => a.id === agent.id ? updated : a));
+      setActionMsg({ agentId: agent.id, ok: true, text: 'Token pegado y guardado desde portapapeles.' });
+      setClipJwt(null);
+      try { await Clipboard.write({ string: '' }); } catch { /* si falla, no critico */ }
+    } catch (e) {
+      setActionMsg({ agentId: agent.id, ok: false, text: e instanceof Error ? e.message : 'Error' });
+    } finally { setBusy(false); }
+  }
+
   async function openFuxionPortal() {
-    // Abre el portal en el navegador externo del celular. El user hace login ahi (o ya lo tiene),
-    // abre DevTools mobile (o instala un bookmarklet), copia el token, vuelve a la app y lo pega.
+    // Fallback para web dev: abre el portal en tab nueva. El user pega el token manual despues.
     await Browser.open({ url: 'https://app-aware.fuxion.com/dashboard', windowName: '_system' });
+  }
+
+  // Captura automatica del JWT usando el plugin nativo Android. Abre un WebView modal que
+  // sobrevive cookies entre aperturas (el user logea una sola vez), y en cuanto el localStorage
+  // tenga el xcorptoken el plugin lo devuelve y aca lo mandamos al backend.
+  async function autoCaptureAndSave(agent: MobileAgent) {
+    if (!FuxionCapture.isSupported()) {
+      setActionMsg({ agentId: agent.id, ok: false, text: 'La captura automatica requiere la app Android. En browser usa el flujo manual.' });
+      return;
+    }
+    setBusy(true); setActionMsg(null);
+    try {
+      const jwt = await FuxionCapture.openAndCapture('https://app-aware.fuxion.com/dashboard');
+      const updated = await mobileApi.updateFuxionToken(agent.id, jwt);
+      setAgents((prev) => prev.map((a) => a.id === agent.id ? updated : a));
+      setActionMsg({ agentId: agent.id, ok: true, text: 'Token capturado y guardado.' });
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      if (msg === 'cancelled') {
+        setActionMsg({ agentId: agent.id, ok: false, text: 'Captura cancelada.' });
+      } else {
+        setActionMsg({ agentId: agent.id, ok: false, text: msg });
+      }
+    } finally { setBusy(false); }
   }
 
   async function submitToken(agentId: string) {
@@ -70,6 +143,24 @@ export default function AgentsPage() {
         <button className="btn-ghost" onClick={() => void reload()} disabled={busy}>{busy ? '…' : '↻'}</button>
       </header>
       {error && <div className="text-sm text-red-600 bg-red-50 border border-red-100 rounded-lg px-3 py-2">{error}</div>}
+      {clipJwt && agents.some(a => a.paymentEnabled) && (
+        <div className="rounded-xl border border-purple-200 bg-purple-50 px-3 py-3 space-y-2">
+          <div className="text-sm text-purple-900">
+            Detecte un JWT en el portapapeles. Guardarlo como token FUXION de:
+          </div>
+          <div className="flex flex-wrap gap-2">
+            {agents.filter(a => a.paymentEnabled).map(a => (
+              <button key={a.id} className="btn-primary text-xs px-3 py-1.5"
+                onClick={() => void saveClipboardTo(a)} disabled={busy}>
+                {a.name}
+              </button>
+            ))}
+            <button className="btn-ghost text-xs px-3 py-1.5" onClick={() => setClipJwt(null)}>
+              Descartar
+            </button>
+          </div>
+        </div>
+      )}
       <div className="space-y-3">
         {agents.map((a) => {
           const expiring = a.paymentTokenExpiresAt && new Date(a.paymentTokenExpiresAt).getTime() - Date.now() < 24 * 3600 * 1000;
@@ -135,17 +226,27 @@ export default function AgentsPage() {
                         Abrir portal FUXION →
                       </button>
                       <p className="text-[11px] text-slate-500 mt-1">
-                        En el portal, abri DevTools (Chrome mobile: chrome://inspect desde compu, o usa un bookmarklet)
-                        y ejecuta <code>copy(localStorage.getItem('CapacitorStorage.xcorptoken'))</code>. Después pegalo arriba.
+                        Modo manual: en el portal, con DevTools ejecuta <code>copy(localStorage.getItem('CapacitorStorage.xcorptoken'))</code> y pegá arriba.
                       </p>
                     </div>
                   ) : (
-                    <div className="mt-3 grid grid-cols-2 gap-2">
-                      <button className="btn-secondary text-sm" onClick={() => { setRenewingAgent(a); setActionMsg(null); }}>
-                        Renovar token
-                      </button>
-                      <button className="btn-primary text-sm" onClick={() => void syncPrices(a.id)} disabled={busy || !a.paymentTokenPresent}>
-                        Sincronizar precios
+                    <div className="mt-3 space-y-2">
+                      <div className="grid grid-cols-2 gap-2">
+                        <button className="btn-secondary text-sm" onClick={() => void autoCaptureAndSave(a)} disabled={busy}>
+                          Renovar auto
+                        </button>
+                        <button className="btn-primary text-sm" onClick={() => void syncPrices(a.id)} disabled={busy || !a.paymentTokenPresent}>
+                          Sincronizar precios
+                        </button>
+                      </div>
+                      <button className="btn-ghost text-xs w-full" onClick={async () => {
+                        setRenewingAgent(a); setActionMsg(null);
+                        try {
+                          const { value } = await Clipboard.read();
+                          if (looksLikeJwt(value)) setJwtInput(value.trim());
+                        } catch { /* ignorar */ }
+                      }}>
+                        …o pegar el token a mano
                       </button>
                     </div>
                   )}
