@@ -13,6 +13,7 @@
 @inject AuthenticationStateProvider AuthProvider
 @inject IWebHostEnvironment Env
 @inject ITenantContext TenantContext
+@inject ILogger<Calendario> Logger
 
 <PageTitle>Calendario editorial - CUBOT.redmanager</PageTitle>
 
@@ -335,19 +336,35 @@ else
 
     private async Task OnFilesSelected(InputFileChangeEventArgs e)
     {
+        // Try/catch OUTER: cualquier throw aca queda "invisible" desde el navegador (Blazor Server
+        // solo reporta "There was an exception invoking 'NotifyChange'"), y el usuario ve el modal
+        // sin foto y sin explicacion. Capturamos TODO y lo mostramos en UI + Railway logs.
         _uploadErrors.Clear();
-        if (TenantContext.TenantId is not Guid tenantId)
-        {
-            _uploadErrors.Add("Sin agencia activa.");
-            return;
-        }
-
-        var files = e.GetMultipleFiles(MaxFiles);
-        _uploadTotal = files.Count;
-        _uploadCurrent = 0;
         _uploading = true;
         try
         {
+            if (TenantContext.TenantId is not Guid tenantId)
+            {
+                _uploadErrors.Add("Sin agencia activa.");
+                Logger.LogWarning("OnFilesSelected: tenantId null (posible circuit sin HTTP context)");
+                return;
+            }
+
+            // WebRootPath puede ser null si el publish output no incluye wwwroot (Railway con
+            // static-web-assets deshabilitado). Fallback: buscar wwwroot junto al binario.
+            var webRoot = Env.WebRootPath;
+            if (string.IsNullOrEmpty(webRoot))
+            {
+                webRoot = Path.Combine(AppContext.BaseDirectory, "wwwroot");
+                Logger.LogWarning("Env.WebRootPath vacio; fallback a {WebRoot}", webRoot);
+            }
+
+            var files = e.GetMultipleFiles(MaxFiles);
+            _uploadTotal = files.Count;
+            _uploadCurrent = 0;
+            Logger.LogInformation("OnFilesSelected: tenant={Tenant} archivos={Count} webRoot={Root}",
+                tenantId, files.Count, webRoot);
+
             foreach (var file in files)
             {
                 _uploadCurrent++;
@@ -362,9 +379,19 @@ else
                 }
 
                 var safeName = Guid.CreateVersion7().ToString("N") + ext.ToLowerInvariant();
-                var dir = Path.Combine(Env.WebRootPath, "uploads", tenantId.ToString("N"));
-                Directory.CreateDirectory(dir);
-                var fullPath = Path.Combine(dir, safeName);
+                string dir, fullPath;
+                try
+                {
+                    dir = Path.Combine(webRoot, "uploads", tenantId.ToString("N"));
+                    Directory.CreateDirectory(dir);
+                    fullPath = Path.Combine(dir, safeName);
+                }
+                catch (Exception ex)
+                {
+                    _uploadErrors.Add($"No se pudo crear la carpeta destino: {ex.GetType().Name} — {ex.Message}");
+                    Logger.LogError(ex, "OnFilesSelected: Directory.CreateDirectory fallo (webRoot={WebRoot}, tenant={Tenant})", webRoot, tenantId);
+                    continue;
+                }
 
                 try
                 {
@@ -374,7 +401,8 @@ else
                 }
                 catch (Exception ex)
                 {
-                    _uploadErrors.Add($"'{file.Name}': {ex.Message}");
+                    _uploadErrors.Add($"'{file.Name}': {ex.GetType().Name} — {ex.Message}");
+                    Logger.LogError(ex, "OnFilesSelected: File.Create/Copy fallo para {File}", fullPath);
                     try { if (File.Exists(fullPath)) { File.Delete(fullPath); } } catch { }
                     continue;
                 }
@@ -387,6 +415,13 @@ else
                 });
                 StateHasChanged();
             }
+        }
+        catch (Exception ex)
+        {
+            // Ultimo recurso: cualquier throw no capturado arriba (ej. GetMultipleFiles con size
+            // excedido, StateHasChanged en race, etc.) deja explicitamente el error al usuario.
+            _uploadErrors.Add($"Fallo el manejo del upload: {ex.GetType().Name} — {ex.Message}");
+            Logger.LogError(ex, "OnFilesSelected: excepcion no manejada");
         }
         finally { _uploading = false; _uploadCurrent = 0; _uploadTotal = 0; }
     }
