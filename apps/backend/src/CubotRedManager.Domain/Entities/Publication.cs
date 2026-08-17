@@ -19,4 +19,8 @@ public class Publication : TenantEntity
     public string? FailureReason { get; set; }
 
     public ICollection<PublicationTarget> Targets { get; set; } = new List<PublicationTarget>();
+
+    /// <summary>Archivos adjuntos (bytea en BD). Reemplaza el flow legacy MediaUrlsJson que
+    /// escribia a disco (fallaba en Railway por FS read-only).</summary>
+    public ICollection<PublicationMedia> Media { get; set; } = new List<PublicationMedia>();
 }

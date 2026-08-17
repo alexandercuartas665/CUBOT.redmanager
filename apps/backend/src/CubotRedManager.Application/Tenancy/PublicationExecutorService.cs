@@ -10,8 +10,6 @@ namespace CubotRedManager.Application.Tenancy;
 public sealed class PublicationExecutorService : IPublicationExecutorService
 {
     private const string Network = "tiktok";
-    private static readonly HashSet<string> VideoExts = new(StringComparer.OrdinalIgnoreCase)
-    { ".mp4", ".mov", ".webm", ".m4v" };
     // En modo sandbox de TikTok solo se permite publicar SELF_ONLY (privado).
     // Una vez auditada la app se podra exponer "PUBLIC_TO_EVERYONE" como opcion.
     private const string PrivacyLevel = "SELF_ONLY";
@@ -24,7 +22,6 @@ public sealed class PublicationExecutorService : IPublicationExecutorService
     private readonly ITikTokConnectionService _tiktokConnection;
     private readonly ISecretProtector _protector;
     private readonly IAuditWriter _audit;
-    private readonly IUploadPathResolver _uploads;
     private readonly TimeProvider _time;
 
     public PublicationExecutorService(
@@ -34,7 +31,6 @@ public sealed class PublicationExecutorService : IPublicationExecutorService
         ITikTokConnectionService tiktokConnection,
         ISecretProtector protector,
         IAuditWriter audit,
-        IUploadPathResolver uploads,
         TimeProvider time)
     {
         _db = db;
@@ -43,7 +39,6 @@ public sealed class PublicationExecutorService : IPublicationExecutorService
         _tiktokConnection = tiktokConnection;
         _protector = protector;
         _audit = audit;
-        _uploads = uploads;
         _time = time;
     }
 
@@ -77,33 +72,41 @@ public sealed class PublicationExecutorService : IPublicationExecutorService
             return new PublicationExecResult(false, pub.Status, "[ERROR] Sin targets configurados.", targets);
         }
 
-        // Resolver media URLs locales -> rutas absolutas en disco.
-        var urls = DeserializeUrls(pub.MediaUrlsJson);
-        if (urls.Count == 0)
+        // Media desde BD (bytea) — NO hay disco. Elegimos el primer video por MIME (TikTok solo videos).
+        var mediaRows = await _db.PublicationMedias.AsNoTracking()
+            .Where(m => m.PublicationId == pub.Id)
+            .OrderBy(m => m.SortOrder)
+            .Select(m => new { m.Id, m.FileName, m.MimeType, m.FileSize })
+            .ToListAsync(cancellationToken);
+        if (mediaRows.Count == 0)
         {
             pub.Status = PublicationStatus.Failed;
             pub.FailureReason = "Sin media adjunta.";
             await _db.SaveChangesAsync(cancellationToken);
             return new PublicationExecResult(false, pub.Status, "[ERROR] Sin media adjunta (TikTok exige video).", targets);
         }
-        var videoUrl = urls.FirstOrDefault(u => VideoExts.Contains(Path.GetExtension(u)));
-        if (videoUrl is null)
+        var videoMeta = mediaRows.FirstOrDefault(m => m.MimeType.StartsWith("video/", StringComparison.OrdinalIgnoreCase));
+        if (videoMeta is null)
         {
             pub.Status = PublicationStatus.Failed;
             pub.FailureReason = "No hay archivo de video en la media adjunta.";
             await _db.SaveChangesAsync(cancellationToken);
-            return new PublicationExecResult(false, pub.Status, $"[ERROR] TikTok solo acepta video. La media adjunta es: {string.Join(", ", urls.Select(Path.GetExtension))}.", targets);
+            return new PublicationExecResult(false, pub.Status, $"[ERROR] TikTok solo acepta video. Media: {string.Join(", ", mediaRows.Select(m => m.MimeType))}.", targets);
         }
-        var localPath = _uploads.ResolveFromUrl(videoUrl);
-        if (localPath is null || !File.Exists(localPath))
+        // Lectura del bytea recien cuando lo vamos a usar (evita cargar 60MB si nada esta configurado).
+        var videoContent = await _db.PublicationMedias.AsNoTracking()
+            .Where(m => m.Id == videoMeta.Id)
+            .Select(m => m.Content)
+            .FirstOrDefaultAsync(cancellationToken);
+        if (videoContent is null || videoContent.Length == 0)
         {
             pub.Status = PublicationStatus.Failed;
-            pub.FailureReason = "Archivo de video no encontrado en disco.";
+            pub.FailureReason = "Contenido del video vacio en BD.";
             await _db.SaveChangesAsync(cancellationToken);
-            return new PublicationExecResult(false, pub.Status, $"[ERROR] No se encontro {videoUrl} en disco.", targets);
+            return new PublicationExecResult(false, pub.Status, "[ERROR] PublicationMedia.Content vacio.", targets);
         }
-        var videoSize = new FileInfo(localPath).Length;
-        trace.AppendLine($"[INFO] Publicando '{Path.GetFileName(localPath)}' ({videoSize / 1024 / 1024.0:F1} MB) en {pub.Targets.Count} cuenta(s).");
+        var videoSize = (long)videoContent.Length;
+        trace.AppendLine($"[INFO] Publicando '{videoMeta.FileName}' ({videoSize / 1024 / 1024.0:F1} MB, {videoMeta.MimeType}) en {pub.Targets.Count} cuenta(s).");
 
         var anySuccess = false;
         var anyFail = false;
@@ -132,7 +135,7 @@ public sealed class PublicationExecutorService : IPublicationExecutorService
             }
 
             trace.AppendLine($"[TARGET] @{account.Handle}");
-            var (ok, publishId, error) = await PublishToTikTokAsync(account, localPath, videoSize, pub.Caption, actorUserId, trace, cancellationToken);
+            var (ok, publishId, error) = await PublishToTikTokAsync(account, videoContent, videoMeta.MimeType, videoSize, pub.Caption, actorUserId, trace, cancellationToken);
             targets.Add(new PublicationExecTargetResult(target.Id, account.Id, account.NetworkCode, account.Handle, ok, publishId, error));
             if (ok)
             {
@@ -172,7 +175,7 @@ public sealed class PublicationExecutorService : IPublicationExecutorService
     }
 
     private async Task<(bool ok, string? publishId, string? error)> PublishToTikTokAsync(
-        SocialAccount account, string localPath, long videoSize, string caption, Guid actorUserId, StringBuilder trace, CancellationToken ct)
+        SocialAccount account, byte[] videoContent, string contentType, long videoSize, string caption, Guid actorUserId, StringBuilder trace, CancellationToken ct)
     {
         if (string.IsNullOrEmpty(account.AccessTokenEncrypted))
         {
@@ -223,18 +226,12 @@ public sealed class PublicationExecutorService : IPublicationExecutorService
         trace.AppendLine($"  [OK] publish_id={publishId}");
 
         // --- 2) PUT del archivo al upload_url ---
+        // Los bytes vienen de PublicationMedia (BD, bytea) — no hay disco (Railway FS read-only).
+        // MemoryStream sobre el array para satisfacer la API que espera Stream.
         trace.AppendLine("  [2/3] subiendo archivo...");
-        await using (var fs = File.OpenRead(localPath))
+        using (var ms = new MemoryStream(videoContent, writable: false))
         {
-            var ext = Path.GetExtension(localPath).ToLowerInvariant();
-            var contentType = ext switch
-            {
-                ".mp4" or ".m4v" => "video/mp4",
-                ".mov" => "video/quicktime",
-                ".webm" => "video/webm",
-                _ => "video/mp4"
-            };
-            var (ok, err) = await _tiktokApi.PublishVideoUploadAsync(uploadUrl!, fs, videoSize, contentType, ct);
+            var (ok, err) = await _tiktokApi.PublishVideoUploadAsync(uploadUrl!, ms, videoSize, contentType, ct);
             if (!ok)
             {
                 trace.AppendLine($"  [ERROR] upload: {err}");
@@ -288,10 +285,4 @@ public sealed class PublicationExecutorService : IPublicationExecutorService
         return false;
     }
 
-    private static IReadOnlyList<string> DeserializeUrls(string? json)
-    {
-        if (string.IsNullOrWhiteSpace(json)) { return Array.Empty<string>(); }
-        try { return JsonSerializer.Deserialize<List<string>>(json) ?? new(); }
-        catch { return Array.Empty<string>(); }
-    }
 }

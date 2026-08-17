@@ -2,6 +2,10 @@ using CubotRedManager.Domain.Enums;
 
 namespace CubotRedManager.Application.Tenancy;
 
+/// <summary>Metadata mostrada al front por cada media adjunta. La URL apunta a
+/// /api/publications/media/{id} — el binario vive en BD, no en disco (ver PublicationMedia).</summary>
+public sealed record PublicationMediaDto(Guid Id, string FileName, string MimeType, long FileSize);
+
 public sealed record PublicationDto(
     Guid Id,
     Guid ClientId,
@@ -10,16 +14,18 @@ public sealed record PublicationDto(
     DateTimeOffset? ScheduledAt,
     PublicationStatus Status,
     int TargetCount,
-    /// <summary>URLs relativas de los archivos adjuntos (imagenes/videos). Servidos desde wwwroot/uploads.</summary>
-    IReadOnlyList<string> MediaUrls);
+    IReadOnlyList<PublicationMediaDto> Media);
+
+/// <summary>Blob a persistir. Content es el bytea; MimeType lo resolvio el uploader (Calendario.razor).</summary>
+public sealed record PublicationMediaBlob(string FileName, string MimeType, byte[] Content);
 
 public sealed record CreatePublicationRequest(
     Guid ClientId,
     string Caption,
     DateTimeOffset? ScheduledAt,
     IReadOnlyList<Guid> SocialAccountIds,
-    /// <summary>URLs ya subidas (servidas desde /uploads/...). Vacio si solo es texto.</summary>
-    IReadOnlyList<string> MediaUrls);
+    /// <summary>Adjuntos con contenido binario. Vacio si solo es texto.</summary>
+    IReadOnlyList<PublicationMediaBlob> Media);
 
 /// <summary>Calendario editorial y publicaciones (Modulo 2.5). Tenant-scoped.</summary>
 public interface IPublicationService

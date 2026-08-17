@@ -35,6 +35,7 @@ public interface IApplicationDbContext
     DbSet<TaskCardAttachment> TaskCardAttachments { get; }
     DbSet<Publication> Publications { get; }
     DbSet<PublicationTarget> PublicationTargets { get; }
+    DbSet<PublicationMedia> PublicationMedias { get; }
     DbSet<InboxMessage> InboxMessages { get; }
     DbSet<InboxReply> InboxReplies { get; }
     DbSet<MessageTemplate> MessageTemplates { get; }

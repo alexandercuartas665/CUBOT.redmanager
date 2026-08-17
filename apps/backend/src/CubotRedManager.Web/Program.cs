@@ -55,6 +55,17 @@ if (tkOpts.Enabled)
     builder.Services.AddHostedService<CubotRedManager.Web.BackgroundJobs.TikTokMaintenanceWorker>();
 }
 
+// PublicationScheduleWorker: dispara automaticamente publicaciones Status=Scheduled cuya
+// ScheduledAt <= NOW. Es el "reloj despertador" del calendario editorial — sin este worker,
+// una publi programada para manana 10am se queda como Scheduled hasta clic manual.
+var psOpts = builder.Configuration.GetSection("PublicationSchedule").Get<CubotRedManager.Web.BackgroundJobs.PublicationScheduleOptions>()
+             ?? new CubotRedManager.Web.BackgroundJobs.PublicationScheduleOptions();
+builder.Services.AddSingleton(psOpts);
+if (psOpts.Enabled)
+{
+    builder.Services.AddHostedService<CubotRedManager.Web.BackgroundJobs.PublicationScheduleWorker>();
+}
+
 // AutoReply (Modulo 2.11). Worker que procesa comentarios pendientes segun la programacion
 // configurada por cuenta (Frequency + ActiveHoursMask + ActiveDaysOfWeekMask) y genera respuesta
 // via plantilla / IA segun Mode. Escribe AutoReplyJobLog para auditoria en la pagina de logs.
@@ -353,6 +364,23 @@ app.MapGet("/api/agent-resources/{id:guid}/file", async (
     if (res?.FileContent is not { Length: > 0 }) { return Results.NotFound(); }
     var mime = string.IsNullOrWhiteSpace(res.FileMimeType) ? "application/octet-stream" : res.FileMimeType;
     return Results.File(res.FileContent, mime, res.FileName);
+}).RequireAuthorization();
+
+// Sirve el binario de una PublicationMedia (bytea en BD). Tenant-scoped por HasQueryFilter.
+// Uso: <img src="/api/publications/media/{id}"> en la lista del Calendario editorial.
+// Cache-Control corto porque el contenido es inmutable pero el id no se re-emite (v7 GUID unico).
+app.MapGet("/api/publications/media/{id:guid}", async (
+    Guid id,
+    IApplicationDbContext db,
+    CancellationToken ct) =>
+{
+    var media = await db.PublicationMedias.AsNoTracking()
+        .Where(m => m.Id == id)
+        .Select(m => new { m.Content, m.MimeType, m.FileName })
+        .FirstOrDefaultAsync(ct);
+    if (media?.Content is not { Length: > 0 }) { return Results.NotFound(); }
+    var mime = string.IsNullOrWhiteSpace(media.MimeType) ? "application/octet-stream" : media.MimeType;
+    return Results.File(media.Content, mime, media.FileName);
 }).RequireAuthorization();
 
 // ===== REST API autenticada por X-Api-Token (DataContainers) =====

@@ -11,7 +11,6 @@
 @inject ISocialAccountService AccountsSvc
 @inject IPublicationExecutorService ExecSvc
 @inject AuthenticationStateProvider AuthProvider
-@inject IWebHostEnvironment Env
 @inject ITenantContext TenantContext
 @inject ILogger<Calendario> Logger
 
@@ -64,26 +63,27 @@ else
                         <tr>
                             <td style="padding-left:14px;font-weight:600;">@p.ClientName</td>
                             <td>
-                                @if (p.MediaUrls.Count == 0) { <span class="text-muted" style="font-size:11px;">—</span> }
+                                @if (p.Media.Count == 0) { <span class="text-muted" style="font-size:11px;">—</span> }
                                 else
                                 {
                                     <div class="cal-thumbs">
-                                        @foreach (var url in p.MediaUrls.Take(3))
+                                        @foreach (var m in p.Media.Take(3))
                                         {
-                                            @if (IsVideo(url))
+                                            var url = MediaUrl(m.Id);
+                                            @if (IsVideoMime(m.MimeType))
                                             {
-                                                <div class="cal-thumb cal-thumb-video" title="@url">
+                                                <div class="cal-thumb cal-thumb-video" title="@m.FileName">
                                                     <svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>
                                                 </div>
                                             }
                                             else
                                             {
-                                                <img class="cal-thumb" src="@url" alt="" title="@url" />
+                                                <img class="cal-thumb" src="@url" alt="" title="@m.FileName" />
                                             }
                                         }
-                                        @if (p.MediaUrls.Count > 3)
+                                        @if (p.Media.Count > 3)
                                         {
-                                            <span class="cal-thumb cal-thumb-more">+@(p.MediaUrls.Count - 3)</span>
+                                            <span class="cal-thumb cal-thumb-more">+@(p.Media.Count - 3)</span>
                                         }
                                     </div>
                                 }
@@ -169,7 +169,7 @@ else
                             @foreach (var m in _media)
                             {
                                 <div class="cal-media-item">
-                                    @if (IsVideo(m.Url))
+                                    @if (IsVideoMime(m.MimeType))
                                     {
                                         <div class="cal-media-prev cal-media-video">
                                             <svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>
@@ -177,11 +177,13 @@ else
                                     }
                                     else
                                     {
-                                        <img class="cal-media-prev" src="@m.Url" alt="" />
+                                        <div class="cal-media-prev cal-media-video" style="background:#e5e7eb;color:#6b7280;">
+                                            <svg viewBox="0 0 24 24" fill="currentColor"><path d="M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm-4 8l-3 4-2-3-3 4h10l-2-5z"/></svg>
+                                        </div>
                                     }
                                     <div style="flex:1; min-width:0;">
                                         <div class="cal-media-name">@m.FileName</div>
-                                        <div class="cal-media-meta">@FormatBytes(m.Size)</div>
+                                        <div class="cal-media-meta">@FormatBytes(m.Content.Length)</div>
                                     </div>
                                     <button class="btn btn-sm" style="color:#dc2626;" @onclick="() => RemoveMedia(m)" title="Quitar">×</button>
                                 </div>
@@ -276,8 +278,6 @@ else
     private const long MaxBytes = 60L * 1024 * 1024; // 60MB
     private static readonly HashSet<string> AllowedExt = new(StringComparer.OrdinalIgnoreCase)
     { ".jpg", ".jpeg", ".png", ".webp", ".gif", ".mp4", ".mov", ".webm", ".m4v" };
-    private static readonly HashSet<string> VideoExt = new(StringComparer.OrdinalIgnoreCase)
-    { ".mp4", ".mov", ".webm", ".m4v" };
 
     private List<PublicationDto>? _pubs;
     private List<ClientDto>? _clients;
@@ -297,9 +297,11 @@ else
 
     private sealed class MediaItem
     {
-        public required string Url { get; init; }
         public required string FileName { get; init; }
-        public required long Size { get; init; }
+        public required string MimeType { get; init; }
+        /// <summary>Bytes leidos del InputFile en memoria. Se envian a PublicationService.CreateAsync
+        /// como PublicationMediaBlob y se persisten como bytea en la BD (Railway FS es read-only).</summary>
+        public required byte[] Content { get; init; }
     }
 
     protected override async Task OnInitializedAsync()
@@ -336,34 +338,18 @@ else
 
     private async Task OnFilesSelected(InputFileChangeEventArgs e)
     {
-        // Try/catch OUTER: cualquier throw aca queda "invisible" desde el navegador (Blazor Server
-        // solo reporta "There was an exception invoking 'NotifyChange'"), y el usuario ve el modal
-        // sin foto y sin explicacion. Capturamos TODO y lo mostramos en UI + Railway logs.
+        // Los bytes se leen a MemoryStream (sin disco) y viajan a BD como bytea en CreateAsync.
+        // Motivo: Railway monta /app read-only para el proceso -> escribir a wwwroot/uploads
+        // lanzaba UnauthorizedAccessException, la excepcion mataba silenciosamente NotifyChange
+        // y el usuario veia el modal sin explicacion. Mismo patron que AiAgentResource.FileContent.
         _uploadErrors.Clear();
         _uploading = true;
         try
         {
-            if (TenantContext.TenantId is not Guid tenantId)
-            {
-                _uploadErrors.Add("Sin agencia activa.");
-                Logger.LogWarning("OnFilesSelected: tenantId null (posible circuit sin HTTP context)");
-                return;
-            }
-
-            // WebRootPath puede ser null si el publish output no incluye wwwroot (Railway con
-            // static-web-assets deshabilitado). Fallback: buscar wwwroot junto al binario.
-            var webRoot = Env.WebRootPath;
-            if (string.IsNullOrEmpty(webRoot))
-            {
-                webRoot = Path.Combine(AppContext.BaseDirectory, "wwwroot");
-                Logger.LogWarning("Env.WebRootPath vacio; fallback a {WebRoot}", webRoot);
-            }
-
             var files = e.GetMultipleFiles(MaxFiles);
             _uploadTotal = files.Count;
             _uploadCurrent = 0;
-            Logger.LogInformation("OnFilesSelected: tenant={Tenant} archivos={Count} webRoot={Root}",
-                tenantId, files.Count, webRoot);
+            Logger.LogInformation("OnFilesSelected: archivos={Count}", files.Count);
 
             foreach (var file in files)
             {
@@ -378,40 +364,26 @@ else
                     continue;
                 }
 
-                var safeName = Guid.CreateVersion7().ToString("N") + ext.ToLowerInvariant();
-                string dir, fullPath;
-                try
-                {
-                    dir = Path.Combine(webRoot, "uploads", tenantId.ToString("N"));
-                    Directory.CreateDirectory(dir);
-                    fullPath = Path.Combine(dir, safeName);
-                }
-                catch (Exception ex)
-                {
-                    _uploadErrors.Add($"No se pudo crear la carpeta destino: {ex.GetType().Name} — {ex.Message}");
-                    Logger.LogError(ex, "OnFilesSelected: Directory.CreateDirectory fallo (webRoot={WebRoot}, tenant={Tenant})", webRoot, tenantId);
-                    continue;
-                }
-
+                byte[] bytes;
                 try
                 {
                     await using var input = file.OpenReadStream(MaxBytes);
-                    await using var output = File.Create(fullPath);
-                    await input.CopyToAsync(output);
+                    using var ms = new MemoryStream();
+                    await input.CopyToAsync(ms);
+                    bytes = ms.ToArray();
                 }
                 catch (Exception ex)
                 {
                     _uploadErrors.Add($"'{file.Name}': {ex.GetType().Name} — {ex.Message}");
-                    Logger.LogError(ex, "OnFilesSelected: File.Create/Copy fallo para {File}", fullPath);
-                    try { if (File.Exists(fullPath)) { File.Delete(fullPath); } } catch { }
+                    Logger.LogError(ex, "OnFilesSelected: lectura de stream fallo para {File}", file.Name);
                     continue;
                 }
 
                 _media.Add(new MediaItem
                 {
-                    Url = $"/uploads/{tenantId:N}/{safeName}",
                     FileName = file.Name,
-                    Size = file.Size
+                    MimeType = string.IsNullOrWhiteSpace(file.ContentType) ? MimeFromExt(ext) : file.ContentType,
+                    Content = bytes
                 });
                 StateHasChanged();
             }
@@ -419,7 +391,8 @@ else
         catch (Exception ex)
         {
             // Ultimo recurso: cualquier throw no capturado arriba (ej. GetMultipleFiles con size
-            // excedido, StateHasChanged en race, etc.) deja explicitamente el error al usuario.
+            // excedido) deja explicitamente el error al usuario. Sin esto, NotifyChange muere
+            // silencioso en Blazor Server y el boton Crear nunca se habilita.
             _uploadErrors.Add($"Fallo el manejo del upload: {ex.GetType().Name} — {ex.Message}");
             Logger.LogError(ex, "OnFilesSelected: excepcion no manejada");
         }
@@ -428,15 +401,8 @@ else
 
     private void RemoveMedia(MediaItem m)
     {
+        // Solo memoria: la publicacion aun no se ha creado, no hay nada persistido.
         _media.Remove(m);
-        // Borrar tambien del disco (la publicacion aun no se ha creado).
-        try
-        {
-            var rel = m.Url.TrimStart('/').Replace('/', Path.DirectorySeparatorChar);
-            var full = Path.Combine(Env.WebRootPath, rel);
-            if (File.Exists(full)) { File.Delete(full); }
-        }
-        catch { /* tolerante */ }
     }
 
     private async Task CreateAsync()
@@ -446,14 +412,14 @@ else
         {
             if (!Guid.TryParse(_fClient, out var cid)) { return; }
             DateTimeOffset? sched = _fSchedule is { } s ? new DateTimeOffset(s, TimeSpan.Zero) : null;
-            var urls = _media.Select(m => m.Url).ToList();
-            var dto = await PubsSvc.CreateAsync(new CreatePublicationRequest(cid, _fCaption, sched, _selected.ToList(), urls), _actor);
+            var blobs = _media.Select(m => new PublicationMediaBlob(m.FileName, m.MimeType, m.Content)).ToList();
+            var dto = await PubsSvc.CreateAsync(new CreatePublicationRequest(cid, _fCaption, sched, _selected.ToList(), blobs), _actor);
             if (dto is null) { _error = "No hay agencia activa o cliente invalido."; return; }
             _createOpen = false;
             _media.Clear();
             await Reload();
         }
-        catch (Exception ex) { _error = ex.Message; }
+        catch (Exception ex) { _error = ex.Message; Logger.LogError(ex, "CreateAsync fallo"); }
         finally { _busy = false; }
     }
 
@@ -478,7 +444,7 @@ else
         var targetsTikTok = _clientAccounts.Where(a => _selected.Contains(a.Id) && a.NetworkCode == "tiktok").ToList();
         if (targetsTikTok.Count > 0)
         {
-            var hasVideo = _media.Any(m => IsVideo(m.Url));
+            var hasVideo = _media.Any(m => IsVideoMime(m.MimeType));
             if (!hasVideo) { missing.Add("Adjuntar un archivo VIDEO (MP4/MOV/WEBM) — TikTok no acepta PNG/JPG en este flujo."); }
         }
         return missing;
@@ -496,11 +462,23 @@ else
         finally { _publishingId = null; }
     }
 
-    private static bool IsVideo(string url)
+    private static bool IsVideoMime(string mime) => mime.StartsWith("video/", StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>URL del blob servido desde /api/publications/media/{id} (con auth por cookie + tenant).</summary>
+    private static string MediaUrl(Guid id) => $"/api/publications/media/{id:D}";
+
+    /// <summary>MIME por extension como fallback si el navegador no lo puso en file.ContentType.</summary>
+    private static string MimeFromExt(string ext) => ext.ToLowerInvariant() switch
     {
-        var ext = Path.GetExtension(url);
-        return !string.IsNullOrEmpty(ext) && VideoExt.Contains(ext);
-    }
+        ".mp4" or ".m4v" => "video/mp4",
+        ".mov" => "video/quicktime",
+        ".webm" => "video/webm",
+        ".jpg" or ".jpeg" => "image/jpeg",
+        ".png" => "image/png",
+        ".webp" => "image/webp",
+        ".gif" => "image/gif",
+        _ => "application/octet-stream"
+    };
 
     private static string FormatBytes(long b)
     {

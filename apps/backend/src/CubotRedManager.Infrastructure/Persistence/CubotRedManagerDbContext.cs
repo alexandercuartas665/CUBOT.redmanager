@@ -68,6 +68,7 @@ public class CubotRedManagerDbContext : DbContext, IApplicationDbContext, IDataP
     public DbSet<TaskCardAttachment> TaskCardAttachments => Set<TaskCardAttachment>();
     public DbSet<Publication> Publications => Set<Publication>();
     public DbSet<PublicationTarget> PublicationTargets => Set<PublicationTarget>();
+    public DbSet<PublicationMedia> PublicationMedias => Set<PublicationMedia>();
     public DbSet<InboxMessage> InboxMessages => Set<InboxMessage>();
     public DbSet<InboxReply> InboxReplies => Set<InboxReply>();
     public DbSet<MessageTemplate> MessageTemplates => Set<MessageTemplate>();
@@ -255,8 +256,17 @@ public class CubotRedManagerDbContext : DbContext, IApplicationDbContext, IDataP
         // Calendario / publicaciones (Modulo 2.5).
         modelBuilder.Entity<Publication>().Property(x => x.Status).HasConversion<string>();
         modelBuilder.Entity<Publication>().HasMany(p => p.Targets).WithOne(t => t.Publication!).HasForeignKey(t => t.PublicationId).OnDelete(DeleteBehavior.Cascade);
+        modelBuilder.Entity<Publication>().HasMany(p => p.Media).WithOne(m => m.Publication!).HasForeignKey(m => m.PublicationId).OnDelete(DeleteBehavior.Cascade);
         modelBuilder.Entity<PublicationTarget>().Property(x => x.Status).HasConversion<string>();
         modelBuilder.Entity<Publication>().HasIndex(x => new { x.TenantId, x.ScheduledAt });
+        // PublicationMedia: bytea + limites. El indice por publication_id acelera el executor.
+        modelBuilder.Entity<PublicationMedia>(b =>
+        {
+            b.Property(x => x.FileName).HasMaxLength(255).IsRequired();
+            b.Property(x => x.MimeType).HasMaxLength(120).IsRequired();
+            b.Property(x => x.Content).IsRequired();
+            b.HasIndex(x => new { x.PublicationId, x.SortOrder });
+        });
 
         // Bandeja unificada (Modulo 2.6).
         modelBuilder.Entity<InboxMessage>().Property(x => x.Type).HasConversion<string>();
