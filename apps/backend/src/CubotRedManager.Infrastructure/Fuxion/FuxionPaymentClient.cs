@@ -106,15 +106,26 @@ public sealed class FuxionPaymentClient : IFuxionPaymentClient
 
         if (status == 401 || status == 403)
         {
-            _logger.LogInformation("FuxionPayment: {Status} (token invalido/expirado) para userId {UserId}", status, req.UserId);
+            _logger.LogInformation("FuxionPayment: {Status} (token invalido/expirado) para userId {UserId}. Body: {Body}",
+                status, req.UserId, TruncateForLog(respBody));
+            // Incluimos body y userId (4 ultimos chars) en el mensaje para que la bitacora del agente
+            // distinga token vencido (body vacio o error de sesion) vs userId invalido (body dice user
+            // not found / no access) vs schema roto (body dice missing/invalid field). Antes solo decia
+            // "token rechazado" y llevo a diagnosticar mal.
+            var userTail = string.IsNullOrEmpty(req.UserId) || req.UserId.Length < 4
+                ? req.UserId : "..." + req.UserId[^4..];
+            var bodySnippet = string.IsNullOrWhiteSpace(respBody) ? "(sin body)" : TruncateForLog(respBody, 200);
             return FuxionGenerateLinkResult.Failure(FuxionGenerateLinkErrorKind.TokenExpired,
-                "token FUXION rechazado. Renuevalo en /agentes -> Pagos FUXION.", status);
+                $"HTTP {status} en generate-power-link (userId={userTail}). Body: {bodySnippet}. " +
+                "Renuevalo en /agentes -> Pagos FUXION o revisa que el PaymentUserId sea el correcto.",
+                status);
         }
         if (status >= 500 || status == (int)HttpStatusCode.RequestTimeout || status == 429)
         {
             _logger.LogWarning("FuxionPayment: {Status} del servidor, body: {Body}", status, TruncateForLog(respBody));
+            var bodySnippet = string.IsNullOrWhiteSpace(respBody) ? "(sin body)" : TruncateForLog(respBody, 200);
             return FuxionGenerateLinkResult.Failure(FuxionGenerateLinkErrorKind.ServerError,
-                $"FUXION respondio {status}.", status);
+                $"HTTP {status} de FUXION. Body: {bodySnippet}", status);
         }
         if (status >= 400)
         {
