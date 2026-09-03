@@ -57,8 +57,34 @@ public static class EvolutionWebhookParser
         if (!key.TryGetProperty("remoteJid", out var jidEl) || jidEl.ValueKind != JsonValueKind.String) { return null; }
         var jid = jidEl.GetString()!;
         if (jid.Contains("@g.us")) { return null; } // grupos no soportados
-        var phone = new string(jid.TakeWhile(c => c != '@').Where(char.IsDigit).ToArray());
-        if (string.IsNullOrEmpty(phone)) { return null; }
+
+        // Resolucion de telefono:
+        //   * @s.whatsapp.net -> los digitos del prefijo del jid SON el telefono E.164.
+        //   * @lid            -> identificador de privacidad de WhatsApp (LID). NO es telefono.
+        //                        Buscamos el telefono real en campos hermanos que Evolution suele
+        //                        incluir cuando WhatsApp esconde el numero (privacy on): senderPn,
+        //                        remoteJidAlt, participant, participantPn (y sus duplicados en data).
+        //     Sin este resolver, guardabamos el LID como si fuera telefono y el operador no
+        //     encontraba la conversacion buscando "+57 316..." — solo veia un ID de 15+ digitos.
+        string? phone;
+        var isLid = jid.EndsWith("@lid", StringComparison.OrdinalIgnoreCase);
+        if (isLid)
+        {
+            phone = TryResolveRealPhoneFromLid(key, data);
+            if (string.IsNullOrEmpty(phone))
+            {
+                // Sin telefono real no ingestamos: guardar el LID crearia una conversacion "fantasma"
+                // que nunca podras responder (WhatsApp no acepta LIDs como destino de outbound).
+                // Log del body raw para poder ampliar la lista de campos que se inspecciona.
+                Console.Error.WriteLine($"[EvolutionWebhookParser] @lid sin telefono resoluble. jid={jid} keyKeys={KeysOf(key)} dataKeys={KeysOf(data)}");
+                return null;
+            }
+        }
+        else
+        {
+            phone = new string(jid.TakeWhile(c => c != '@').Where(char.IsDigit).ToArray());
+            if (string.IsNullOrEmpty(phone)) { return null; }
+        }
 
         var externalId = key.TryGetProperty("id", out var idEl) && idEl.ValueKind == JsonValueKind.String
             ? idEl.GetString()!
@@ -165,6 +191,47 @@ public static class EvolutionWebhookParser
 
     private static double? ReadDouble(JsonElement obj, string prop)
         => obj.ValueKind == JsonValueKind.Object && obj.TryGetProperty(prop, out var v) && v.ValueKind == JsonValueKind.Number && v.TryGetDouble(out var d) ? d : null;
+
+    /// <summary>
+    /// Cuando remoteJid termina en @lid, WhatsApp NO nos da el telefono directo. Evolution
+    /// (segun version) puede incluir el telefono real en distintos campos hermanos. Este helper
+    /// prueba en orden los mas comunes y devuelve el primero que parezca un E.164 valido (>=8 digitos).
+    /// Si Evolution agrega campos nuevos en una version futura, el log RAW en Parse ayuda a
+    /// identificarlos sin redeployar a ciegas.
+    /// </summary>
+    private static string? TryResolveRealPhoneFromLid(JsonElement key, JsonElement data)
+    {
+        // Candidatos en el objeto key (los mas frecuentes segun observacion en produccion).
+        string?[] candidates =
+        {
+            ReadString(key, "senderPn"),
+            ReadString(key, "participantPn"),
+            ReadString(key, "remoteJidAlt"),
+            ReadString(key, "participant"),
+            ReadString(data, "senderPn"),
+            ReadString(data, "participantPn"),
+            ReadString(data, "remoteJidAlt")
+        };
+        foreach (var cand in candidates)
+        {
+            if (string.IsNullOrWhiteSpace(cand)) { continue; }
+            // El campo puede venir con @s.whatsapp.net, @lid mismo, o solo digitos.
+            var digits = new string(cand.TakeWhile(c => c != '@').Where(char.IsDigit).ToArray());
+            // Filtro: >= 8 digitos y NO igual al LID (a veces Evolution rellena con el mismo LID).
+            if (digits.Length >= 8 && !cand.EndsWith("@lid", StringComparison.OrdinalIgnoreCase))
+            {
+                return digits;
+            }
+        }
+        return null;
+    }
+
+    /// <summary>Lista las claves de nivel superior de un objeto JSON para debugging del bug @lid.</summary>
+    private static string KeysOf(JsonElement el)
+    {
+        if (el.ValueKind != JsonValueKind.Object) { return "(not-object)"; }
+        return string.Join(",", el.EnumerateObject().Select(p => p.Name));
+    }
 
     // Instancia cubot_{tenant:N}_{linea:N} -> (tenant, linea opcional).
     private static (Guid? Tenant, Guid? Line) TenantAndLineFromInstance(string instance)
