@@ -1131,20 +1131,46 @@ app.MapPost("/webhooks/evolution/{tenantId:guid}", async (
     var master = await db.EvolutionMasterConfigs.FirstOrDefaultAsync(ct);
     var expected = master?.WebhookToken
         ?? Environment.GetEnvironmentVariable("CUBOT_EVOLUTION_WEBHOOK_TOKEN");
-    if (string.IsNullOrEmpty(expected)) { return Results.StatusCode(503); }
+    if (string.IsNullOrEmpty(expected))
+    {
+        log.LogWarning("Evolution webhook: master WebhookToken vacio; devolviendo 503");
+        return Results.StatusCode(503);
+    }
 
     var provided = request.Headers["x-webhook-token"].ToString();
     if (string.IsNullOrEmpty(provided)) { provided = request.Query["token"].ToString(); }
-    if (!string.Equals(provided, expected, StringComparison.Ordinal)) { return Results.Unauthorized(); }
+    if (!string.Equals(provided, expected, StringComparison.Ordinal))
+    {
+        log.LogWarning("Evolution webhook: token invalido (tenant {Tenant}, tenia_header={HasHeader})",
+            tenantId, !string.IsNullOrEmpty(request.Headers["x-webhook-token"].ToString()));
+        return Results.Unauthorized();
+    }
+
+    // Leemos el body a memoria para poder loggearlo (una sola lectura del stream) + parsear.
+    // Cuesta poco (webhook Evolution < 32KB tipico) y nos deja el body RAW en Railway logs
+    // cuando hay un caso raro (LID sin telefono, evento nuevo, etc).
+    string rawBody;
+    using (var reader = new StreamReader(request.Body))
+    {
+        rawBody = await reader.ReadToEndAsync(ct);
+    }
+    log.LogInformation("Evolution webhook: body {Len} bytes, snippet: {Snippet}",
+        rawBody.Length, rawBody.Length > 800 ? rawBody.Substring(0, 800) + "..." : rawBody);
 
     System.Text.Json.JsonDocument doc;
-    try { doc = await System.Text.Json.JsonDocument.ParseAsync(request.Body, cancellationToken: ct); }
+    try { doc = System.Text.Json.JsonDocument.Parse(rawBody); }
     catch (Exception ex) { log.LogWarning(ex, "Evolution webhook: JSON invalido"); return Results.Ok(); }
 
     CubotRedManager.Application.Tenancy.ParsedInbound? parsed;
     try { parsed = CubotRedManager.Application.Tenancy.EvolutionWebhookParser.Parse(doc.RootElement); }
     finally { doc.Dispose(); }
-    if (parsed is null) { return Results.Ok(new { status = "ignored" }); }
+    if (parsed is null)
+    {
+        log.LogInformation("Evolution webhook: parser devolvio null (evento no ingestable)");
+        return Results.Ok(new { status = "ignored" });
+    }
+    log.LogInformation("Evolution webhook: parsed OK phone={Phone} lineId={Line} externalId={Ext}",
+        parsed.Payload.ContactPhone, parsed.Payload.WhatsAppLineId, parsed.Payload.ExternalMessageId);
 
     // Ambient tenant para que los filtros globales y auditor apunten al tenant correcto.
     tenantOverride.Set(tenantId, null);
