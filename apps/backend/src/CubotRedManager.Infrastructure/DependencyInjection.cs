@@ -91,6 +91,8 @@ public static class DependencyInjection
         services.AddScoped<ITaskCardService, TaskCardService>();
         services.AddScoped<ITenantUserService, TenantUserService>();
         services.AddScoped<IPublicationService, PublicationService>();
+        services.AddScoped<IPipelineService, PipelineService>();
+        services.AddScoped<ILeadService, LeadService>();
         services.AddScoped<IInboxService, InboxService>();
         services.AddScoped<IMessageTemplateService, MessageTemplateService>();
         services.AddScoped<IDataContainerService, DataContainerService>();
