@@ -36,6 +36,17 @@ public interface IApplicationDbContext
     DbSet<Publication> Publications { get; }
     DbSet<PublicationTarget> PublicationTargets { get; }
     DbSet<PublicationMedia> PublicationMedias { get; }
+    // Pipelines (modulo comercial — PR1 pipelines). Un tenant puede tener varios Pipeline (ej.
+    // "Productos", "Negocios"); cada uno agrupa Stages + Fields; los Lead viven dentro de un
+    // pipeline (via Stage) con sus Notes/Files/Activities/FollowUps.
+    DbSet<Pipeline> Pipelines { get; }
+    DbSet<PipelineStage> PipelineStages { get; }
+    DbSet<PipelineFieldDefinition> PipelineFieldDefinitions { get; }
+    DbSet<Lead> Leads { get; }
+    DbSet<LeadActivity> LeadActivities { get; }
+    DbSet<LeadNote> LeadNotes { get; }
+    DbSet<LeadFile> LeadFiles { get; }
+    DbSet<FollowUpTask> FollowUpTasks { get; }
     DbSet<InboxMessage> InboxMessages { get; }
     DbSet<InboxReply> InboxReplies { get; }
     DbSet<MessageTemplate> MessageTemplates { get; }

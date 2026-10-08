@@ -109,4 +109,17 @@ public class AiAgent : TenantEntity
     public string? PaymentResponseUrlPath { get; set; }
 
     public int SortOrder { get; set; }
+
+    // ===== Integracion con Pipelines (modulo 2.x pipelines) =====
+    /// <summary>Feature flag: cuando el agente emite el marker [[crear_lead_pipeline]] (o un
+    /// stage de cierre lo dispara), crear un Lead en el pipeline configurado abajo. Si esta
+    /// apagado, el marker se ignora. Portado de CUBOT.travels (AiAgent.CreateLeadsInPipeline).</summary>
+    public bool CreateLeadsInPipeline { get; set; }
+
+    /// <summary>Pipeline destino por defecto para los leads que crea este agente. Si el marker del
+    /// LLM trae un override explicito (pipeline:"negocios"), gana el override. Null = no se crean
+    /// leads aunque CreateLeadsInPipeline sea true (se loguea warning). FK soft: no se declara
+    /// navegacion para evitar cascade implicito; si el pipeline se borra, el flag queda huerfano
+    /// y el servicio lo valida al crear el lead.</summary>
+    public Guid? DefaultPipelineId { get; set; }
 }

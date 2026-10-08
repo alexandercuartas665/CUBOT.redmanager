@@ -69,6 +69,14 @@ public class CubotRedManagerDbContext : DbContext, IApplicationDbContext, IDataP
     public DbSet<Publication> Publications => Set<Publication>();
     public DbSet<PublicationTarget> PublicationTargets => Set<PublicationTarget>();
     public DbSet<PublicationMedia> PublicationMedias => Set<PublicationMedia>();
+    public DbSet<Pipeline> Pipelines => Set<Pipeline>();
+    public DbSet<PipelineStage> PipelineStages => Set<PipelineStage>();
+    public DbSet<PipelineFieldDefinition> PipelineFieldDefinitions => Set<PipelineFieldDefinition>();
+    public DbSet<Lead> Leads => Set<Lead>();
+    public DbSet<LeadActivity> LeadActivities => Set<LeadActivity>();
+    public DbSet<LeadNote> LeadNotes => Set<LeadNote>();
+    public DbSet<LeadFile> LeadFiles => Set<LeadFile>();
+    public DbSet<FollowUpTask> FollowUpTasks => Set<FollowUpTask>();
     public DbSet<InboxMessage> InboxMessages => Set<InboxMessage>();
     public DbSet<InboxReply> InboxReplies => Set<InboxReply>();
     public DbSet<MessageTemplate> MessageTemplates => Set<MessageTemplate>();
@@ -266,6 +274,83 @@ public class CubotRedManagerDbContext : DbContext, IApplicationDbContext, IDataP
             b.Property(x => x.MimeType).HasMaxLength(120).IsRequired();
             b.Property(x => x.Content).IsRequired();
             b.HasIndex(x => new { x.PublicationId, x.SortOrder });
+        });
+
+        // Pipelines + Leads + Fields + Notes + Files + Activities + FollowUps.
+        // (ADR: multi-pipeline por tenant — Pipeline agrupa Stages, Lead vive en un Pipeline
+        //  via Stage; PipelineId se desnormaliza en Lead para evitar joins frecuentes.)
+        modelBuilder.Entity<Pipeline>(b =>
+        {
+            b.Property(x => x.Name).HasMaxLength(120).IsRequired();
+            b.HasIndex(x => new { x.TenantId, x.Name }).IsUnique();
+            b.HasMany(x => x.Stages).WithOne(s => s.Pipeline!).HasForeignKey(s => s.PipelineId).OnDelete(DeleteBehavior.Cascade);
+        });
+        modelBuilder.Entity<PipelineStage>(b =>
+        {
+            b.Property(x => x.Name).HasMaxLength(120).IsRequired();
+            b.HasIndex(x => new { x.PipelineId, x.SortOrder });
+        });
+        modelBuilder.Entity<PipelineFieldDefinition>(b =>
+        {
+            b.Property(x => x.FieldKey).HasMaxLength(80).IsRequired();
+            b.Property(x => x.Label).HasMaxLength(200).IsRequired();
+            b.Property(x => x.FieldType).HasConversion<string>().HasMaxLength(40);
+            b.Property(x => x.Options).HasColumnType("text");
+            b.Property(x => x.Description).HasColumnType("text");
+            b.Property(x => x.TotalSourceKeys).HasMaxLength(500);
+            b.Property(x => x.RepeatWithFieldKey).HasMaxLength(80);
+            b.HasOne(x => x.Stage).WithMany().HasForeignKey(x => x.StageId).OnDelete(DeleteBehavior.Cascade);
+            b.HasIndex(x => new { x.StageId, x.FieldKey }).IsUnique();
+            b.HasIndex(x => new { x.StageId, x.SortOrder });
+        });
+        modelBuilder.Entity<Lead>(b =>
+        {
+            b.Property(x => x.ContactName).HasMaxLength(200).IsRequired();
+            b.Property(x => x.ContactPhone).HasMaxLength(40);
+            b.Property(x => x.Topic).HasMaxLength(500);
+            b.Property(x => x.Currency).HasMaxLength(10);
+            b.Property(x => x.Status).HasConversion<string>().HasMaxLength(20);
+            b.Property(x => x.LossReason).HasMaxLength(500);
+            b.Property(x => x.FieldValuesJson).HasColumnType("jsonb");
+            b.Property(x => x.ArchiveReason).HasMaxLength(200);
+            b.Property(x => x.ArchiveNote).HasColumnType("text");
+            b.Property(x => x.ArchivedByName).HasMaxLength(200);
+            // FK a Stage SIN cascade: borrar un stage con leads debe fallar (requiere mover primero).
+            b.HasOne(x => x.Stage).WithMany().HasForeignKey(x => x.StageId).OnDelete(DeleteBehavior.Restrict);
+            b.HasOne(x => x.Pipeline).WithMany().HasForeignKey(x => x.PipelineId).OnDelete(DeleteBehavior.Restrict);
+            b.HasIndex(x => new { x.TenantId, x.PipelineId, x.ArchivedAt });
+            b.HasIndex(x => x.StageId);
+            b.HasIndex(x => x.AssignedToTenantUserId);
+        });
+        modelBuilder.Entity<LeadActivity>(b =>
+        {
+            b.Property(x => x.ActivityType).HasMaxLength(60).IsRequired();
+            b.Property(x => x.Description).HasColumnType("text");
+            b.HasOne(x => x.Lead).WithMany().HasForeignKey(x => x.LeadId).OnDelete(DeleteBehavior.Cascade);
+            b.HasIndex(x => new { x.LeadId, x.CreatedAt });
+        });
+        modelBuilder.Entity<LeadNote>(b =>
+        {
+            b.Property(x => x.Content).HasColumnType("text").IsRequired();
+            b.Property(x => x.Color).HasMaxLength(20).IsRequired();
+            b.HasOne(x => x.Lead).WithMany().HasForeignKey(x => x.LeadId).OnDelete(DeleteBehavior.Cascade);
+            b.HasIndex(x => new { x.LeadId, x.CreatedAt });
+        });
+        modelBuilder.Entity<LeadFile>(b =>
+        {
+            b.Property(x => x.FileName).HasMaxLength(255).IsRequired();
+            b.Property(x => x.ContentType).HasMaxLength(120).IsRequired();
+            b.Property(x => x.Content).IsRequired();
+            b.HasOne(x => x.Lead).WithMany().HasForeignKey(x => x.LeadId).OnDelete(DeleteBehavior.Cascade);
+            b.HasIndex(x => new { x.LeadId, x.CreatedAt });
+        });
+        modelBuilder.Entity<FollowUpTask>(b =>
+        {
+            b.Property(x => x.Title).HasMaxLength(200).IsRequired();
+            b.Property(x => x.Notes).HasColumnType("text");
+            b.Property(x => x.Status).HasConversion<string>().HasMaxLength(20);
+            b.HasOne(x => x.Lead).WithMany().HasForeignKey(x => x.LeadId).OnDelete(DeleteBehavior.Cascade);
+            b.HasIndex(x => new { x.TenantId, x.Status, x.DueAt });
         });
 
         // Bandeja unificada (Modulo 2.6).
