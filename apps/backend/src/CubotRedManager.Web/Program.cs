@@ -383,6 +383,22 @@ app.MapGet("/api/publications/media/{id:guid}", async (
     return Results.File(media.Content, mime, media.FileName);
 }).RequireAuthorization();
 
+// Sirve el binario de un LeadFile (bytea en BD, patron Railway-safe). Tenant-scoped por HasQueryFilter.
+// Uso: <a href="/api/leads/files/{id}" target="_blank"> en el modal detalle del lead.
+app.MapGet("/api/leads/files/{id:guid}", async (
+    Guid id,
+    IApplicationDbContext db,
+    CancellationToken ct) =>
+{
+    var file = await db.LeadFiles.AsNoTracking()
+        .Where(f => f.Id == id)
+        .Select(f => new { f.Content, f.ContentType, f.FileName })
+        .FirstOrDefaultAsync(ct);
+    if (file?.Content is not { Length: > 0 }) { return Results.NotFound(); }
+    var mime = string.IsNullOrWhiteSpace(file.ContentType) ? "application/octet-stream" : file.ContentType;
+    return Results.File(file.Content, mime, file.FileName);
+}).RequireAuthorization();
+
 // ===== REST API autenticada por X-Api-Token (DataContainers) =====
 // Endpoints /api/data-containers/* para uso programatico (scripts, integraciones). Se autentican
 // con header "X-Api-Token: cubot_..." (token opaco generado por el user en /cuenta).

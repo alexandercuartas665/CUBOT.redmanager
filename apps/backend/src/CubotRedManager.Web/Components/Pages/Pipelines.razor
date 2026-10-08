@@ -1,0 +1,1247 @@
+@page "/pipelines"
+@attribute [Authorize(Policy = AppPolicies.TenantMember)]
+@rendermode @(new InteractiveServerRenderMode(prerender: false))
+@using System.Security.Claims
+@using System.Text.Json
+@using CubotRedManager.Application.Tenancy
+@using CubotRedManager.Domain.Enums
+@using CubotRedManager.Web.Authorization
+@inject IPipelineService PipelineSvc
+@inject ILeadService LeadsSvc
+@inject ITenantUserService UsersSvc
+@inject AuthenticationStateProvider AuthProvider
+@inject NavigationManager Nav
+@inject IJSRuntime JS
+
+<PageTitle>Pipelines - CUBOT.redmanager</PageTitle>
+
+<div class="module-head">
+    <div>
+        <div class="module-eyebrow">
+            <div class="module-icon">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="18" height="18" x="3" y="3" rx="2"/><path d="M8 7v7"/><path d="M12 7v4"/><path d="M16 7v9"/></svg>
+            </div>
+            <span>Operacion diaria</span>
+        </div>
+        <h1 class="page-title" style="margin-top:12px;">Pipelines <span>comerciales</span></h1>
+        <p class="page-sub" style="margin-bottom:0;">Embudos Kanban por tipo de venta: Productos, Negocios, o los que crees. Un lead vive siempre en un embudo.</p>
+    </div>
+    <div style="display:flex;gap:8px;">
+        @if (_canManage)
+        {
+            <button class="btn btn-outline-secondary" @onclick="OpenConfig">Configurar embudo</button>
+        }
+        <button class="btn btn-outline-secondary" @onclick="OpenHistoryAsync">Historial</button>
+        <button class="btn btn-primary" @onclick="() => OpenNewLead(null)" disabled="@(_stages.Count == 0 || _currentPipeline is null)">+ Nuevo lead</button>
+    </div>
+</div>
+
+@* ===== Selector de pipeline ===== *@
+@if (!_loading && _pipelines.Count > 0)
+{
+    <div class="pl-pipe-tabs">
+        @foreach (var p in _pipelines)
+        {
+            <button class="pl-pipe-tab @(_currentPipelineId == p.Id ? "on" : "")" @onclick="() => SelectPipeline(p.Id)">
+                <span class="pl-pipe-tab-name">@p.Name</span>
+                <span class="pl-pipe-tab-cnt">@p.LeadCount</span>
+                @if (p.IsSystem) { <span class="pl-pipe-sys" title="Embudo del sistema (no se puede eliminar)">⚙</span> }
+            </button>
+        }
+    </div>
+}
+
+@if (_loading)
+{
+    <p><em>Cargando...</em></p>
+}
+else if (_pipelines.Count == 0)
+{
+    <div class="pl-empty">
+        <p><strong>Aun no hay embudos en esta agencia.</strong></p>
+        <p class="text-muted" style="font-size:13px;">Vamos a crearte los embudos "Productos" y "Negocios" por defecto.</p>
+        <button class="btn btn-primary" @onclick="SeedDefaultsAsync" disabled="@_busy">Crear embudos por defecto</button>
+    </div>
+}
+else if (_stages.Count == 0)
+{
+    <p class="text-muted">Este embudo todavia no tiene etapas. @(_canManage ? "Usa el boton Configurar embudo para agregarlas." : "Pide al administrador que configure etapas.")</p>
+}
+else
+{
+    @* ===== KPIs ===== *@
+    <div class="kpi-grid" style="margin:14px 0 22px;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));max-width:840px;">
+        <div class="kpi-card">
+            <div class="kpi-label">Total leads</div>
+            <div class="kpi-value">@_leads.Count</div>
+            <div class="kpi-hint">@CountOpen() abiertos en el embudo</div>
+        </div>
+        <div class="kpi-card">
+            <div class="kpi-label">Tasa de conversion</div>
+            <div class="kpi-value">@_conversion%</div>
+            <div class="kpi-hint">@CountWon() ganados de @_leads.Count</div>
+        </div>
+        <div class="kpi-card">
+            <div class="kpi-label">Valor del embudo</div>
+            <div class="kpi-value">@PipelineValue()</div>
+            <div class="kpi-hint">Suma de leads abiertos</div>
+        </div>
+    </div>
+
+    @* ===== Toolbar: busqueda + ordenamiento + filtros ===== *@
+    <div class="pl-toolbar">
+        <div class="pl-search">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
+            <input placeholder="Buscar cliente o telefono..." @bind="_search" @bind:event="oninput" />
+        </div>
+        <div class="pl-sort">
+            <span class="pl-sort-lbl">Ordenar:</span>
+            <select @bind="_sortBy">
+                <option value="time">Tiempo en etapa</option>
+                <option value="recent">Mas recientes primero</option>
+                <option value="name">Nombre (A-Z)</option>
+            </select>
+        </div>
+        <div class="pl-filt-anchor">
+            <button class="btn btn-outline-secondary @(FiltersActive ? "pl-filt-on" : "")" @onclick="() => _filtersOpen = !_filtersOpen">
+                Filtros@(FiltersActive ? $" ({ActiveFilterCount})" : "")
+            </button>
+        </div>
+    </div>
+    @if (_filtersOpen)
+    {
+        <div class="pl-filters">
+            <div class="pl-filt-group">
+                <div class="pl-filt-lbl">Asesor</div>
+                <div class="pl-chips">
+                    @foreach (var u in _team)
+                    {
+                        <button class="pl-fchip @(_filterAsesores.Contains(u.Id) ? "on" : "")" @onclick="() => ToggleAsesor(u.Id)">@FirstName(TeamLabel(u))</button>
+                    }
+                    <button class="pl-fchip @(_filterSinAsesor ? "on" : "")" @onclick="() => _filterSinAsesor = !_filterSinAsesor">Sin asesor</button>
+                </div>
+            </div>
+            <div class="pl-filt-group">
+                <div class="pl-filt-lbl">Etapa</div>
+                <div class="pl-chips">
+                    @foreach (var s in _stages)
+                    {
+                        <button class="pl-fchip @(_filterStages.Contains(s.Id) ? "on" : "")" @onclick="() => ToggleStage(s.Id)">@s.Name</button>
+                    }
+                </div>
+            </div>
+            <div style="display:flex;justify-content:flex-end;">
+                <button class="pl-link" @onclick="ClearFilters">Limpiar filtros</button>
+            </div>
+        </div>
+    }
+
+    @* ===== Kanban board ===== *@
+    <div class="pl-board">
+        @foreach (var stage in _stages)
+        {
+            var stageLeads = FilteredLeadsFor(stage.Id);
+            <div class="pl-col @(_dragOverStageId == stage.Id ? "pl-col-dragover" : "")"
+                 @ondragover:preventDefault="true"
+                 @ondragenter="() => _dragOverStageId = stage.Id"
+                 @ondragleave="() => _dragOverStageId = null"
+                 @ondrop="() => OnDropAsync(stage.Id)">
+                <div class="pl-col-head">
+                    <span class="pl-col-name">@stage.Name</span>
+                    <span class="pl-col-cnt">@stageLeads.Count</span>
+                </div>
+                @if (stage.IsClosedWon) { <div class="pl-col-tag pl-col-won">Ganado</div> }
+                else if (stage.IsClosedLost) { <div class="pl-col-tag pl-col-lost">Perdido</div> }
+                <div class="pl-col-body">
+                    @foreach (var lead in stageLeads)
+                    {
+                        var stale = IsStale(lead);
+                        <div class="pl-card @(stale ? "pl-card-stale" : "")" draggable="true"
+                             @ondragstart="() => _dragLeadId = lead.Id"
+                             @ondragend="() => _dragLeadId = null"
+                             @onclick="() => OpenLeadAsync(lead.Id)">
+                            <div class="pl-card-name">@lead.ContactName</div>
+                            @if (!string.IsNullOrWhiteSpace(lead.ContactPhone))
+                            {
+                                <div class="pl-card-phone">@lead.ContactPhone</div>
+                            }
+                            @if (!string.IsNullOrWhiteSpace(lead.Topic))
+                            {
+                                <div class="pl-card-topic">@lead.Topic</div>
+                            }
+                            <div class="pl-card-foot">
+                                @if (lead.EstimatedValue is decimal v)
+                                {
+                                    <span class="pl-card-val">@FormatMoney(v, lead.Currency)</span>
+                                }
+                                <span class="pl-card-time">@TimeInStageLabel(lead)</span>
+                            </div>
+                            @if (lead.AssignedToTenantUserId is Guid uid && _team.FirstOrDefault(u => u.Id == uid) is var teamMember && teamMember is not null)
+                            {
+                                <div class="pl-card-asesor">@FirstName(TeamLabel(teamMember))</div>
+                            }
+                        </div>
+                    }
+                    @if (stageLeads.Count == 0)
+                    {
+                        <div class="pl-col-empty">Sin leads</div>
+                    }
+                </div>
+                <button class="pl-col-add" @onclick="() => OpenNewLead(stage.Id)">+ Nuevo lead aqui</button>
+            </div>
+        }
+    </div>
+}
+
+@* ===== Modal: nuevo lead ===== *@
+@if (_newLeadOpen && _currentPipeline is not null)
+{
+    <div class="modal-overlay">
+        <div class="modal-dialog" style="max-width:560px;">
+            <div class="modal-head">
+                <h3>Nuevo lead · @_currentPipeline.Name</h3>
+                <button class="modal-close" @onclick="() => _newLeadOpen = false">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div class="field"><label class="form-label">Nombre del contacto *</label>
+                    <input class="form-control" @bind="_newLead.ContactName" />
+                </div>
+                <div class="field"><label class="form-label">Telefono</label>
+                    <input class="form-control" @bind="_newLead.ContactPhone" placeholder="573001234567" />
+                </div>
+                <div class="field"><label class="form-label">Tema / producto de interes</label>
+                    <input class="form-control" @bind="_newLead.Topic" />
+                </div>
+                <div style="display:grid;grid-template-columns:1fr 120px;gap:10px;">
+                    <div class="field"><label class="form-label">Valor estimado</label>
+                        <input class="form-control" type="number" step="0.01" @bind="_newLead.EstimatedValue" />
+                    </div>
+                    <div class="field"><label class="form-label">Moneda</label>
+                        <input class="form-control" @bind="_newLead.Currency" placeholder="COP" />
+                    </div>
+                </div>
+                <div class="field"><label class="form-label">Etapa inicial</label>
+                    <select class="form-control" @bind="_newLead.StageId">
+                        @foreach (var s in _stages)
+                        {
+                            <option value="@s.Id">@s.Name</option>
+                        }
+                    </select>
+                </div>
+                @if (!string.IsNullOrEmpty(_newLeadError))
+                {
+                    <div class="text-danger small">@_newLeadError</div>
+                }
+            </div>
+            <div class="modal-foot">
+                <button class="btn btn-outline-secondary" @onclick="() => _newLeadOpen = false">Cancelar</button>
+                <button class="btn btn-primary" @onclick="SaveNewLeadAsync" disabled="@(_busy || string.IsNullOrWhiteSpace(_newLead.ContactName))">Crear</button>
+            </div>
+        </div>
+    </div>
+}
+
+@* ===== Modal: detalle del lead con tabs ===== *@
+@if (_leadOpen && _editLead is not null)
+{
+    <div class="modal-overlay">
+        <div class="modal-dialog" style="max-width:800px;">
+            <div class="modal-head">
+                <h3>@_editLead.ContactName</h3>
+                <div style="display:flex;gap:8px;align-items:center;">
+                    @if (_leadSaved) { <span class="text-muted" style="font-size:11px;">Guardado</span> }
+                    <button class="modal-close" @onclick="CloseLead">&times;</button>
+                </div>
+            </div>
+            <div class="pl-tabs">
+                <button class="pl-tab @(_tab == "datos" ? "on" : "")" @onclick='() => _tab = "datos"'>Datos</button>
+                <button class="pl-tab @(_tab == "notas" ? "on" : "")" @onclick='() => _tab = "notas"'>Notas (@_notes.Count)</button>
+                <button class="pl-tab @(_tab == "archivos" ? "on" : "")" @onclick='() => _tab = "archivos"'>Archivos (@_files.Count)</button>
+                <button class="pl-tab @(_tab == "actividad" ? "on" : "")" @onclick='() => _tab = "actividad"'>Actividad (@_activities.Count)</button>
+            </div>
+            <div class="modal-body">
+                @if (_tab == "datos")
+                {
+                    <div class="field"><label class="form-label">Nombre *</label>
+                        <input class="form-control" @bind="_editLead.ContactName" />
+                    </div>
+                    <div class="field"><label class="form-label">Telefono</label>
+                        <input class="form-control" @bind="_editLead.ContactPhone" />
+                    </div>
+                    <div class="field"><label class="form-label">Tema / producto</label>
+                        <input class="form-control" @bind="_editLead.Topic" />
+                    </div>
+                    <div style="display:grid;grid-template-columns:1fr 120px;gap:10px;">
+                        <div class="field"><label class="form-label">Valor estimado</label>
+                            <input class="form-control" type="number" step="0.01" @bind="_editLead.EstimatedValue" />
+                        </div>
+                        <div class="field"><label class="form-label">Moneda</label>
+                            <input class="form-control" @bind="_editLead.Currency" />
+                        </div>
+                    </div>
+                    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
+                        <div class="field"><label class="form-label">Etapa</label>
+                            <select class="form-control" @bind="_editLead.StageId">
+                                @foreach (var s in _stages)
+                                {
+                                    <option value="@s.Id">@s.Name</option>
+                                }
+                            </select>
+                        </div>
+                        <div class="field"><label class="form-label">Asesor</label>
+                            <select class="form-control" @bind="_editLead.AssignedToTenantUserId">
+                                <option value="">Sin asignar</option>
+                                @foreach (var u in _team)
+                                {
+                                    <option value="@u.Id">@TeamLabel(u)</option>
+                                }
+                            </select>
+                        </div>
+                    </div>
+                    @if (_editStageIsLost)
+                    {
+                        <div class="field"><label class="form-label">Motivo de perdida</label>
+                            <input class="form-control" @bind="_editLead.LossReason" />
+                        </div>
+                    }
+
+                    @* Campos configurables de la etapa actual *@
+                    @if (StageFieldsForEditLead.Count > 0)
+                    {
+                        <hr style="margin:16px 0 10px;" />
+                        <h5 style="font-size:13px;color:var(--muted-foreground);margin:0 0 10px;">Campos de la etapa</h5>
+                        <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
+                            @foreach (var f in StageFieldsForEditLead.OrderBy(x => x.SortOrder))
+                            {
+                                var colSpan = f.Column >= 2 ? "grid-column:1/-1;" : "";
+                                var inputType = f.FieldType switch
+                                {
+                                    PipelineFieldType.Date => "text",
+                                    PipelineFieldType.Number => "text",
+                                    PipelineFieldType.Currency => "text",
+                                    _ => "text"
+                                };
+                                var placeholder = f.FieldType == PipelineFieldType.Date ? "YYYY-MM-DD" : "";
+                                <div class="field" style="@colSpan">
+                                    <label class="form-label">@f.Label</label>
+                                    @if (f.FieldType == PipelineFieldType.TextArea)
+                                    {
+                                        <textarea class="form-control" rows="3" @bind="_fieldValues[f.FieldKey]"></textarea>
+                                    }
+                                    else if (f.FieldType == PipelineFieldType.Select)
+                                    {
+                                        <select class="form-control" @bind="_fieldValues[f.FieldKey]">
+                                            <option value=""></option>
+                                            @foreach (var opt in (f.Options ?? "").Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+                                            {
+                                                <option value="@opt">@opt</option>
+                                            }
+                                        </select>
+                                    }
+                                    else if (f.FieldType == PipelineFieldType.Separator)
+                                    {
+                                        <div class="pl-sep">@f.Label</div>
+                                    }
+                                    else
+                                    {
+                                        <input class="form-control" type="@inputType" placeholder="@placeholder" @bind="_fieldValues[f.FieldKey]" />
+                                    }
+                                    @if (!string.IsNullOrWhiteSpace(f.Description))
+                                    {
+                                        <div class="text-muted" style="font-size:11px;margin-top:4px;">@f.Description</div>
+                                    }
+                                </div>
+                            }
+                        </div>
+                    }
+                }
+                else if (_tab == "notas")
+                {
+                    <div class="field">
+                        <label class="form-label">Nueva nota</label>
+                        <textarea class="form-control" rows="2" @bind="_newNote" placeholder="Observacion de seguimiento..."></textarea>
+                        <div style="display:flex;gap:6px;margin-top:6px;align-items:center;">
+                            <span class="text-muted" style="font-size:11px;">Color:</span>
+                            @foreach (var color in new[] { "yellow", "green", "blue", "pink", "purple", "gray" })
+                            {
+                                <button class="pl-color-dot @(_newNoteColor == color ? "on" : "")"
+                                        style="background:@NoteColorCss(color)"
+                                        @onclick="() => _newNoteColor = color"
+                                        title="@color"></button>
+                            }
+                            <button class="btn btn-sm btn-primary" style="margin-left:auto;" @onclick="AddNoteAsync" disabled="@(_busy || string.IsNullOrWhiteSpace(_newNote))">Agregar</button>
+                        </div>
+                    </div>
+                    <div style="margin-top:12px;">
+                        @foreach (var n in _notes)
+                        {
+                            <div class="pl-note" style="background:@NoteColorCss(n.Color);">
+                                <div class="pl-note-body">@n.Content</div>
+                                <div class="pl-note-foot">
+                                    <span>@(n.ActorName ?? "—") · @n.CreatedAt.LocalDateTime.ToString("dd MMM HH:mm")</span>
+                                    <button class="pl-link" @onclick="() => DeleteNoteAsync(n.Id)">Borrar</button>
+                                </div>
+                            </div>
+                        }
+                        @if (_notes.Count == 0) { <div class="text-muted" style="font-size:12px;">Sin notas todavia.</div> }
+                    </div>
+                }
+                else if (_tab == "archivos")
+                {
+                    <div class="field">
+                        <label class="form-label">Adjuntar archivo</label>
+                        <InputFile OnChange="OnLeadFileSelected" class="form-control" />
+                    </div>
+                    <div style="margin-top:10px;">
+                        @foreach (var f in _files)
+                        {
+                            <div class="pl-file">
+                                <a href="@f.Url" target="_blank">@f.FileName</a>
+                                <span class="text-muted" style="font-size:11px;">@FormatBytes(f.SizeBytes) · @(f.ActorName ?? "—") · @f.CreatedAt.LocalDateTime.ToString("dd MMM HH:mm")</span>
+                                <button class="pl-link" @onclick="() => DeleteFileAsync(f.Id)">Borrar</button>
+                            </div>
+                        }
+                        @if (_files.Count == 0) { <div class="text-muted" style="font-size:12px;">Sin archivos todavia.</div> }
+                    </div>
+                }
+                else if (_tab == "actividad")
+                {
+                    <div class="pl-timeline">
+                        @foreach (var a in _activities)
+                        {
+                            <div class="pl-tl-row">
+                                <div class="pl-tl-dot"></div>
+                                <div style="flex:1;">
+                                    <div class="pl-tl-type">@a.ActivityType</div>
+                                    <div class="pl-tl-desc">@a.Description</div>
+                                    <div class="pl-tl-meta">@(a.ActorName ?? "sistema") · @a.CreatedAt.LocalDateTime.ToString("dd MMM yyyy HH:mm")</div>
+                                </div>
+                            </div>
+                        }
+                        @if (_activities.Count == 0) { <div class="text-muted" style="font-size:12px;">Sin actividad registrada.</div> }
+                    </div>
+                }
+            </div>
+            <div class="modal-foot" style="justify-content:space-between;">
+                <button class="btn btn-outline-danger" @onclick="OpenArchiveFromDetail">Llevar a historial</button>
+                <div style="display:flex;gap:6px;">
+                    <button class="btn btn-outline-secondary" @onclick="CloseLead">Cerrar</button>
+                    <button class="btn btn-primary" @onclick="SaveLeadAsync" disabled="@_busy">Guardar</button>
+                </div>
+            </div>
+        </div>
+    </div>
+}
+
+@* ===== Modal: archivar ===== *@
+@if (_archiveLead is not null)
+{
+    <div class="modal-overlay">
+        <div class="modal-dialog" style="max-width:460px;">
+            <div class="modal-head"><h3>Llevar a historial</h3>
+                <button class="modal-close" @onclick="() => _archiveLead = null">&times;</button>
+            </div>
+            <div class="modal-body">
+                <p style="font-size:13px;">Vas a mover <strong>@_archiveLead.ContactName</strong> al historial. Deja de contar en el embudo pero queda consultable.</p>
+                <div class="field"><label class="form-label">Motivo</label>
+                    <select class="form-control" @bind="_archiveReason">
+                        <option value="">Selecciona...</option>
+                        <option value="Ya compro">Ya compro</option>
+                        <option value="No interesado">No interesado</option>
+                        <option value="Duplicado">Duplicado</option>
+                        <option value="Spam">Spam / contacto erroneo</option>
+                        <option value="Otro">Otro</option>
+                    </select>
+                </div>
+                <div class="field"><label class="form-label">Observacion (opcional)</label>
+                    <textarea class="form-control" rows="2" @bind="_archiveNote"></textarea>
+                </div>
+            </div>
+            <div class="modal-foot">
+                <button class="btn btn-outline-secondary" @onclick="() => _archiveLead = null">Cancelar</button>
+                <button class="btn btn-primary" @onclick="ConfirmArchiveAsync" disabled="@(_busy || string.IsNullOrWhiteSpace(_archiveReason))">Confirmar</button>
+            </div>
+        </div>
+    </div>
+}
+
+@* ===== Modal: historial ===== *@
+@if (_historyOpen)
+{
+    <div class="modal-overlay">
+        <div class="modal-dialog" style="max-width:900px;">
+            <div class="modal-head"><h3>Historial del embudo</h3>
+                <button class="modal-close" @onclick="() => _historyOpen = false">&times;</button>
+            </div>
+            <div class="modal-body" style="max-height:60vh;overflow:auto;">
+                @if (_history.Count == 0)
+                {
+                    <p class="text-muted">No hay leads en el historial.</p>
+                }
+                else
+                {
+                    <table class="data-table">
+                        <thead><tr><th>Contacto</th><th>Tema</th><th>Valor</th><th>Motivo</th><th>Archivado</th><th>Por</th><th></th></tr></thead>
+                        <tbody>
+                            @foreach (var h in _history)
+                            {
+                                <tr>
+                                    <td>
+                                        <div style="font-weight:600;">@h.ContactName</div>
+                                        <div class="text-muted" style="font-size:11px;">@h.ContactPhone</div>
+                                    </td>
+                                    <td>@h.Topic</td>
+                                    <td>@(h.EstimatedValue is decimal v ? FormatMoney(v, h.Currency) : "—")</td>
+                                    <td>
+                                        <div>@h.ArchiveReason</div>
+                                        @if (!string.IsNullOrWhiteSpace(h.ArchiveNote))
+                                        { <div class="text-muted" style="font-size:11px;">@h.ArchiveNote</div> }
+                                    </td>
+                                    <td style="font-size:12px;">@h.ArchivedAt?.LocalDateTime.ToString("dd MMM yyyy HH:mm")</td>
+                                    <td style="font-size:12px;">@h.ArchivedByName</td>
+                                    <td><button class="btn btn-sm btn-outline-secondary" @onclick="() => RestoreAsync(h.Id)">Restaurar</button></td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                }
+            </div>
+            <div class="modal-foot" style="justify-content:space-between;">
+                @if (_canPurge && _history.Count > 0)
+                {
+                    <button class="btn btn-outline-danger" @onclick="PurgeHistoryAsync" disabled="@_busy">Vaciar historial (destructivo)</button>
+                }
+                else { <span></span> }
+                <button class="btn btn-outline-secondary" @onclick="() => _historyOpen = false">Cerrar</button>
+            </div>
+        </div>
+    </div>
+}
+
+@* ===== Modal: configurar embudo (pipelines + stages + fields) ===== *@
+@if (_configOpen)
+{
+    <div class="modal-overlay">
+        <div class="modal-dialog" style="max-width:900px;">
+            <div class="modal-head"><h3>Configurar embudos</h3>
+                <button class="modal-close" @onclick="() => _configOpen = false">&times;</button>
+            </div>
+            <div class="modal-body" style="max-height:70vh;overflow:auto;">
+                @* === Pipelines === *@
+                <h4 style="margin-top:0;">Embudos</h4>
+                <div style="display:flex;gap:8px;margin-bottom:12px;">
+                    <input class="form-control" placeholder="Nombre del nuevo embudo..." @bind="_newPipelineName" style="flex:1;" />
+                    <button class="btn btn-primary" @onclick="CreatePipelineAsync" disabled="@(_busy || string.IsNullOrWhiteSpace(_newPipelineName))">+ Agregar</button>
+                </div>
+                <div class="pl-cfg-list">
+                    @foreach (var p in _pipelines)
+                    {
+                        <div class="pl-cfg-item">
+                            <input class="form-control pl-cfg-name" @bind="p.NameEdit" />
+                            @if (p.IsSystem) { <span class="text-muted" style="font-size:11px;">(sistema)</span> }
+                            <button class="btn btn-sm btn-outline-secondary" @onclick="() => RenamePipelineAsync(p)">Guardar</button>
+                            @if (!p.IsSystem)
+                            {
+                                <button class="btn btn-sm btn-outline-danger" @onclick="() => DeletePipelineAsync(p.Id)" title="Solo si no tiene leads">Borrar</button>
+                            }
+                        </div>
+                    }
+                </div>
+
+                @* === Stages del pipeline actual === *@
+                <hr style="margin:16px 0;" />
+                <h4>Etapas de <em>@_currentPipeline?.Name</em></h4>
+                <div style="display:grid;grid-template-columns:1fr 100px 100px 100px;gap:8px;align-items:center;margin-bottom:12px;">
+                    <input class="form-control" placeholder="Nombre de etapa..." @bind="_newStageName" />
+                    <label style="display:flex;gap:4px;font-size:12px;"><input type="checkbox" @bind="_newStageWon" /> Ganado</label>
+                    <label style="display:flex;gap:4px;font-size:12px;"><input type="checkbox" @bind="_newStageLost" /> Perdido</label>
+                    <button class="btn btn-primary" @onclick="CreateStageAsync" disabled="@(_busy || string.IsNullOrWhiteSpace(_newStageName) || _currentPipeline is null)">+ Agregar</button>
+                </div>
+                <div class="pl-cfg-list">
+                    @foreach (var s in _stages)
+                    {
+                        <div class="pl-cfg-item" style="flex-wrap:wrap;">
+                            <input class="form-control pl-cfg-name" @bind="s.NameEdit" />
+                            <label style="display:flex;gap:4px;font-size:12px;"><input type="checkbox" @bind="s.IsClosedWon" /> Ganado</label>
+                            <label style="display:flex;gap:4px;font-size:12px;"><input type="checkbox" @bind="s.IsClosedLost" /> Perdido</label>
+                            <button class="btn btn-sm btn-outline-secondary" @onclick="() => UpdateStageAsync(s)">Guardar</button>
+                            <button class="btn btn-sm btn-outline-danger" @onclick="() => DeleteStageAsync(s.Id)" title="Solo si no tiene leads">Borrar</button>
+                            @{
+                                var stageFields = _fields.Where(f => f.StageId == s.Id).OrderBy(f => f.SortOrder).ToList();
+                            }
+                            <div style="width:100%;margin-top:6px;margin-left:12px;padding-left:12px;border-left:2px solid var(--border);">
+                                <div style="font-size:11px;color:var(--muted-foreground);margin-bottom:6px;">Campos (@stageFields.Count)</div>
+                                @foreach (var f in stageFields)
+                                {
+                                    <div style="display:grid;grid-template-columns:1fr 120px 80px auto;gap:6px;margin-bottom:4px;align-items:center;">
+                                        <input class="form-control" style="font-size:12px;" @bind="f.LabelEdit" />
+                                        <select class="form-control" style="font-size:11px;" @bind="f.FieldType">
+                                            @foreach (var ft in Enum.GetValues<PipelineFieldType>())
+                                            { <option value="@ft">@ft</option> }
+                                        </select>
+                                        <select class="form-control" style="font-size:11px;" @bind="f.Column">
+                                            <option value="1">Col 1</option>
+                                            <option value="2">Ancha</option>
+                                        </select>
+                                        <div style="display:flex;gap:4px;">
+                                            <button class="btn btn-sm btn-outline-secondary" @onclick="() => UpdateFieldAsync(f)">💾</button>
+                                            <button class="btn btn-sm btn-outline-danger" @onclick="() => DeleteFieldAsync(f.Id)">🗑</button>
+                                        </div>
+                                    </div>
+                                    @if (f.FieldType == PipelineFieldType.Select)
+                                    {
+                                        <input class="form-control" style="font-size:11px;margin-bottom:6px;margin-left:0;" @bind="f.Options" placeholder="Opciones (una por linea, usa \n)" />
+                                    }
+                                }
+                                <div style="display:grid;grid-template-columns:1fr 100px auto;gap:6px;margin-top:6px;">
+                                    <input class="form-control" style="font-size:11px;" placeholder="Nuevo campo (etiqueta)..." @bind="_newFieldLabels[s.Id]" />
+                                    <select class="form-control" style="font-size:11px;" @bind="_newFieldTypes[s.Id]">
+                                        @foreach (var ft in Enum.GetValues<PipelineFieldType>())
+                                        { <option value="@ft">@ft</option> }
+                                    </select>
+                                    <button class="btn btn-sm btn-primary" @onclick="() => CreateFieldAsync(s.Id)" disabled="@_busy">+ Campo</button>
+                                </div>
+                            </div>
+                        </div>
+                    }
+                </div>
+            </div>
+            <div class="modal-foot">
+                <button class="btn btn-outline-secondary" @onclick="() => _configOpen = false">Cerrar</button>
+            </div>
+        </div>
+    </div>
+}
+
+<style>
+    .pl-pipe-tabs { display:flex; gap:4px; margin:8px 0 16px; border-bottom:1px solid var(--border); flex-wrap:wrap; }
+    .pl-pipe-tab { padding:8px 14px; background:transparent; border:none; border-bottom:3px solid transparent; cursor:pointer; display:flex; align-items:center; gap:6px; font-size:13px; color:var(--muted-foreground); }
+    .pl-pipe-tab:hover { color:var(--foreground); }
+    .pl-pipe-tab.on { color:var(--primary); border-bottom-color:var(--primary); font-weight:600; }
+    .pl-pipe-tab-cnt { background:var(--muted); padding:1px 7px; border-radius:999px; font-size:11px; }
+    .pl-pipe-sys { font-size:10px; opacity:0.6; }
+    .pl-empty { padding:40px 20px; text-align:center; background:var(--muted); border-radius:10px; margin:20px 0; }
+
+    .pl-toolbar { display:flex; gap:8px; margin-bottom:12px; align-items:center; flex-wrap:wrap; }
+    .pl-search { position:relative; display:flex; align-items:center; flex:1; max-width:340px; background:var(--card); border:1px solid var(--border); border-radius:8px; padding:0 10px; }
+    .pl-search svg { width:14px; height:14px; opacity:0.5; }
+    .pl-search input { border:none; outline:none; background:transparent; padding:8px 6px; font-size:13px; flex:1; }
+    .pl-sort { display:flex; align-items:center; gap:6px; font-size:12px; }
+    .pl-sort select { padding:6px 10px; border:1px solid var(--border); border-radius:6px; background:var(--card); font-size:12px; }
+    .pl-filt-anchor { position:relative; }
+    .pl-filt-on { background:var(--primary-soft) !important; color:var(--primary) !important; }
+    .pl-filters { background:var(--card); border:1px solid var(--border); border-radius:8px; padding:14px; margin-bottom:12px; }
+    .pl-filt-group { margin-bottom:10px; }
+    .pl-filt-lbl { font-size:11px; color:var(--muted-foreground); margin-bottom:4px; }
+    .pl-chips { display:flex; gap:6px; flex-wrap:wrap; }
+    .pl-fchip { padding:4px 10px; font-size:12px; background:var(--muted); border:1px solid var(--border); border-radius:999px; cursor:pointer; }
+    .pl-fchip.on { background:var(--primary-soft); color:var(--primary); border-color:var(--primary); }
+    .pl-link { background:none; border:none; color:var(--primary); cursor:pointer; font-size:12px; }
+
+    .pl-board { display:flex; gap:12px; overflow-x:auto; padding-bottom:16px; }
+    .pl-col { min-width:260px; max-width:280px; background:#f9fafb; border:1px solid var(--border); border-radius:10px; padding:10px; display:flex; flex-direction:column; }
+    .pl-col-dragover { background:var(--primary-soft); border-color:var(--primary); }
+    .pl-col-head { display:flex; justify-content:space-between; align-items:center; margin-bottom:6px; }
+    .pl-col-name { font-weight:700; font-size:13px; }
+    .pl-col-cnt { background:var(--muted); padding:1px 8px; border-radius:999px; font-size:11px; }
+    .pl-col-tag { font-size:10px; font-weight:700; padding:2px 8px; border-radius:999px; width:fit-content; margin-bottom:6px; }
+    .pl-col-won { background:oklch(0.62 0.16 155 / 0.15); color:var(--success); }
+    .pl-col-lost { background:oklch(0.6 0.22 22 / 0.12); color:var(--destructive); }
+    .pl-col-body { flex:1; display:flex; flex-direction:column; gap:6px; min-height:40px; }
+    .pl-col-empty { font-size:11px; color:var(--muted-foreground); text-align:center; padding:12px; font-style:italic; }
+    .pl-col-add { margin-top:8px; padding:6px; font-size:11px; background:transparent; border:1px dashed var(--border); border-radius:6px; cursor:pointer; color:var(--muted-foreground); }
+    .pl-col-add:hover { background:var(--muted); color:var(--foreground); }
+
+    .pl-card { background:var(--card); border:1px solid var(--border); border-radius:8px; padding:10px; cursor:grab; }
+    .pl-card:active { cursor:grabbing; }
+    .pl-card:hover { border-color:var(--primary); }
+    .pl-card-stale { border-left:3px solid var(--destructive); }
+    .pl-card-name { font-weight:600; font-size:13px; }
+    .pl-card-phone { font-size:11px; color:var(--muted-foreground); }
+    .pl-card-topic { font-size:11px; margin-top:4px; color:var(--foreground); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+    .pl-card-foot { display:flex; justify-content:space-between; margin-top:6px; font-size:11px; color:var(--muted-foreground); }
+    .pl-card-val { font-weight:600; color:var(--primary); }
+    .pl-card-asesor { font-size:10px; margin-top:4px; padding:2px 6px; background:var(--muted); border-radius:999px; width:fit-content; }
+
+    .pl-tabs { display:flex; gap:2px; border-bottom:1px solid var(--border); padding:0 20px; }
+    .pl-tab { padding:10px 14px; background:transparent; border:none; border-bottom:2px solid transparent; cursor:pointer; font-size:13px; color:var(--muted-foreground); }
+    .pl-tab.on { color:var(--primary); border-bottom-color:var(--primary); font-weight:600; }
+    .pl-sep { border-top:1px solid var(--border); margin:12px 0 6px; padding-top:8px; font-size:11px; font-weight:600; color:var(--muted-foreground); }
+
+    .pl-color-dot { width:18px; height:18px; border-radius:50%; border:2px solid transparent; cursor:pointer; }
+    .pl-color-dot.on { border-color:#111; }
+    .pl-note { padding:10px; border-radius:8px; margin-bottom:8px; }
+    .pl-note-body { font-size:13px; white-space:pre-wrap; }
+    .pl-note-foot { display:flex; justify-content:space-between; margin-top:6px; font-size:11px; color:#555; }
+
+    .pl-file { display:flex; justify-content:space-between; align-items:center; padding:8px; background:var(--muted); border-radius:6px; margin-bottom:4px; font-size:12px; gap:10px; }
+
+    .pl-timeline { display:flex; flex-direction:column; gap:10px; }
+    .pl-tl-row { display:flex; gap:10px; }
+    .pl-tl-dot { width:8px; height:8px; border-radius:50%; background:var(--primary); margin-top:6px; flex-shrink:0; }
+    .pl-tl-type { font-size:11px; color:var(--primary); font-weight:600; text-transform:uppercase; }
+    .pl-tl-desc { font-size:13px; }
+    .pl-tl-meta { font-size:11px; color:var(--muted-foreground); margin-top:2px; }
+
+    .pl-cfg-list { display:flex; flex-direction:column; gap:8px; }
+    .pl-cfg-item { display:flex; gap:8px; align-items:center; padding:10px; background:var(--muted); border-radius:6px; }
+    .pl-cfg-name { flex:1; min-width:0; }
+</style>
+
+@code {
+    private List<EditablePipeline> _pipelines = new();
+    private Guid? _currentPipelineId;
+    private EditablePipeline? _currentPipeline;
+    private List<EditableStage> _stages = new();
+    private List<EditableField> _fields = new();
+    private List<LeadDto> _leads = new();
+    private List<TenantUserDto> _team = new();
+    private List<LeadNoteDto> _notes = new();
+    private List<LeadFileDto> _files = new();
+    private List<LeadActivityDto> _activities = new();
+    private List<ArchivedLeadDto> _history = new();
+
+    private bool _loading = true, _busy, _canManage, _canPurge, _leadSaved;
+    private bool _newLeadOpen, _leadOpen, _historyOpen, _configOpen, _filtersOpen;
+    private Guid _actor;
+    private int _conversion;
+    private string _search = "", _sortBy = "time", _tab = "datos";
+    private string _newNote = "", _newNoteColor = "yellow";
+    private string _newPipelineName = "", _newStageName = "";
+    private bool _newStageWon, _newStageLost;
+    private Guid? _dragLeadId, _dragOverStageId;
+    private readonly HashSet<Guid> _filterAsesores = new();
+    private readonly HashSet<Guid> _filterStages = new();
+    private bool _filterSinAsesor;
+
+    private readonly Dictionary<Guid, string> _newFieldLabels = new();
+    private readonly Dictionary<Guid, PipelineFieldType> _newFieldTypes = new();
+
+    private NewLeadForm _newLead = new();
+    private EditLeadForm? _editLead;
+    private LeadDto? _archiveLead;
+    private string _archiveReason = "", _archiveNote = "";
+    private string? _newLeadError;
+    private readonly Dictionary<string, string?> _fieldValues = new();
+
+    protected override async Task OnInitializedAsync()
+    {
+        var st = await AuthProvider.GetAuthenticationStateAsync();
+        Guid.TryParse(st.User.FindFirst(ClaimTypes.NameIdentifier)?.Value, out _actor);
+        var role = st.User.FindFirst("tenant_role")?.Value;
+        _canManage = role is "Owner" or "Admin";
+        _canPurge = role is "Owner" or "Admin";
+        await LoadAllAsync();
+    }
+
+    private async Task LoadAllAsync()
+    {
+        _loading = true;
+        var raw = await PipelineSvc.ListPipelinesAsync();
+        _pipelines = raw.Select(p => new EditablePipeline(p.Id, p.Name, p.SortOrder, p.IsSystem, p.StageCount, p.LeadCount)).ToList();
+        if (_pipelines.Count > 0)
+        {
+            _currentPipelineId ??= _pipelines[0].Id;
+            await SelectPipelineInternalAsync(_currentPipelineId!.Value);
+        }
+        _team = (await UsersSvc.ListAsync()).ToList();
+        _loading = false;
+    }
+
+    private async Task SeedDefaultsAsync()
+    {
+        _busy = true;
+        await PipelineSvc.EnsureDefaultsAsync(_actor);
+        _busy = false;
+        await LoadAllAsync();
+    }
+
+    private async Task SelectPipeline(Guid pipelineId)
+    {
+        _currentPipelineId = pipelineId;
+        await SelectPipelineInternalAsync(pipelineId);
+    }
+
+    private async Task SelectPipelineInternalAsync(Guid pipelineId)
+    {
+        _currentPipeline = _pipelines.FirstOrDefault(p => p.Id == pipelineId);
+        _stages = (await PipelineSvc.ListStagesAsync(pipelineId)).Select(s => new EditableStage(s.Id, s.PipelineId, s.Name, s.SortOrder, s.IsClosedWon, s.IsClosedLost)).ToList();
+        _fields = (await PipelineSvc.ListFieldsAsync(pipelineId)).Select(f => new EditableField(f)).ToList();
+        _leads = (await LeadsSvc.ListAsync(pipelineId)).ToList();
+        RecalcKpis();
+    }
+
+    private void RecalcKpis()
+    {
+        var closedWon = _leads.Count(l => l.Status == LeadStatus.Won);
+        var closedLost = _leads.Count(l => l.Status == LeadStatus.Lost);
+        var total = closedWon + closedLost;
+        _conversion = total == 0 ? 0 : (int)Math.Round(100.0 * closedWon / total);
+    }
+
+    // ===== Filtros =====
+
+    private bool FiltersActive => _filterAsesores.Count > 0 || _filterStages.Count > 0 || _filterSinAsesor;
+    private int ActiveFilterCount => _filterAsesores.Count + _filterStages.Count + (_filterSinAsesor ? 1 : 0);
+
+    private void ToggleAsesor(Guid id) { if (!_filterAsesores.Add(id)) _filterAsesores.Remove(id); }
+    private void ToggleStage(Guid id) { if (!_filterStages.Add(id)) _filterStages.Remove(id); }
+    private void ClearFilters() { _filterAsesores.Clear(); _filterStages.Clear(); _filterSinAsesor = false; _search = ""; }
+
+    private List<LeadDto> FilteredLeadsFor(Guid stageId)
+    {
+        var q = _leads.Where(l => l.StageId == stageId);
+        if (_filterStages.Count > 0 && !_filterStages.Contains(stageId)) { return new(); }
+        if (_filterAsesores.Count > 0) { q = q.Where(l => l.AssignedToTenantUserId is Guid aid && _filterAsesores.Contains(aid)); }
+        if (_filterSinAsesor) { q = q.Where(l => l.AssignedToTenantUserId is null); }
+        if (!string.IsNullOrWhiteSpace(_search))
+        {
+            var s = _search.Trim().ToLowerInvariant();
+            q = q.Where(l => l.ContactName.ToLowerInvariant().Contains(s) || (l.ContactPhone ?? "").ToLowerInvariant().Contains(s));
+        }
+        q = _sortBy switch
+        {
+            "recent" => q.OrderByDescending(l => l.CreatedAt),
+            "name" => q.OrderBy(l => l.ContactName),
+            _ => q.OrderByDescending(l => l.StageChangedAt)
+        };
+        return q.ToList();
+    }
+
+    // ===== Kanban drag-drop =====
+
+    private async Task OnDropAsync(Guid stageId)
+    {
+        _dragOverStageId = null;
+        if (_dragLeadId is not Guid lid) { return; }
+        var lead = _leads.FirstOrDefault(l => l.Id == lid);
+        if (lead is null || lead.StageId == stageId) { _dragLeadId = null; return; }
+
+        _busy = true;
+        var updated = await LeadsSvc.MoveAsync(lid, new MoveLeadRequest(stageId), _actor);
+        _busy = false;
+        _dragLeadId = null;
+        if (updated is not null) { await SelectPipelineInternalAsync(_currentPipelineId!.Value); }
+    }
+
+    // ===== KPIs helpers =====
+
+    private int CountOpen() => _leads.Count(l => l.Status == LeadStatus.Open);
+    private int CountWon() => _leads.Count(l => l.Status == LeadStatus.Won);
+    private string PipelineValue()
+    {
+        var openWithValue = _leads.Where(l => l.Status == LeadStatus.Open && l.EstimatedValue.HasValue).ToList();
+        if (openWithValue.Count == 0) { return "—"; }
+        var byCur = openWithValue.GroupBy(l => l.Currency ?? "COP").FirstOrDefault();
+        if (byCur is null) { return "—"; }
+        var total = byCur.Sum(l => l.EstimatedValue ?? 0);
+        return FormatMoney(total, byCur.Key);
+    }
+
+    // ===== Nuevo lead =====
+
+    private void OpenNewLead(Guid? stageId)
+    {
+        _newLead = new NewLeadForm { StageId = stageId ?? _stages.FirstOrDefault()?.Id ?? Guid.Empty };
+        _newLeadError = null;
+        _newLeadOpen = true;
+    }
+
+    private async Task SaveNewLeadAsync()
+    {
+        if (_currentPipelineId is null) { return; }
+        _busy = true;
+        var req = new CreateLeadRequest(
+            _currentPipelineId.Value,
+            _newLead.ContactName.Trim(),
+            _newLead.ContactPhone?.Trim(),
+            _newLead.Topic?.Trim(),
+            _newLead.EstimatedValue,
+            _newLead.Currency?.Trim(),
+            _newLead.StageId == Guid.Empty ? null : _newLead.StageId);
+        var created = await LeadsSvc.CreateAsync(req, _actor);
+        _busy = false;
+        if (created is null) { _newLeadError = "No se pudo crear (revisa pipeline/stage)."; return; }
+        _newLeadOpen = false;
+        await SelectPipelineInternalAsync(_currentPipelineId.Value);
+    }
+
+    // ===== Detalle lead =====
+
+    private async Task OpenLeadAsync(Guid leadId)
+    {
+        var detail = await LeadsSvc.GetAsync(leadId);
+        if (detail is null) { return; }
+        _editLead = EditLeadForm.From(detail.Lead);
+        _fieldValues.Clear();
+        foreach (var kv in detail.Lead.FieldValues) { _fieldValues[kv.Key] = kv.Value; }
+        // Pre-cargar keys de los fields de la etapa actual (para que @bind no se queje por key faltante).
+        foreach (var f in FieldsForStage(_editLead.StageId))
+        {
+            _fieldValues.TryAdd(f.FieldKey, null);
+        }
+        _activities = detail.Activities.ToList();
+        _notes = (await LeadsSvc.ListNotesAsync(leadId)).ToList();
+        _files = (await LeadsSvc.ListFilesAsync(leadId)).ToList();
+        _leadSaved = false;
+        _tab = "datos";
+        _leadOpen = true;
+    }
+
+    private void CloseLead() { _leadOpen = false; _editLead = null; }
+
+    private bool _editStageIsLost => _editLead is not null && _stages.FirstOrDefault(s => s.Id == _editLead.StageId)?.IsClosedLost == true;
+
+    private List<PipelineFieldDto> StageFieldsForEditLead => _editLead is null ? new() : FieldsForStage(_editLead.StageId);
+
+    private void OpenArchiveFromDetail()
+    {
+        if (_editLead is null) { return; }
+        _archiveLead = _leads.FirstOrDefault(l => l.Id == _editLead.Id);
+        _archiveReason = string.Empty;
+        _archiveNote = string.Empty;
+    }
+
+    private async Task SaveLeadAsync()
+    {
+        if (_editLead is null) { return; }
+        _busy = true;
+        // Update datos basicos + field values
+        var updated = await LeadsSvc.UpdateAsync(_editLead.Id, new UpdateLeadRequest(
+            _editLead.ContactName.Trim(),
+            _editLead.ContactPhone?.Trim(),
+            _editLead.Topic?.Trim(),
+            _editLead.EstimatedValue,
+            _editLead.Currency?.Trim(),
+            new Dictionary<string, string?>(_fieldValues)), _actor);
+
+        // Si cambio de stage, hacer el move (con lossReason si aplica).
+        var original = _leads.FirstOrDefault(l => l.Id == _editLead.Id);
+        if (updated is not null && original is not null && original.StageId != _editLead.StageId)
+        {
+            await LeadsSvc.MoveAsync(_editLead.Id, new MoveLeadRequest(_editLead.StageId, _editLead.LossReason), _actor);
+        }
+
+        // Si cambio asignacion
+        if (updated is not null && original?.AssignedToTenantUserId != _editLead.AssignedToTenantUserId)
+        {
+            await LeadsSvc.AssignAsync(_editLead.Id, _editLead.AssignedToTenantUserId, _actor);
+        }
+        _busy = false;
+        _leadSaved = true;
+        await SelectPipelineInternalAsync(_currentPipelineId!.Value);
+    }
+
+    private async Task AddNoteAsync()
+    {
+        if (_editLead is null || string.IsNullOrWhiteSpace(_newNote)) { return; }
+        _busy = true;
+        var n = await LeadsSvc.AddNoteAsync(_editLead.Id, _newNote, _newNoteColor, _actor);
+        _busy = false;
+        if (n is not null) { _notes.Insert(0, n); }
+        _newNote = "";
+    }
+
+    private async Task DeleteNoteAsync(Guid noteId)
+    {
+        if (await LeadsSvc.DeleteNoteAsync(noteId))
+        {
+            _notes = _notes.Where(n => n.Id != noteId).ToList();
+        }
+    }
+
+    private async Task OnLeadFileSelected(InputFileChangeEventArgs e)
+    {
+        if (_editLead is null) { return; }
+        var file = e.File;
+        if (file.Size > 20L * 1024 * 1024) { return; } // 20MB cap defensivo
+        _busy = true;
+        using var ms = new MemoryStream();
+        await using var stream = file.OpenReadStream(20L * 1024 * 1024);
+        await stream.CopyToAsync(ms);
+        var saved = await LeadsSvc.AddFileAsync(_editLead.Id, file.Name, ms.ToArray(), file.ContentType, _actor);
+        _busy = false;
+        if (saved is not null) { _files.Insert(0, saved); }
+    }
+
+    private async Task DeleteFileAsync(Guid fileId)
+    {
+        if (await LeadsSvc.DeleteFileAsync(fileId))
+        {
+            _files = _files.Where(f => f.Id != fileId).ToList();
+        }
+    }
+
+    // ===== Archivar / historial =====
+
+    private async Task ConfirmArchiveAsync()
+    {
+        if (_archiveLead is null) { return; }
+        _busy = true;
+        await LeadsSvc.ArchiveAsync(_archiveLead.Id, _archiveReason, _archiveNote, _actor);
+        _busy = false;
+        _archiveLead = null;
+        _leadOpen = false; _editLead = null;
+        await SelectPipelineInternalAsync(_currentPipelineId!.Value);
+    }
+
+    private async Task OpenHistoryAsync()
+    {
+        _history = (await LeadsSvc.ListArchivedAsync(_currentPipelineId)).ToList();
+        _historyOpen = true;
+    }
+
+    private async Task RestoreAsync(Guid leadId)
+    {
+        _busy = true;
+        await LeadsSvc.UnarchiveAsync(leadId, _actor);
+        _busy = false;
+        _history = (await LeadsSvc.ListArchivedAsync(_currentPipelineId)).ToList();
+        await SelectPipelineInternalAsync(_currentPipelineId!.Value);
+    }
+
+    private async Task PurgeHistoryAsync()
+    {
+        var ok = await JS.InvokeAsync<bool>("confirm", "ATENCION: esto borra permanentemente todos los leads del historial. ¿Continuar?");
+        if (!ok) { return; }
+        _busy = true;
+        await LeadsSvc.PurgeArchivedHistoryAsync();
+        _busy = false;
+        _history = (await LeadsSvc.ListArchivedAsync(_currentPipelineId)).ToList();
+    }
+
+    // ===== Configurar embudos =====
+
+    private void OpenConfig()
+    {
+        foreach (var p in _pipelines) { p.NameEdit = p.Name; }
+        foreach (var s in _stages) { s.NameEdit = s.Name; }
+        foreach (var f in _fields) { f.LabelEdit = f.Label; }
+        _configOpen = true;
+    }
+
+    private async Task CreatePipelineAsync()
+    {
+        _busy = true;
+        var created = await PipelineSvc.CreatePipelineAsync(new CreatePipelineRequest(_newPipelineName.Trim()), _actor);
+        _busy = false;
+        _newPipelineName = "";
+        if (created is not null) { await LoadAllAsync(); }
+    }
+
+    private async Task RenamePipelineAsync(EditablePipeline p)
+    {
+        if (string.IsNullOrWhiteSpace(p.NameEdit) || p.NameEdit == p.Name) { return; }
+        _busy = true;
+        await PipelineSvc.UpdatePipelineAsync(p.Id, new UpdatePipelineRequest(p.NameEdit), _actor);
+        _busy = false;
+        await LoadAllAsync();
+    }
+
+    private async Task DeletePipelineAsync(Guid pipelineId)
+    {
+        var ok = await JS.InvokeAsync<bool>("confirm", "¿Eliminar este embudo? Solo se puede si no tiene leads.");
+        if (!ok) { return; }
+        _busy = true;
+        await PipelineSvc.DeletePipelineAsync(pipelineId, _actor);
+        _busy = false;
+        if (_currentPipelineId == pipelineId) { _currentPipelineId = null; }
+        await LoadAllAsync();
+    }
+
+    private async Task CreateStageAsync()
+    {
+        if (_currentPipeline is null) { return; }
+        _busy = true;
+        await PipelineSvc.CreateStageAsync(new CreatePipelineStageRequest(
+            _currentPipeline.Id, _newStageName.Trim(), 0, _newStageWon, _newStageLost), _actor);
+        _busy = false;
+        _newStageName = ""; _newStageWon = false; _newStageLost = false;
+        await SelectPipelineInternalAsync(_currentPipeline.Id);
+        OpenConfig(); // recarga labels editables
+    }
+
+    private async Task UpdateStageAsync(EditableStage s)
+    {
+        _busy = true;
+        await PipelineSvc.UpdateStageAsync(s.Id, new UpdatePipelineStageRequest(s.NameEdit, s.IsClosedWon, s.IsClosedLost), _actor);
+        _busy = false;
+        await SelectPipelineInternalAsync(_currentPipeline!.Id);
+        OpenConfig();
+    }
+
+    private async Task DeleteStageAsync(Guid stageId)
+    {
+        var ok = await JS.InvokeAsync<bool>("confirm", "¿Eliminar esta etapa? Solo si no tiene leads.");
+        if (!ok) { return; }
+        _busy = true;
+        await PipelineSvc.DeleteStageAsync(stageId, _actor);
+        _busy = false;
+        await SelectPipelineInternalAsync(_currentPipeline!.Id);
+        OpenConfig();
+    }
+
+    private async Task CreateFieldAsync(Guid stageId)
+    {
+        _newFieldLabels.TryGetValue(stageId, out var label);
+        _newFieldTypes.TryGetValue(stageId, out var type);
+        if (string.IsNullOrWhiteSpace(label)) { return; }
+        _busy = true;
+        await PipelineSvc.CreateFieldAsync(new CreatePipelineFieldRequest(stageId, label.Trim(), type), _actor);
+        _busy = false;
+        _newFieldLabels[stageId] = "";
+        await SelectPipelineInternalAsync(_currentPipeline!.Id);
+        OpenConfig();
+    }
+
+    private async Task UpdateFieldAsync(EditableField f)
+    {
+        _busy = true;
+        await PipelineSvc.UpdateFieldAsync(f.Id, new UpdatePipelineFieldRequest(
+            f.LabelEdit, f.FieldType, f.Column, f.Options, f.Description,
+            f.AllowMultiple, f.RepeatWithFieldKey, f.MultiWithDetail, f.TotalSourceKeys, f.ShowInFilter), _actor);
+        _busy = false;
+        await SelectPipelineInternalAsync(_currentPipeline!.Id);
+        OpenConfig();
+    }
+
+    private async Task DeleteFieldAsync(Guid fieldId)
+    {
+        _busy = true;
+        await PipelineSvc.DeleteFieldAsync(fieldId, _actor);
+        _busy = false;
+        await SelectPipelineInternalAsync(_currentPipeline!.Id);
+        OpenConfig();
+    }
+
+    // ===== Helpers =====
+
+    private List<PipelineFieldDto> FieldsForStage(Guid stageId) =>
+        _fields.Where(f => f.StageId == stageId).Select(f => f.ToDto()).ToList();
+
+    private bool IsStale(LeadDto l) => l.Status == LeadStatus.Open && (DateTimeOffset.UtcNow - l.StageChangedAt).TotalDays >= 2;
+
+    private string TimeInStageLabel(LeadDto l)
+    {
+        var span = DateTimeOffset.UtcNow - l.StageChangedAt;
+        if (span.TotalDays >= 1) { return $"{(int)span.TotalDays}d"; }
+        if (span.TotalHours >= 1) { return $"{(int)span.TotalHours}h"; }
+        return $"{(int)span.TotalMinutes}m";
+    }
+
+    private static string FormatMoney(decimal v, string? currency) => $"{v:N0} {currency ?? "COP"}";
+
+    private static string FormatBytes(long b)
+    {
+        if (b < 1024) { return b + " B"; }
+        if (b < 1024 * 1024) { return (b / 1024.0).ToString("0.#") + " KB"; }
+        return (b / 1024.0 / 1024.0).ToString("0.#") + " MB";
+    }
+
+    private string TeamLabel(TenantUserDto u) => string.IsNullOrWhiteSpace(u.Email) ? "sin email" : u.Email;
+
+    private string FirstName(string full)
+    {
+        if (string.IsNullOrWhiteSpace(full)) { return "?"; }
+        var idx = full.IndexOf(' ');
+        return idx > 0 ? full[..idx] : full;
+    }
+
+    private static string NoteColorCss(string c) => c switch
+    {
+        "green" => "#dcfce7",
+        "blue" => "#dbeafe",
+        "pink" => "#fce7f3",
+        "purple" => "#e9d5ff",
+        "gray" => "#e5e7eb",
+        _ => "#fef3c7"
+    };
+
+    // ===== Models =====
+
+    private sealed class NewLeadForm
+    {
+        public string ContactName { get; set; } = "";
+        public string? ContactPhone { get; set; }
+        public string? Topic { get; set; }
+        public decimal? EstimatedValue { get; set; }
+        public string? Currency { get; set; } = "COP";
+        public Guid StageId { get; set; }
+    }
+
+    private sealed class EditLeadForm
+    {
+        public Guid Id { get; set; }
+        public string ContactName { get; set; } = "";
+        public string? ContactPhone { get; set; }
+        public string? Topic { get; set; }
+        public decimal? EstimatedValue { get; set; }
+        public string? Currency { get; set; }
+        public Guid StageId { get; set; }
+        public Guid? AssignedToTenantUserId { get; set; }
+        public string? LossReason { get; set; }
+
+        public static EditLeadForm From(LeadDto l) => new()
+        {
+            Id = l.Id, ContactName = l.ContactName, ContactPhone = l.ContactPhone, Topic = l.Topic,
+            EstimatedValue = l.EstimatedValue, Currency = l.Currency, StageId = l.StageId,
+            AssignedToTenantUserId = l.AssignedToTenantUserId
+        };
+    }
+
+    private sealed class EditablePipeline
+    {
+        public Guid Id { get; }
+        public string Name { get; }
+        public int SortOrder { get; }
+        public bool IsSystem { get; }
+        public int StageCount { get; }
+        public int LeadCount { get; }
+        public string NameEdit { get; set; }
+        public EditablePipeline(Guid id, string name, int sort, bool sys, int sc, int lc)
+        { Id = id; Name = name; SortOrder = sort; IsSystem = sys; StageCount = sc; LeadCount = lc; NameEdit = name; }
+    }
+
+    private sealed class EditableStage
+    {
+        public Guid Id { get; }
+        public Guid PipelineId { get; }
+        public string Name { get; }
+        public int SortOrder { get; }
+        public bool IsClosedWon { get; set; }
+        public bool IsClosedLost { get; set; }
+        public string NameEdit { get; set; }
+        public EditableStage(Guid id, Guid pid, string name, int sort, bool won, bool lost)
+        { Id = id; PipelineId = pid; Name = name; SortOrder = sort; IsClosedWon = won; IsClosedLost = lost; NameEdit = name; }
+    }
+
+    private sealed class EditableField
+    {
+        public Guid Id { get; }
+        public Guid StageId { get; }
+        public string FieldKey { get; }
+        public string Label { get; }
+        public string LabelEdit { get; set; }
+        public PipelineFieldType FieldType { get; set; }
+        public int Column { get; set; }
+        public int SortOrder { get; }
+        public string? Options { get; set; }
+        public string? Description { get; set; }
+        public bool AllowMultiple { get; set; }
+        public string? RepeatWithFieldKey { get; set; }
+        public bool MultiWithDetail { get; set; }
+        public string? TotalSourceKeys { get; set; }
+        public bool ShowInFilter { get; set; }
+
+        public EditableField(PipelineFieldDto f)
+        {
+            Id = f.Id; StageId = f.StageId; FieldKey = f.FieldKey; Label = f.Label; LabelEdit = f.Label;
+            FieldType = f.FieldType; Column = f.Column; SortOrder = f.SortOrder; Options = f.Options;
+            Description = f.Description; AllowMultiple = f.AllowMultiple; RepeatWithFieldKey = f.RepeatWithFieldKey;
+            MultiWithDetail = f.MultiWithDetail; TotalSourceKeys = f.TotalSourceKeys; ShowInFilter = f.ShowInFilter;
+        }
+
+        public PipelineFieldDto ToDto() => new(Id, StageId, FieldKey, Label, FieldType, Column, SortOrder, Options,
+            Description, AllowMultiple, RepeatWithFieldKey, MultiWithDetail, TotalSourceKeys, ShowInFilter);
+    }
+}
