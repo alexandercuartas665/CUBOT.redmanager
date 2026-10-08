@@ -366,6 +366,7 @@ h1, h2, h3 { letter-spacing: -0.01em; }
 .auth-forgot:hover { text-decoration: underline; }
 .auth-legal { font-size: .76rem; line-height: 1.5; color: var(--muted-foreground); margin: 2px 0 0; }
 .auth-footer { text-align: center; font-size: .76rem; color: var(--muted-foreground); padding-top: 24px; border-top: 1px solid var(--border); margin-top: 24px; }
+.auth-footer-ver { display: inline-block; margin-left: 10px; padding: 2px 8px; border-radius: 999px; background: var(--muted); font-family: ui-monospace, Consolas, monospace; font-size: .7rem; letter-spacing: .02em; }
 .auth-providers { display: grid; grid-template-columns: 1fr; gap: 10px; margin-bottom: 18px; }
 .auth-provider { display: flex; align-items: center; justify-content: center; gap: 8px; padding: 12px; border: 1px solid var(--border); border-radius: 12px; background: var(--background); font-size: .9rem; font-weight: 600; color: var(--foreground); cursor: pointer; }
 .auth-provider[disabled] { opacity: .65; cursor: not-allowed; }

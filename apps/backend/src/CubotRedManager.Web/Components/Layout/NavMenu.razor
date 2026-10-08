@@ -142,10 +142,10 @@
     <span class="cubot-dot"></span>
 </div>
 
-@* Version del build en curso. Sirve al operador para saber si el pod que ve es el ultimo
-   deploy o una cache. En dev muestra "dev"; en Railway muestra el SHA corto del commit. *@
+@* Version del build en curso. Combina SemVer (v0.1.0, visible al usuario) + SHA corto (sirve al
+   operador para distinguir pods del mismo semver). FullSha completo en tooltip. *@
 <div class="cubot-version" title="@CubotRedManager.Web.AppVersion.FullSha">
-    v.@CubotRedManager.Web.AppVersion.Display
+    @CubotRedManager.Web.AppVersion.Display
 </div>
 
 <style>

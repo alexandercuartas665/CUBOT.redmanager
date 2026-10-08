@@ -8,6 +8,10 @@ namespace CubotRedManager.Web;
 /// </summary>
 public static class AppVersion
 {
+    /// <summary>Version semantica del producto (MAJOR.MINOR.PATCH). Se incrementa manualmente en commits
+    /// que cierran un hito funcional. Es el numero que ve el usuario en login y en el sidebar.</summary>
+    public const string SemanticVersion = "0.1.0";
+
     /// <summary>SHA corto del commit desplegado (7 chars). "dev" si la variable no esta definida (local).</summary>
     public static string ShortSha { get; } = ReadShortSha();
 
@@ -20,8 +24,11 @@ public static class AppVersion
     /// <summary>Timestamp UTC en que arranco este proceso. Aproxima "hora del deploy" en el contenedor.</summary>
     public static DateTimeOffset StartedAtUtc { get; } = DateTimeOffset.UtcNow;
 
-    /// <summary>Nombre corto para el footer del sidebar. Ej: "dev" o "bb28e92".</summary>
-    public static string Display => ShortSha;
+    /// <summary>Etiqueta corta "v0.1.0" para footer de login (sin SHA, solo semver).</summary>
+    public static string DisplaySemver => "v" + SemanticVersion;
+
+    /// <summary>Etiqueta completa "v0.1.0 · bb28e92" para footer del sidebar (semver + sha).</summary>
+    public static string Display => $"v{SemanticVersion} · {ShortSha}";
 
     private static string ReadShortSha()
     {

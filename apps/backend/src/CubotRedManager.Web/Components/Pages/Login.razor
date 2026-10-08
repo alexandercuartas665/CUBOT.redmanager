@@ -129,7 +129,10 @@
 
         </div>
 
-        <footer class="auth-footer">&copy; @DateTime.UtcNow.Year @_brand.PlatformName. Todos los derechos reservados.</footer>
+        <footer class="auth-footer">
+            &copy; @DateTime.UtcNow.Year @_brand.PlatformName. Todos los derechos reservados.
+            <span class="auth-footer-ver" title="@CubotRedManager.Web.AppVersion.FullSha">@CubotRedManager.Web.AppVersion.DisplaySemver</span>
+        </footer>
     </main>
 </div>
 
