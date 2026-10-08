@@ -111,6 +111,8 @@ public sealed class AiAgentService : IAiAgentService
         agent.ReactionRatioN = Math.Max(0, request.ReactionRatioN);
         agent.ReactionRatioM = Math.Max(1, request.ReactionRatioM);
         agent.ReactionEmojis = string.IsNullOrWhiteSpace(request.ReactionEmojis) ? null : request.ReactionEmojis.Trim();
+        agent.CreateLeadsInPipeline = request.CreateLeadsInPipeline;
+        agent.DefaultPipelineId = request.DefaultPipelineId;
         await _db.SaveChangesAsync(cancellationToken);
         var count = await _db.AiAgentResources.CountAsync(r => r.AgentId == id, cancellationToken);
         return Map(agent, count);
@@ -397,7 +399,8 @@ public sealed class AiAgentService : IAiAgentService
 
     private static AiAgentDto Map(AiAgent a, int resourceCount) =>
         new(a.Id, a.Name, a.Role, a.Provider, a.Model, a.SystemPrompt, a.IsActive, a.EnableDataContainerMcp, a.SortOrder, resourceCount,
-            a.ReactionsEnabled, a.ReactionRatioN, a.ReactionRatioM, a.ReactionEmojis);
+            a.ReactionsEnabled, a.ReactionRatioN, a.ReactionRatioM, a.ReactionEmojis,
+            a.CreateLeadsInPipeline, a.DefaultPipelineId);
 
     private static AiAgentResourceDto MapResource(AiAgentResource r) =>
         new(r.Id, r.AgentId, r.Name, r.ResourceType, r.Detail, r.FileUrl, r.FileName, r.SortOrder);
