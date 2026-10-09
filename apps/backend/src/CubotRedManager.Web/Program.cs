@@ -634,6 +634,148 @@ app.MapMethods("/api/agents/{id:guid}/payment-config", new[] { "PATCH" }, async 
     finally { ambient.Set(null, null); }
 }).AllowAnonymous().DisableAntiforgery();
 
+// ===== POST /api/test/agent =====
+// Emulador de linea de WhatsApp: inyecta un mensaje "como si fuera el cliente" y corre el runtime
+// REAL del agente (ChatIngestService + AgentDispatcher) sin que la respuesta salga a ningun provider.
+// Portado del hermano ECOREX.tareas con dos diferencias clave:
+//  - La linea Emulator es por-tenant, no por-agente (reutilizable).
+//  - El binding emulado NO toca bindings reales: la linea Emulator es exclusiva, solo rotamos cual
+//    agente la atiende en cada prueba. Los bindings a lineas reales (Evolution/Cloud/YCloud) quedan
+//    intactos, asi que probar un agente NO rompe su WhatsApp real.
+// Autenticacion: cookie Blazor con tenant_id (misma que la consola).
+app.MapPost("/api/test/agent", async (
+    TestAgentRequest req,
+    HttpContext http,
+    CubotRedManager.Application.Abstractions.IApplicationDbContext db,
+    CubotRedManager.Application.Tenancy.IChatIngestService ingest,
+    CubotRedManager.Application.Tenancy.IAgentDispatcher dispatcher,
+    CubotRedManager.Application.Tenancy.IAiAgentLineBindingService bindings,
+    CubotRedManager.Application.Abstractions.IAmbientTenantOverride ambient,
+    TimeProvider time,
+    CancellationToken ct) =>
+{
+    // 1. Tenant del claim de la sesion.
+    var tenantClaim = http.User.FindFirst("tenant_id")?.Value;
+    if (!Guid.TryParse(tenantClaim, out var tenantId)) { return Results.Unauthorized(); }
+    Guid.TryParse(http.User.FindFirstValue(System.Security.Claims.ClaimTypes.NameIdentifier)
+                   ?? http.User.FindFirstValue("sub"), out var actorUserId);
+    ambient.Set(tenantId, actorUserId == Guid.Empty ? null : actorUserId);
+    try
+    {
+        // 2. Linea emulada: busca o crea UNA por tenant, reutilizable.
+        var line = await db.WhatsAppLines.IgnoreQueryFilters()
+            .FirstOrDefaultAsync(l => l.TenantId == tenantId && l.Provider == CubotRedManager.Domain.Enums.WhatsAppProvider.Emulator, ct);
+        if (line is null)
+        {
+            line = new CubotRedManager.Domain.Entities.WhatsAppLine
+            {
+                TenantId = tenantId,
+                Provider = CubotRedManager.Domain.Enums.WhatsAppProvider.Emulator,
+                InstanceName = "Canal de pruebas",
+                Status = CubotRedManager.Domain.Enums.WhatsAppLineStatus.Connected,
+                PhoneNumber = "emulator",
+                LastConnectedAt = time.GetUtcNow(),
+                LastStatusAt = time.GetUtcNow()
+            };
+            db.WhatsAppLines.Add(line);
+            await db.SaveChangesAsync(ct);
+        }
+
+        // 3. Agente a probar: el del body, o el primer activo del tenant.
+        Guid agentId;
+        if (req.AgentId is Guid aid)
+        {
+            agentId = aid;
+            var owned = await db.AiAgents.IgnoreQueryFilters()
+                .AnyAsync(a => a.Id == agentId && a.TenantId == tenantId, ct);
+            if (!owned) { return Results.BadRequest(new { error = "El agente no pertenece a esta agencia o no existe." }); }
+        }
+        else
+        {
+            var first = await db.AiAgents.IgnoreQueryFilters()
+                .Where(a => a.TenantId == tenantId && a.IsActive)
+                .OrderBy(a => a.SortOrder)
+                .Select(a => (Guid?)a.Id).FirstOrDefaultAsync(ct);
+            if (first is null) { return Results.BadRequest(new { error = "No hay agentes activos en esta agencia." }); }
+            agentId = first.Value;
+        }
+
+        // 4. Binding: la linea Emulator debe estar atendida SOLO por este agente. Desconectamos a
+        //    cualquier otro agente que la tuviera y conectamos a este. No tocamos bindings de lineas
+        //    reales — por eso probar un agente nunca rompe su WhatsApp productivo.
+        var otherBindings = await db.AiAgentLineBindings.IgnoreQueryFilters()
+            .Where(b => b.TenantId == tenantId && b.WhatsAppLineId == line.Id && b.IsConnected && b.AgentId != agentId)
+            .Select(b => b.AgentId)
+            .ToListAsync(ct);
+        foreach (var otherAgentId in otherBindings)
+        {
+            await bindings.SetAsync(new CubotRedManager.Application.Tenancy.SetAgentLineBindingRequest(otherAgentId, line.Id, false, true), actorUserId, ct);
+        }
+        await bindings.SetAsync(new CubotRedManager.Application.Tenancy.SetAgentLineBindingRequest(agentId, line.Id, true, true), actorUserId, ct);
+
+        // 5. Ingesta: crea Conversation + Message entrante igual que el webhook real. enqueueDispatch
+        //    = false porque corremos el dispatcher sincrono en el paso 7.
+        var phone = string.IsNullOrWhiteSpace(req.ContactPhone) ? "999999999999" : new string(req.ContactPhone.Where(char.IsDigit).ToArray());
+        if (string.IsNullOrWhiteSpace(phone)) { phone = "999999999999"; }
+        var now = time.GetUtcNow();
+        var inboundText = req.Text ?? string.Empty;
+        var payload = new CubotRedManager.Application.Tenancy.IngestMessageRequest(
+            ContactPhone: phone,
+            ContactName: string.IsNullOrWhiteSpace(req.ContactName) ? "Cliente de prueba" : req.ContactName!.Trim(),
+            ExternalMessageId: $"emu-{Guid.NewGuid():N}",
+            Body: inboundText,
+            MessageType: "text",
+            SentAt: now,
+            WhatsAppLineId: line.Id);
+        var ingestResult = await ingest.IngestTrustedAsync(tenantId, payload, ct, enqueueDispatch: false);
+        if (ingestResult == CubotRedManager.Application.Tenancy.ChatIngestResult.Unauthorized)
+        {
+            return Results.Unauthorized();
+        }
+
+        // 6. Resolver conversationId por (tenant, linea, telefono).
+        var conversationId = await db.Conversations.IgnoreQueryFilters()
+            .Where(c => c.TenantId == tenantId && c.WhatsAppLineId == line.Id && c.ContactPhone == phone)
+            .OrderByDescending(c => c.LastMessageAt)
+            .Select(c => (Guid?)c.Id)
+            .FirstOrDefaultAsync(ct);
+        if (conversationId is null)
+        {
+            return Results.Problem("No se pudo resolver la conversacion despues de la ingesta.");
+        }
+
+        // 7. Dispatcher sincrono: corre el agente REAL (herramientas, markers, LLM) sobre la
+        //    conversacion. Puede tardar 10-60s con el LLM; el cliente HTTP puede dar timeout de
+        //    gateway aunque el server termine OK — en ese caso revisar BD / /conversaciones.
+        var dispatchResult = await dispatcher.DispatchForTestAsync(tenantId, conversationId.Value, line.Id, inboundText, ct);
+
+        // 8. Respuesta: el ultimo mensaje saliente queda en BD. Preferimos leer de BD (incluye lo
+        //    que agentes emiten via herramientas / markers), con fallback a dispatchResult.ReplyText.
+        var replyFromDb = await db.Messages.IgnoreQueryFilters()
+            .Where(m => m.TenantId == tenantId && m.ConversationId == conversationId.Value
+                     && m.Direction == CubotRedManager.Domain.Enums.MessageDirection.Outbound
+                     && m.SentAt >= now)
+            .OrderByDescending(m => m.SentAt)
+            .Select(m => m.Body)
+            .FirstOrDefaultAsync(ct);
+
+        return Results.Ok(new
+        {
+            conversationId = conversationId.Value,
+            lineId = line.Id,
+            agentId,
+            ok = dispatchResult.Ok,
+            skipReason = dispatchResult.SkipReason,
+            reply = replyFromDb ?? dispatchResult.ReplyText,
+            simulated = dispatchResult.Simulated,
+            leadsCreated = dispatchResult.LeadsCreated,
+            inputTokens = dispatchResult.InputTokens,
+            outputTokens = dispatchResult.OutputTokens
+        });
+    }
+    finally { ambient.Set(null, null); }
+}).RequireAuthorization(CubotRedManager.Web.Authorization.AppPolicies.TenantMember).DisableAntiforgery();
+
 // POST /api/agents/{id}/sync-prices - sincroniza la columna Precio del DataContainer con los
 // precios actuales del catalogo FUXION (baja /api/products?country=XX por cada pais con filas y
 // PATCHea solo lo que difiere). Devuelve el detalle de la corrida.
@@ -1452,3 +1594,10 @@ static class DemoTenant
 
 /// <summary>Payload JSON del POST /connect/login (Admin Agent API).</summary>
 public sealed record SuperAdminLoginRequest(string Email, string Password);
+
+/// <summary>Payload JSON del POST /api/test/agent (emulador de linea WhatsApp para probar un agente IA
+/// end-to-end sin salir al mundo). Todos los campos son opcionales:
+///   - Text: cuerpo del mensaje "como si fuera el cliente" (default: vacio).
+///   - AgentId: agente a probar; si es null, el primer activo del tenant.
+///   - ContactPhone/ContactName: identificacion del "contacto" virtual (defaults razonables).</summary>
+public sealed record TestAgentRequest(string? Text, Guid? AgentId, string? ContactPhone, string? ContactName);

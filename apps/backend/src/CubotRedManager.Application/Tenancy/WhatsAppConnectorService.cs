@@ -208,10 +208,17 @@ public sealed class WhatsAppConnectorService : IWhatsAppConnectorService
         {
             return new LineSendResult(false, "Indica el numero y el mensaje.");
         }
-        var line = await _db.WhatsAppLines.FirstOrDefaultAsync(l => l.Id == lineId, cancellationToken);
+        // IgnoreQueryFilters: el dispatcher invoca esto desde contextos sin tenant scope.
+        var line = await _db.WhatsAppLines.IgnoreQueryFilters().FirstOrDefaultAsync(l => l.Id == lineId, cancellationToken);
         if (line is null)
         {
             return new LineSendResult(false, "La linea no existe.");
+        }
+        // Linea Emulator: no envia a ningun provider. El mensaje saliente ya quedo en BD; aqui solo
+        // simulamos exito para que el AgentDispatcher siga su flujo (reacciones, metrica, bitacora).
+        if (line.Provider == WhatsAppProvider.Emulator)
+        {
+            return new LineSendResult(true, null, "emu-" + Guid.NewGuid().ToString("N")[..12]);
         }
         if (line.Status != WhatsAppLineStatus.Connected)
         {
@@ -235,6 +242,10 @@ public sealed class WhatsAppConnectorService : IWhatsAppConnectorService
 
     public async Task<LineSendResult> SendMediaAsync(Guid lineId, string phone, MessageMediaType mediaType, string base64, string? mimeType, string? fileName, string? caption, Guid actorUserId, CancellationToken cancellationToken = default)
     {
+        if (await IsEmulatorLineAsync(lineId, cancellationToken))
+        {
+            return new LineSendResult(true, null, "emu-" + Guid.NewGuid().ToString("N")[..12]);
+        }
         var ready = await ReadyLineAsync(lineId, phone, cancellationToken);
         if (ready.Error is not null) { return new LineSendResult(false, ready.Error); }
         var (baseUrl, apiKey, instance, digits) = ready.Value;
@@ -252,12 +263,24 @@ public sealed class WhatsAppConnectorService : IWhatsAppConnectorService
 
     public async Task<LineSendResult> SendLocationAsync(Guid lineId, string phone, double latitude, double longitude, string? name, Guid actorUserId, CancellationToken cancellationToken = default)
     {
+        if (await IsEmulatorLineAsync(lineId, cancellationToken))
+        {
+            return new LineSendResult(true, null, "emu-" + Guid.NewGuid().ToString("N")[..12]);
+        }
         var ready = await ReadyLineAsync(lineId, phone, cancellationToken);
         if (ready.Error is not null) { return new LineSendResult(false, ready.Error); }
         var (baseUrl, apiKey, instance, digits) = ready.Value;
         var result = await _client.SendLocationAsync(baseUrl, apiKey, instance, digits, latitude, longitude, name, null, cancellationToken);
         return new LineSendResult(result.Ok, result.Error);
     }
+
+    /// <summary>True si la linea existe y es Provider=Emulator. Usado para no-op en el envio saliente
+    /// (el agente responde pero el mensaje solo queda en BD, no sale al mundo).</summary>
+    private async Task<bool> IsEmulatorLineAsync(Guid lineId, CancellationToken ct)
+        => await _db.WhatsAppLines.IgnoreQueryFilters()
+            .Where(l => l.Id == lineId)
+            .Select(l => (WhatsAppProvider?)l.Provider)
+            .FirstOrDefaultAsync(ct) == WhatsAppProvider.Emulator;
 
     // Resuelve linea conectada + servidor + numero normalizado. Error no nulo si algo falta.
     private async Task<(string Error, (string baseUrl, string apiKey, string instance, string digits) Value)> ReadyLineAsync(Guid lineId, string phone, CancellationToken ct)
@@ -302,6 +325,10 @@ public sealed class WhatsAppConnectorService : IWhatsAppConnectorService
         // IgnoreQueryFilters: lo llama el dispatcher del agente (webhook entrante, sin tenant context).
         var line = await _db.WhatsAppLines.IgnoreQueryFilters().FirstOrDefaultAsync(l => l.Id == lineId, cancellationToken);
         if (line is null) { return new LineSendResult(false, "La linea no existe.", null); }
+        if (line.Provider == WhatsAppProvider.Emulator)
+        {
+            return new LineSendResult(true, null, "emu-" + Guid.NewGuid().ToString("N")[..12]);
+        }
         if (line.Provider != WhatsAppProvider.Evolution)
         {
             return new LineSendResult(false, "Las reacciones por id solo aplican a lineas Evolution en este corte.", null);

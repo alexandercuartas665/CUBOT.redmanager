@@ -86,7 +86,12 @@ public enum WhatsAppProvider
 {
     Evolution = 0,
     Cloud = 1,
-    YCloud = 2
+    YCloud = 2,
+    /// <summary>Proveedor simulado: no envia a ninguna API real. Usado por el endpoint
+    /// /api/test/agent para ejercitar el runtime completo del agente (ingesta + dispatcher)
+    /// sin que las respuestas del LLM salgan al mundo. Se crea UNA linea Emulator por tenant
+    /// ("Canal de pruebas"), reutilizable. Portado del hermano ECOREX.tareas.</summary>
+    Emulator = 3
 }
 
 /// <summary>Estado de la integracion con el servidor Evolution API maestro (Super Admin SaaS).</summary>
