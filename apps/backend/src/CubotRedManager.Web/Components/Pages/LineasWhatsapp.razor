@@ -244,11 +244,13 @@ else
                     else if (l.Provider == WhatsAppProvider.Evolution)
                     {
                         <button class="btn btn-sm btn-primary" @onclick="() => ConnectEvolution(l)" disabled="@_busy">Conectar (QR)</button>
+                        <button class="btn btn-sm btn-outline-secondary" @onclick="() => OpenTest(l)" disabled="@_busy" title="Intenta un envio ahora mismo. Si el provider realmente la ve conectada, llegara aunque el estado local no se haya actualizado.">Probar envio</button>
                         <button class="btn btn-sm btn-outline-secondary" @onclick="() => RefreshAsync(l.Id)" disabled="@_busy">Actualizar</button>
                     }
                     else
                     {
                         <button class="btn btn-sm btn-primary" @onclick="() => ChangeStatus(l, WhatsAppLineStatus.Connected)" disabled="@_busy">Marcar conectada</button>
+                        <button class="btn btn-sm btn-outline-secondary" @onclick="() => OpenTest(l)" disabled="@_busy" title="Intenta un envio ahora mismo. Si el provider realmente la ve conectada, llegara aunque el estado local no se haya actualizado.">Probar envio</button>
                         <button class="btn btn-sm btn-outline-secondary" @onclick="() => RefreshAsync(l.Id)" disabled="@_busy">Actualizar</button>
                     }
                     <button class="btn btn-sm btn-outline-danger" @onclick="() => AskDelete(l)" disabled="@_busy">Eliminar</button>
