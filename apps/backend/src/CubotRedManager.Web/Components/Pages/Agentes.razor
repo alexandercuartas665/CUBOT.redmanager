@@ -608,7 +608,7 @@ else
 
                             <div style="display:flex;gap:8px;margin-top:14px;flex-wrap:wrap;align-items:center;">
                                 <button class="btn btn-primary" @onclick="SavePaymentConfigAsync" disabled="@_busy">Guardar configuracion</button>
-                                <button class="btn btn-outline-primary" @onclick="SyncPricesAsync" disabled="@_busy || _priceSyncBusy" title="Baja los precios reales del catalogo FUXION y actualiza la columna Precio del contenedor">
+                                <button class="btn btn-outline-primary" @onclick="SyncPricesAsync" disabled="@(_busy || _priceSyncBusy)" title="Baja los precios reales del catalogo FUXION y actualiza la columna Precio del contenedor">
                                     @(_priceSyncBusy ? "Sincronizando..." : "Sincronizar precios ahora")
                                 </button>
                                 <span class="text-muted" style="font-size:12px;">
