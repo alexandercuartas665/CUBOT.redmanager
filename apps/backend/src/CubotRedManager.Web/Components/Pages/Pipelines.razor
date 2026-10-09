@@ -23,33 +23,40 @@
             </div>
             <span>Operacion diaria</span>
         </div>
-        <h1 class="page-title" style="margin-top:12px;">Pipelines <span>comerciales</span></h1>
-        <p class="page-sub" style="margin-bottom:0;">Embudos Kanban por tipo de venta: Productos, Negocios, o los que crees. Un lead vive siempre en un embudo.</p>
+        @if (_currentPipeline is null)
+        {
+            <h1 class="page-title" style="margin-top:12px;">Pipelines <span>comerciales</span></h1>
+            <p class="page-sub" style="margin-bottom:0;">Cada embudo es independiente: sus etapas, campos, leads e historial no se mezclan con los demas. Elige uno para operar.</p>
+        }
+        else
+        {
+            <div style="display:flex;align-items:center;gap:10px;margin-top:12px;">
+                <button class="btn btn-sm btn-outline-secondary" @onclick="BackToIndex" title="Volver a la lista de embudos">&larr; Embudos</button>
+                <h1 class="page-title" style="margin:0;">@_currentPipeline.Name</h1>
+                @if (_currentPipeline.IsSystem) { <span class="badge bg-light text-muted" title="Embudo del sistema">sistema</span> }
+            </div>
+            <p class="page-sub" style="margin-bottom:0;">Tablero Kanban de este embudo. Sus etapas, campos y leads son independientes de los otros.</p>
+        }
     </div>
     <div style="display:flex;gap:8px;">
-        @if (_canManage)
+        @if (_currentPipeline is null)
         {
-            <button class="btn btn-outline-secondary" @onclick="OpenConfig">Configurar embudo</button>
+            @if (_canManage && _pipelines.Count > 0)
+            {
+                <button class="btn btn-primary" @onclick="() => _newPipelineOpen = true">+ Nuevo embudo</button>
+            }
         }
-        <button class="btn btn-outline-secondary" @onclick="OpenHistoryAsync">Historial</button>
-        <button class="btn btn-primary" @onclick="() => OpenNewLead(null)" disabled="@(_stages.Count == 0 || _currentPipeline is null)">+ Nuevo lead</button>
+        else
+        {
+            @if (_canManage)
+            {
+                <button class="btn btn-outline-secondary" @onclick="OpenConfig">Configurar embudo</button>
+            }
+            <button class="btn btn-outline-secondary" @onclick="OpenHistoryAsync">Historial</button>
+            <button class="btn btn-primary" @onclick="() => OpenNewLead(null)" disabled="@(_stages.Count == 0)">+ Nuevo lead</button>
+        }
     </div>
 </div>
-
-@* ===== Selector de pipeline ===== *@
-@if (!_loading && _pipelines.Count > 0)
-{
-    <div class="pl-pipe-tabs">
-        @foreach (var p in _pipelines)
-        {
-            <button class="pl-pipe-tab @(_currentPipelineId == p.Id ? "on" : "")" @onclick="() => SelectPipeline(p.Id)">
-                <span class="pl-pipe-tab-name">@p.Name</span>
-                <span class="pl-pipe-tab-cnt">@p.LeadCount</span>
-                @if (p.IsSystem) { <span class="pl-pipe-sys" title="Embudo del sistema (no se puede eliminar)">⚙</span> }
-            </button>
-        }
-    </div>
-}
 
 @if (_loading)
 {
@@ -61,6 +68,39 @@ else if (_pipelines.Count == 0)
         <p><strong>Aun no hay embudos en esta agencia.</strong></p>
         <p class="text-muted" style="font-size:13px;">Vamos a crearte los embudos "Productos" y "Negocios" por defecto.</p>
         <button class="btn btn-primary" @onclick="SeedDefaultsAsync" disabled="@_busy">Crear embudos por defecto</button>
+    </div>
+}
+else if (_currentPipeline is null)
+{
+    @* ===== INDEX: cada embudo como tarjeta independiente ===== *@
+    <div class="pl-cards">
+        @foreach (var p in _pipelines)
+        {
+            <div class="pl-card-pipe" @onclick="() => SelectPipeline(p.Id)">
+                <div class="pl-card-pipe-head">
+                    <div class="pl-card-pipe-icon">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="18" height="18" x="3" y="3" rx="2"/><path d="M8 7v7"/><path d="M12 7v4"/><path d="M16 7v9"/></svg>
+                    </div>
+                    <div style="flex:1;min-width:0;">
+                        <div class="pl-card-pipe-name">@p.Name</div>
+                        @if (p.IsSystem) { <span class="pl-card-pipe-sys">embudo del sistema</span> }
+                        else { <span class="pl-card-pipe-sys" style="color:var(--primary);">embudo personalizado</span> }
+                    </div>
+                </div>
+                <div class="pl-card-pipe-stats">
+                    <div class="pl-card-pipe-stat"><div class="num">@p.LeadCount</div><div class="lbl">leads activos</div></div>
+                    <div class="pl-card-pipe-stat"><div class="num">@p.StageCount</div><div class="lbl">etapas</div></div>
+                </div>
+                <div class="pl-card-pipe-foot">
+                    <button class="btn btn-primary btn-sm" @onclick:stopPropagation="true" @onclick="() => SelectPipeline(p.Id)">Abrir embudo &rarr;</button>
+                    @if (!p.IsSystem && _canManage)
+                    {
+                        <button class="btn btn-outline-danger btn-sm" title="Eliminar embudo (solo si no tiene leads)"
+                                @onclick:stopPropagation="true" @onclick="() => DeletePipelineAsync(p.Id)">Borrar</button>
+                    }
+                </div>
+            </div>
+        }
     </div>
 }
 else if (_stages.Count == 0)
@@ -613,14 +653,45 @@ else
     </div>
 }
 
+@* ===== Modal: nuevo embudo (desde el index) ===== *@
+@if (_newPipelineOpen)
+{
+    <div class="modal-overlay">
+        <div class="modal-dialog" style="max-width:460px;">
+            <div class="modal-head"><h3>Nuevo embudo</h3>
+                <button class="modal-close" @onclick="() => { _newPipelineOpen = false; _newPipelineName = string.Empty; }">&times;</button>
+            </div>
+            <div class="modal-body">
+                <p style="font-size:13px;color:var(--muted-foreground);margin-top:0;">Cada embudo tiene sus propias etapas, campos y leads. Despues de crearlo podras configurarlo desde su propio tablero.</p>
+                <div class="field"><label class="form-label">Nombre del embudo *</label>
+                    <input class="form-control" @bind="_newPipelineName" placeholder="Ej: Ventas corporativas" autofocus />
+                </div>
+            </div>
+            <div class="modal-foot">
+                <button class="btn btn-outline-secondary" @onclick="() => { _newPipelineOpen = false; _newPipelineName = string.Empty; }">Cancelar</button>
+                <button class="btn btn-primary" @onclick="CreatePipelineAsync" disabled="@(_busy || string.IsNullOrWhiteSpace(_newPipelineName))">Crear embudo</button>
+            </div>
+        </div>
+    </div>
+}
+
 <style>
-    .pl-pipe-tabs { display:flex; gap:4px; margin:8px 0 16px; border-bottom:1px solid var(--border); flex-wrap:wrap; }
-    .pl-pipe-tab { padding:8px 14px; background:transparent; border:none; border-bottom:3px solid transparent; cursor:pointer; display:flex; align-items:center; gap:6px; font-size:13px; color:var(--muted-foreground); }
-    .pl-pipe-tab:hover { color:var(--foreground); }
-    .pl-pipe-tab.on { color:var(--primary); border-bottom-color:var(--primary); font-weight:600; }
-    .pl-pipe-tab-cnt { background:var(--muted); padding:1px 7px; border-radius:999px; font-size:11px; }
-    .pl-pipe-sys { font-size:10px; opacity:0.6; }
     .pl-empty { padding:40px 20px; text-align:center; background:var(--muted); border-radius:10px; margin:20px 0; }
+
+    /* Grid de embudos: cada uno vive en su propia tarjeta, independiente. */
+    .pl-cards { display:grid; grid-template-columns:repeat(auto-fill,minmax(280px,1fr)); gap:16px; margin:16px 0 24px; }
+    .pl-card-pipe { background:var(--card); border:1px solid var(--border); border-radius:12px; padding:16px; cursor:pointer; transition:border-color .15s, box-shadow .15s, transform .15s; display:flex; flex-direction:column; gap:12px; }
+    .pl-card-pipe:hover { border-color:var(--primary); box-shadow:0 4px 16px rgba(160,61,201,0.08); transform:translateY(-2px); }
+    .pl-card-pipe-head { display:flex; align-items:center; gap:10px; }
+    .pl-card-pipe-icon { width:40px; height:40px; border-radius:10px; background:linear-gradient(135deg, oklch(0.62 0.19 310 / 0.12), oklch(0.6 0.22 345 / 0.12)); display:flex; align-items:center; justify-content:center; color:var(--primary); flex-shrink:0; }
+    .pl-card-pipe-icon svg { width:22px; height:22px; }
+    .pl-card-pipe-name { font-weight:700; font-size:16px; line-height:1.2; }
+    .pl-card-pipe-sys { font-size:11px; color:var(--muted-foreground); display:block; margin-top:2px; }
+    .pl-card-pipe-stats { display:grid; grid-template-columns:1fr 1fr; gap:10px; padding:10px 0; border-top:1px dashed var(--border); border-bottom:1px dashed var(--border); }
+    .pl-card-pipe-stat { text-align:center; }
+    .pl-card-pipe-stat .num { font-size:22px; font-weight:700; color:var(--foreground); line-height:1; }
+    .pl-card-pipe-stat .lbl { font-size:10px; color:var(--muted-foreground); text-transform:uppercase; letter-spacing:.04em; margin-top:4px; }
+    .pl-card-pipe-foot { display:flex; gap:6px; justify-content:space-between; align-items:center; }
 
     .pl-toolbar { display:flex; gap:8px; margin-bottom:12px; align-items:center; flex-wrap:wrap; }
     .pl-search { position:relative; display:flex; align-items:center; flex:1; max-width:340px; background:var(--card); border:1px solid var(--border); border-radius:8px; padding:0 10px; }
@@ -707,6 +778,7 @@ else
     private int _conversion;
     private string _search = "", _sortBy = "time", _tab = "datos";
     private string _newNote = "", _newNoteColor = "yellow";
+    private bool _newPipelineOpen;
     private string _newPipelineName = "", _newStageName = "";
     private bool _newStageWon, _newStageLost;
     private Guid? _dragLeadId, _dragOverStageId;
@@ -739,13 +811,35 @@ else
         _loading = true;
         var raw = await PipelineSvc.ListPipelinesAsync();
         _pipelines = raw.Select(p => new EditablePipeline(p.Id, p.Name, p.SortOrder, p.IsSystem, p.StageCount, p.LeadCount)).ToList();
-        if (_pipelines.Count > 0)
+        // Al entrar a /pipelines NO autoseleccionamos un embudo: mostramos la grilla de cards para
+        // que cada embudo se sienta independiente. El usuario abre el que quiere operar.
+        if (_currentPipelineId is Guid id && _pipelines.Any(p => p.Id == id))
         {
-            _currentPipelineId ??= _pipelines[0].Id;
-            await SelectPipelineInternalAsync(_currentPipelineId!.Value);
+            await SelectPipelineInternalAsync(id);
+        }
+        else
+        {
+            _currentPipelineId = null;
+            _currentPipeline = null;
+            _stages = new();
+            _fields = new();
+            _leads = new();
         }
         _team = (await UsersSvc.ListAsync()).ToList();
         _loading = false;
+    }
+
+    private void BackToIndex()
+    {
+        _currentPipelineId = null;
+        _currentPipeline = null;
+        _stages = new();
+        _fields = new();
+        _leads = new();
+        _filterAsesores.Clear();
+        _filterStages.Clear();
+        _filterSinAsesor = false;
+        _search = "";
     }
 
     private async Task SeedDefaultsAsync()
@@ -1022,10 +1116,12 @@ else
 
     private async Task CreatePipelineAsync()
     {
+        if (string.IsNullOrWhiteSpace(_newPipelineName)) { return; }
         _busy = true;
         var created = await PipelineSvc.CreatePipelineAsync(new CreatePipelineRequest(_newPipelineName.Trim()), _actor);
         _busy = false;
         _newPipelineName = "";
+        _newPipelineOpen = false;
         if (created is not null) { await LoadAllAsync(); }
     }
 
