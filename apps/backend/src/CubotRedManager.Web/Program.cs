@@ -29,9 +29,6 @@ builder.Services.AddRazorComponents()
     // Permite subir archivos grandes (videos hasta 60MB) via InputFile + SignalR.
     .AddHubOptions(o => o.MaximumReceiveMessageSize = 64 * 1024 * 1024);
 
-// Diagnostico temporal: emite el stacktrace de las excepciones del circuit al cliente para que
-// el toast "Ha ocurrido un error" muestre la causa real. Revertir cuando se termine el debug.
-builder.Services.Configure<Microsoft.AspNetCore.Components.Server.CircuitOptions>(o => o.DetailedErrors = true);
 
 // Persistencia (PostgreSQL) + servicios de Application portados.
 builder.Services.AddInfrastructure(builder.Configuration);
