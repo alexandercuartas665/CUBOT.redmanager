@@ -32,6 +32,12 @@ builder.Services.AddRazorComponents()
 // Persistencia (PostgreSQL) + servicios de Application portados.
 builder.Services.AddInfrastructure(builder.Configuration);
 
+// SignalR + override del broadcaster: agrega un segundo registro de IChatBroadcaster. En DI,
+// GetRequiredService<T>() devuelve el ULTIMO registrado -> aqui SignalRChatBroadcaster gana al
+// NoOpChatBroadcaster registrado en Infrastructure. ChatHub + broadcaster viven en Web/Hubs/.
+builder.Services.AddSignalR();
+builder.Services.AddScoped<CubotRedManager.Application.Tenancy.IChatBroadcaster, CubotRedManager.Web.Hubs.SignalRChatBroadcaster>();
+
 // Resolucion de agencia/usuario desde los claims de la cookie (con override "ambient" para workers).
 builder.Services.AddScoped<IAmbientTenantOverride, AmbientTenantOverride>();
 builder.Services.AddScoped<HttpTenantContext>();
@@ -345,6 +351,9 @@ app.UseAntiforgery();
 app.MapStaticAssets();
 app.MapRazorComponents<App>()
     .AddInteractiveServerRenderMode();
+
+// Hub SignalR del chat del lead (Pipelines). Clientes se unen al grupo de su tenant con JoinTenant.
+app.MapHub<CubotRedManager.Web.Hubs.ChatHub>("/hubs/chat");
 
 // ===== Servido del binario de recursos del agente =====
 // GET /api/agent-resources/{id}/file - devuelve el bytea de ai_agent_resources.file_content.

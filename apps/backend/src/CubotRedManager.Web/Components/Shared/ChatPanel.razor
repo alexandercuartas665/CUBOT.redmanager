@@ -1,0 +1,325 @@
+@* Panel de chat WhatsApp reutilizable, version MVP para redmanager. Historial + input de texto +
+   selector de linea WhatsApp + templates basicos + SignalR en vivo. Portado reducido desde
+   CUBOT.travels (ChatPanel.razor); drag-drop/voz/location/respuesta citada quedan para una v2. *@
+@using CubotRedManager.Application.Tenancy
+@using CubotRedManager.Domain.Enums
+@using Microsoft.AspNetCore.Components.Authorization
+@using Microsoft.AspNetCore.SignalR.Client
+@using System.Security.Claims
+@implements IAsyncDisposable
+@inject IChatService ChatSvc
+@inject IMessageTemplateService TemplatesSvc
+@inject IWhatsAppLineService LinesSvc
+@inject NavigationManager Nav
+@inject AuthenticationStateProvider AuthProvider
+@inject IJSRuntime JS
+
+<div class="pl-chat">
+    <div class="pl-chat-head">
+        <div class="pl-chat-avatar">@Initials(ContactName)</div>
+        <div style="flex:1;min-width:0;">
+            <div class="nm">@(ContactName ?? ContactPhone)</div>
+            <div class="sub">WhatsApp &middot; @ContactPhone</div>
+            @if (_chatLines.Count > 0)
+            {
+                <div class="pl-chat-line">
+                    <select @bind="_chatLineId" title="Linea WhatsApp emisora">
+                        @foreach (var ln in _chatLines)
+                        {
+                            <option value="@ln.Id">@(string.IsNullOrWhiteSpace(ln.PhoneNumber) ? ln.InstanceName : $"{ln.InstanceName} ({ln.PhoneNumber})")</option>
+                        }
+                    </select>
+                </div>
+            }
+        </div>
+        <button class="pl-chat-refresh" title="Recargar historial" @onclick="LoadMessagesAsync" disabled="@_loading">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 9-9"/><path d="M3 4v5h5"/></svg>
+        </button>
+    </div>
+
+    <div class="pl-chat-body" id="@_bodyId">
+        @if (string.IsNullOrWhiteSpace(ContactPhone))
+        {
+            <div class="pl-chat-empty">Agrega un telefono al contacto para iniciar la conversacion.</div>
+        }
+        else if (_loading)
+        {
+            <div class="pl-chat-empty">Cargando historial...</div>
+        }
+        else if (_chatLines.Count == 0)
+        {
+            <div class="pl-chat-empty">No hay lineas WhatsApp conectadas. Conectala en el modulo "Lineas WhatsApp".</div>
+        }
+        else if (_messages.Count == 0)
+        {
+            <div class="pl-chat-empty">Aun no hay mensajes con este contacto. Escribe el primero abajo.</div>
+        }
+        else
+        {
+            DateTime? lastDay = null;
+            @foreach (var m in _messages)
+            {
+                var day = m.SentAt.LocalDateTime.Date;
+                if (lastDay != day)
+                {
+                    lastDay = day;
+                    <div class="pl-date-divider">@day.ToString("dd 'DE' MMMM").ToUpperInvariant()</div>
+                }
+                <div class="pl-bubble @(m.Direction == MessageDirection.Outbound ? "out" : "in")">
+                    @if (m.MediaType == MessageMediaType.Image && !string.IsNullOrWhiteSpace(m.MediaUrl))
+                    {
+                        <img class="pl-media-img" src="@m.MediaUrl" alt="imagen" />
+                    }
+                    else if (m.MediaType == MessageMediaType.Audio && !string.IsNullOrWhiteSpace(m.MediaUrl))
+                    {
+                        <audio src="@m.MediaUrl" controls style="max-width:220px;"></audio>
+                    }
+                    else if (m.MediaType == MessageMediaType.Document && !string.IsNullOrWhiteSpace(m.MediaUrl))
+                    {
+                        <a class="pl-media-doc" href="@m.MediaUrl" target="_blank">Documento adjunto</a>
+                    }
+                    @if (!string.IsNullOrWhiteSpace(m.Body))
+                    {
+                        <div class="pl-bubble-text">@m.Body</div>
+                    }
+                    <div class="t">
+                        @if (m.Direction == MessageDirection.Outbound && !string.IsNullOrWhiteSpace(m.SentByName))
+                        {
+                            <span>@m.SentByName &middot; </span>
+                        }
+                        @m.SentAt.LocalDateTime.ToString("hh:mm")
+                        @if (!string.IsNullOrWhiteSpace(m.Reaction))
+                        {
+                            <span class="pl-bubble-reaction" title="Reaccion">@m.Reaction</span>
+                        }
+                    </div>
+                </div>
+            }
+        }
+    </div>
+
+    @if (!string.IsNullOrWhiteSpace(ContactPhone) && _chatLines.Count > 0)
+    {
+        @if (_templates.Count > 0)
+        {
+            <div class="pl-chat-templates">
+                @foreach (var t in _templates.Take(6))
+                {
+                    var label = string.IsNullOrWhiteSpace(t.Name) ? Trim(t.Body ?? "", 24) : t.Name!;
+                    <button class="pl-tpl-chip" title="@(t.Body ?? "")" @onclick="() => UseTemplate(t)">@label</button>
+                }
+            </div>
+        }
+        @if (!string.IsNullOrEmpty(_sendError))
+        {
+            <div class="pl-chat-error">@_sendError</div>
+        }
+        <div class="pl-chat-input">
+            <textarea placeholder="Escribe tu mensaje..." rows="2" @bind="_draft" @bind:event="oninput"
+                      @onkeydown="OnKeyDownAsync" disabled="@_sending"></textarea>
+            <button class="pl-chat-send" @onclick="SendAsync" disabled="@(_sending || string.IsNullOrWhiteSpace(_draft))" title="Enviar (Enter)">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"><line x1="22" x2="11" y1="2" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
+            </button>
+        </div>
+    }
+</div>
+
+<style>
+    .pl-chat { display:flex; flex-direction:column; height:100%; min-height:400px; max-height:70vh; background:var(--background); border:1px solid var(--border); border-radius:10px; overflow:hidden; }
+    .pl-chat-head { display:flex; align-items:center; gap:10px; padding:10px 14px; border-bottom:1px solid var(--border); background:var(--card); }
+    .pl-chat-avatar { width:38px; height:38px; border-radius:50%; background:linear-gradient(135deg, oklch(0.62 0.19 310), oklch(0.6 0.22 345)); color:#fff; display:flex; align-items:center; justify-content:center; font-weight:700; font-size:14px; flex-shrink:0; }
+    .pl-chat-head .nm { font-weight:600; font-size:13px; }
+    .pl-chat-head .sub { font-size:11px; color:var(--muted-foreground); }
+    .pl-chat-line { margin-top:4px; }
+    .pl-chat-line select { font-size:11px; padding:3px 6px; border:1px solid var(--border); border-radius:4px; max-width:220px; background:var(--background); }
+    .pl-chat-refresh { background:transparent; border:1px solid var(--border); border-radius:6px; padding:6px; cursor:pointer; color:var(--muted-foreground); display:flex; align-items:center; }
+    .pl-chat-refresh svg { width:14px; height:14px; }
+    .pl-chat-refresh:hover { background:var(--muted); color:var(--foreground); }
+
+    .pl-chat-body { flex:1; overflow-y:auto; padding:14px; display:flex; flex-direction:column; gap:9px; background:#f0f2f5; }
+    .pl-chat-empty { padding:40px 20px; text-align:center; color:var(--muted-foreground); font-size:13px; font-style:italic; }
+    .pl-date-divider { align-self:center; background:#fff; color:var(--muted-foreground); font-size:10.5px; font-weight:600; padding:3px 10px; border-radius:12px; letter-spacing:.03em; }
+
+    .pl-bubble { position:relative; max-width:80%; padding:7px 10px; border-radius:10px; font-size:13px; line-height:1.3; box-shadow:0 1px 1px rgba(0,0,0,0.04); }
+    .pl-bubble.in { align-self:flex-start; background:#fff; color:var(--foreground); }
+    .pl-bubble.out { align-self:flex-end; background:#d9fdd3; color:#111; }
+    .pl-bubble-text { white-space:pre-wrap; word-wrap:break-word; }
+    .pl-bubble .t { font-size:10.5px; color:#667781; margin-top:3px; text-align:right; }
+    .pl-bubble-reaction { margin-left:5px; }
+    .pl-media-img { max-width:220px; border-radius:8px; display:block; margin-bottom:4px; }
+    .pl-media-doc { display:inline-block; padding:6px 10px; background:var(--muted); border-radius:6px; font-size:12px; margin-bottom:4px; }
+
+    .pl-chat-templates { display:flex; gap:5px; padding:7px 10px; border-top:1px solid var(--border); background:var(--card); flex-wrap:wrap; }
+    .pl-tpl-chip { padding:3px 9px; font-size:11px; background:var(--muted); border:1px solid var(--border); border-radius:999px; cursor:pointer; color:var(--foreground); white-space:nowrap; max-width:160px; overflow:hidden; text-overflow:ellipsis; }
+    .pl-tpl-chip:hover { background:var(--primary-soft); color:var(--primary); border-color:var(--primary); }
+
+    .pl-chat-error { padding:6px 12px; background:oklch(0.6 0.22 22 / 0.08); color:var(--destructive); font-size:11.5px; border-top:1px solid var(--border); }
+
+    .pl-chat-input { display:flex; gap:8px; padding:10px 12px; border-top:1px solid var(--border); background:var(--card); align-items:flex-end; }
+    .pl-chat-input textarea { flex:1; border:1px solid var(--border); border-radius:8px; padding:7px 10px; font-size:13px; font-family:inherit; resize:none; background:var(--background); }
+    .pl-chat-send { width:36px; height:36px; border-radius:50%; background:linear-gradient(135deg, oklch(0.62 0.19 310), oklch(0.6 0.22 345)); color:#fff; border:none; cursor:pointer; display:flex; align-items:center; justify-content:center; flex-shrink:0; }
+    .pl-chat-send svg { width:15px; height:15px; }
+    .pl-chat-send:disabled { opacity:0.4; cursor:not-allowed; }
+</style>
+
+@code {
+    [Parameter] public Guid? LeadId { get; set; }
+    [Parameter] public string? ContactPhone { get; set; }
+    [Parameter] public string? ContactName { get; set; }
+    [Parameter] public Guid TenantId { get; set; }
+
+    private readonly string _bodyId = $"chatbody-{Guid.NewGuid():N}";
+    private ChatConversationDto? _conversation;
+    private List<MessageDto> _messages = new();
+    private List<WhatsAppLineDto> _chatLines = new();
+    private Guid _chatLineId;
+    private List<MessageTemplateDto> _templates = new();
+    private string? _draft;
+    private bool _loading = true, _sending;
+    private string? _sendError;
+    private Guid _actorUserId;
+    private string? _actorDisplayName;
+    private HubConnection? _hub;
+
+    protected override async Task OnInitializedAsync()
+    {
+        var state = await AuthProvider.GetAuthenticationStateAsync();
+        Guid.TryParse(state.User.FindFirstValue(ClaimTypes.NameIdentifier) ?? state.User.FindFirstValue("sub"), out _actorUserId);
+        _actorDisplayName = state.User.Identity?.Name;
+        await LoadAllAsync();
+    }
+
+    private async Task LoadAllAsync()
+    {
+        _loading = true;
+        try
+        {
+            var lines = await LinesSvc.ListAsync();
+            _chatLines = lines.Where(l => l.Status == WhatsAppLineStatus.Connected).ToList();
+            if (_chatLines.Count > 0 && _chatLineId == Guid.Empty) { _chatLineId = _chatLines[0].Id; }
+
+            if (!string.IsNullOrWhiteSpace(ContactPhone))
+            {
+                _conversation = LeadId is Guid lid
+                    ? await ChatSvc.GetOrCreateForLeadAsync(lid)
+                    : await ChatSvc.GetOrCreateForPhoneAsync(ContactPhone!, ContactName);
+                if (_conversation is not null)
+                {
+                    _messages = (await ChatSvc.ListMessagesAsync(_conversation.Id)).ToList();
+                }
+            }
+            try
+            {
+                _templates = (await TemplatesSvc.ListAsync()).ToList();
+            }
+            catch { /* templates opcional */ }
+
+            await StartHubAsync();
+        }
+        finally { _loading = false; }
+        await Task.Delay(50);
+        await ScrollToBottomAsync();
+    }
+
+    private async Task LoadMessagesAsync()
+    {
+        if (_conversation is null) { return; }
+        _messages = (await ChatSvc.ListMessagesAsync(_conversation.Id)).ToList();
+        StateHasChanged();
+        await Task.Delay(50);
+        await ScrollToBottomAsync();
+    }
+
+    private async Task StartHubAsync()
+    {
+        if (_hub is not null || TenantId == Guid.Empty) { return; }
+        try
+        {
+            _hub = new HubConnectionBuilder()
+                .WithUrl(Nav.ToAbsoluteUri("/hubs/chat"))
+                .WithAutomaticReconnect()
+                .Build();
+            _hub.On<MessageDto>("MessageAdded", async msg =>
+            {
+                if (_conversation is null || msg.ConversationId != _conversation.Id) { return; }
+                if (_messages.Any(x => x.Id == msg.Id)) { return; }
+                _messages.Add(msg);
+                await InvokeAsync(StateHasChanged);
+                await ScrollToBottomAsync();
+            });
+            await _hub.StartAsync();
+            await _hub.SendAsync("JoinTenant", TenantId);
+        }
+        catch
+        {
+            // SignalR es best-effort: si falla el hub, el chat sigue funcionando con el boton
+            // Recargar y los mensajes que agregamos localmente al enviar.
+            _hub = null;
+        }
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        if (_hub is not null)
+        {
+            try { await _hub.DisposeAsync(); } catch { }
+            _hub = null;
+        }
+    }
+
+    private async Task SendAsync()
+    {
+        if (string.IsNullOrWhiteSpace(_draft) || _conversation is null || _chatLineId == Guid.Empty) { return; }
+        _sending = true; _sendError = null;
+        try
+        {
+            var body = _draft!.Trim();
+            var result = await ChatSvc.SendViaLineAsync(_conversation.Id, _chatLineId, body, _actorUserId, _actorDisplayName);
+            if (!result.Ok)
+            {
+                _sendError = result.Error ?? "No se pudo enviar.";
+                return;
+            }
+            if (result.Message is not null && !_messages.Any(x => x.Id == result.Message.Id))
+            {
+                _messages.Add(result.Message);
+            }
+            _draft = string.Empty;
+            StateHasChanged();
+            await Task.Delay(50);
+            await ScrollToBottomAsync();
+        }
+        finally { _sending = false; }
+    }
+
+    private async Task OnKeyDownAsync(KeyboardEventArgs e)
+    {
+        if (e.Key == "Enter" && !e.ShiftKey)
+        {
+            await SendAsync();
+        }
+    }
+
+    private void UseTemplate(MessageTemplateDto t)
+    {
+        if (string.IsNullOrEmpty(t.Body)) { return; }
+        _draft = string.IsNullOrEmpty(_draft) ? t.Body : _draft + "\n" + t.Body;
+    }
+
+    private async Task ScrollToBottomAsync()
+    {
+        try { await JS.InvokeVoidAsync("eval", $"(function(){{var el=document.getElementById('{_bodyId}');if(el)el.scrollTop=el.scrollHeight;}})()"); }
+        catch { /* ignored */ }
+    }
+
+    private static string Initials(string? name)
+    {
+        if (string.IsNullOrWhiteSpace(name)) { return "?"; }
+        var parts = name.Trim().Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        return parts.Length == 1
+            ? parts[0][..Math.Min(2, parts[0].Length)].ToUpperInvariant()
+            : $"{parts[0][0]}{parts[1][0]}".ToUpperInvariant();
+    }
+
+    private static string Trim(string s, int max) => s.Length <= max ? s : s[..max] + "...";
+}

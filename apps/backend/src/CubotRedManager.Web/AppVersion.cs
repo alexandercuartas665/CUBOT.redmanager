@@ -10,7 +10,7 @@ public static class AppVersion
 {
     /// <summary>Version semantica del producto (MAJOR.MINOR.PATCH). Se incrementa manualmente en commits
     /// que cierran un hito funcional. Es el numero que ve el usuario en login y en el sidebar.</summary>
-    public const string SemanticVersion = "0.3.0";
+    public const string SemanticVersion = "0.3.1";
 
     /// <summary>SHA corto del commit desplegado (7 chars). "dev" si la variable no esta definida (local).</summary>
     public static string ShortSha { get; } = ReadShortSha();

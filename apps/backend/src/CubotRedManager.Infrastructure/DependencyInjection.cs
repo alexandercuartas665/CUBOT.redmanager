@@ -55,7 +55,10 @@ public static class DependencyInjection
         services.AddScoped<IBlockedNumberService, BlockedNumberService>();
         services.AddScoped<IAgentRunLogService, AgentRunLogService>();
         services.AddScoped<IChatIngestService, ChatIngestService>();
-        // Chat broadcaster (NoOp por defecto; el host puede reemplazar por SignalR).
+        services.AddScoped<IChatService, ChatService>();
+        // Chat broadcaster (NoOp por defecto; el host puede reemplazar por SignalR
+        // llamando a services.Replace(ServiceDescriptor.Scoped<IChatBroadcaster, SignalRChatBroadcaster>())
+        // despues de este AddApplicationInfrastructure).
         services.AddScoped<IChatBroadcaster, NoOpChatBroadcaster>();
         // Media reader real: lee el binario del recurso desde ai_agent_resources.file_content
         // (URLs /api/agent-resources/{id}/file), descarga URLs http(s) externas (imagenes de
