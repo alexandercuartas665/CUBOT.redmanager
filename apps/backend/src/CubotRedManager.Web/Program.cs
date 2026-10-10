@@ -642,7 +642,9 @@ app.MapMethods("/api/agents/{id:guid}/payment-config", new[] { "PATCH" }, async 
 //  - El binding emulado NO toca bindings reales: la linea Emulator es exclusiva, solo rotamos cual
 //    agente la atiende en cada prueba. Los bindings a lineas reales (Evolution/Cloud/YCloud) quedan
 //    intactos, asi que probar un agente NO rompe su WhatsApp real.
-// Autenticacion: cookie Blazor con tenant_id (misma que la consola).
+// Autenticacion dual: (a) cookie Blazor con tenant_id (consola), o (b) header X-Api-Token con
+// un ApiToken opaco del tenant (scripts externos, pruebas desde otro cliente HTTP). El primero
+// que resuelva un tenant valido manda.
 app.MapPost("/api/test/agent", async (
     TestAgentRequest req,
     HttpContext http,
@@ -650,15 +652,27 @@ app.MapPost("/api/test/agent", async (
     CubotRedManager.Application.Tenancy.IChatIngestService ingest,
     CubotRedManager.Application.Tenancy.IAgentDispatcher dispatcher,
     CubotRedManager.Application.Tenancy.IAiAgentLineBindingService bindings,
+    CubotRedManager.Application.Tenancy.IApiTokenService tokens,
     CubotRedManager.Application.Abstractions.IAmbientTenantOverride ambient,
     TimeProvider time,
     CancellationToken ct) =>
 {
-    // 1. Tenant del claim de la sesion.
+    // 1. Tenant: primero el claim de la cookie; si no hay, X-Api-Token.
+    Guid tenantId;
+    Guid actorUserId;
     var tenantClaim = http.User.FindFirst("tenant_id")?.Value;
-    if (!Guid.TryParse(tenantClaim, out var tenantId)) { return Results.Unauthorized(); }
-    Guid.TryParse(http.User.FindFirstValue(System.Security.Claims.ClaimTypes.NameIdentifier)
-                   ?? http.User.FindFirstValue("sub"), out var actorUserId);
+    if (Guid.TryParse(tenantClaim, out tenantId))
+    {
+        Guid.TryParse(http.User.FindFirstValue(System.Security.Claims.ClaimTypes.NameIdentifier)
+                       ?? http.User.FindFirstValue("sub"), out actorUserId);
+    }
+    else
+    {
+        var tokenIdent = await AuthenticateApiTokenAsync(http, tokens, ambient);
+        if (tokenIdent is null) { return Results.Unauthorized(); }
+        tenantId = tokenIdent.TenantId;
+        actorUserId = tokenIdent.UserId;
+    }
     ambient.Set(tenantId, actorUserId == Guid.Empty ? null : actorUserId);
     try
     {
@@ -774,7 +788,10 @@ app.MapPost("/api/test/agent", async (
         });
     }
     finally { ambient.Set(null, null); }
-}).RequireAuthorization(CubotRedManager.Web.Authorization.AppPolicies.TenantMember).DisableAntiforgery();
+// Mismo patron que /api/agents/{id}/sync-prices y /api/data-containers/*: AllowAnonymous a nivel
+// de middleware, autenticacion interna por cookie (claim tenant_id) o por header X-Api-Token
+// (helper AuthenticateApiTokenAsync). Si ninguna de las dos resuelve tenant, el handler devuelve 401.
+}).AllowAnonymous().DisableAntiforgery();
 
 // POST /api/agents/{id}/sync-prices - sincroniza la columna Precio del DataContainer con los
 // precios actuales del catalogo FUXION (baja /api/products?country=XX por cada pais con filas y
