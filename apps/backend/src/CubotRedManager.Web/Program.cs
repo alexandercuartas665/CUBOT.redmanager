@@ -653,6 +653,47 @@ app.MapGet("/api/pipelines", async (
     finally { ambient.Set(null, null); }
 }).AllowAnonymous().DisableAntiforgery();
 
+// ===== POST /api/agents/{id}/system-prompt =====
+// Reescribe el system prompt de un agente (preservando el resto de su config). Doble guard porque
+// cambiar el prompt afecta como responde el agente a conversaciones REALES:
+//  1) ApiToken valido del tenant (el helper setea el ambient).
+//  2) Header X-Confirm-Agent-Edit: yes  (opt-in explicito del script que llama).
+//  3) Prompt minimo 50 chars (previene envios accidentales vacios/null).
+// La auditoria queda registrada por AiAgentService.UpdateAsync (super_admin_audit_logs).
+app.MapPost("/api/agents/{id:guid}/system-prompt", async (
+    Guid id,
+    HttpContext http,
+    CubotRedManager.Application.Tenancy.IApiTokenService tokens,
+    CubotRedManager.Application.Abstractions.IAmbientTenantOverride ambient,
+    CubotRedManager.Application.Tenancy.IAiAgentService agents,
+    SystemPromptRequest body,
+    CancellationToken ct) =>
+{
+    if (!string.Equals(http.Request.Headers["X-Confirm-Agent-Edit"].ToString(), "yes", StringComparison.OrdinalIgnoreCase))
+    {
+        return Results.BadRequest(new { error = "Falta header X-Confirm-Agent-Edit: yes (opt-in requerido)." });
+    }
+    var newPrompt = body.SystemPrompt ?? "";
+    if (newPrompt.Length < 50)
+    {
+        return Results.BadRequest(new { error = "El prompt debe tener al menos 50 caracteres." });
+    }
+    var ident = await AuthenticateApiTokenAsync(http, tokens, ambient);
+    if (ident is null) { return Results.Unauthorized(); }
+    try
+    {
+        var detail = await agents.GetAsync(id, ct);
+        if (detail is null) { return Results.NotFound(new { error = "Agente no encontrado." }); }
+        var a = detail.Agent;
+        var updated = await agents.UpdateAsync(id, new CubotRedManager.Application.Tenancy.UpdateAiAgentRequest(
+            a.Name, a.Role, a.Provider, a.Model, newPrompt, a.EnableDataContainerMcp,
+            a.ReactionsEnabled, a.ReactionRatioN, a.ReactionRatioM, a.ReactionEmojis,
+            a.CreateLeadsInPipeline, a.DefaultPipelineId), ident.UserId, ct);
+        return updated is null ? Results.NotFound() : Results.Ok(new { ok = true, systemPromptLength = newPrompt.Length, previousLength = a.SystemPrompt.Length });
+    }
+    finally { ambient.Set(null, null); }
+}).AllowAnonymous().DisableAntiforgery();
+
 // ===== POST /api/agents/{id}/pipeline-config =====
 // Activa/desactiva CreateLeadsInPipeline y setea DefaultPipelineId en un agente IA. Body JSON:
 //   { "createLeadsInPipeline": true, "defaultPipelineId": "GUID" }
@@ -1696,3 +1737,7 @@ public sealed record TestAgentRequest(string? Text, Guid? AgentId, string? Conta
 
 /// <summary>Payload de POST /api/agents/{id}/pipeline-config.</summary>
 public sealed record PipelineConfigRequest(bool CreateLeadsInPipeline, Guid? DefaultPipelineId);
+
+/// <summary>Payload de POST /api/agents/{id}/system-prompt. Minimo 50 chars; requiere header
+/// X-Confirm-Agent-Edit: yes.</summary>
+public sealed record SystemPromptRequest(string? SystemPrompt);
