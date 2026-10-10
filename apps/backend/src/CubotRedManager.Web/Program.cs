@@ -634,6 +634,54 @@ app.MapMethods("/api/agents/{id:guid}/payment-config", new[] { "PATCH" }, async 
     finally { ambient.Set(null, null); }
 }).AllowAnonymous().DisableAntiforgery();
 
+// ===== GET /api/pipelines =====
+// Lista los pipelines del tenant (ApiToken). Util para configurar DefaultPipelineId de un agente
+// desde un script externo sin pasar por la UI.
+app.MapGet("/api/pipelines", async (
+    HttpContext http,
+    CubotRedManager.Application.Tenancy.IApiTokenService tokens,
+    CubotRedManager.Application.Abstractions.IAmbientTenantOverride ambient,
+    CubotRedManager.Application.Tenancy.IPipelineService pipelines,
+    CancellationToken ct) =>
+{
+    var ident = await AuthenticateApiTokenAsync(http, tokens, ambient);
+    if (ident is null) { return Results.Unauthorized(); }
+    try
+    {
+        return Results.Ok(await pipelines.ListPipelinesAsync(ct));
+    }
+    finally { ambient.Set(null, null); }
+}).AllowAnonymous().DisableAntiforgery();
+
+// ===== POST /api/agents/{id}/pipeline-config =====
+// Activa/desactiva CreateLeadsInPipeline y setea DefaultPipelineId en un agente IA. Body JSON:
+//   { "createLeadsInPipeline": true, "defaultPipelineId": "GUID" }
+// Preserva los demas campos del agente (Name, Role, Provider, Model, Prompt, EnableMcp, Reactions).
+app.MapPost("/api/agents/{id:guid}/pipeline-config", async (
+    Guid id,
+    HttpContext http,
+    CubotRedManager.Application.Tenancy.IApiTokenService tokens,
+    CubotRedManager.Application.Abstractions.IAmbientTenantOverride ambient,
+    CubotRedManager.Application.Tenancy.IAiAgentService agents,
+    PipelineConfigRequest body,
+    CancellationToken ct) =>
+{
+    var ident = await AuthenticateApiTokenAsync(http, tokens, ambient);
+    if (ident is null) { return Results.Unauthorized(); }
+    try
+    {
+        var detail = await agents.GetAsync(id, ct);
+        if (detail is null) { return Results.NotFound(new { error = "Agente no encontrado." }); }
+        var a = detail.Agent;
+        var updated = await agents.UpdateAsync(id, new CubotRedManager.Application.Tenancy.UpdateAiAgentRequest(
+            a.Name, a.Role, a.Provider, a.Model, a.SystemPrompt, a.EnableDataContainerMcp,
+            a.ReactionsEnabled, a.ReactionRatioN, a.ReactionRatioM, a.ReactionEmojis,
+            body.CreateLeadsInPipeline, body.DefaultPipelineId), ident.UserId, ct);
+        return updated is null ? Results.NotFound() : Results.Ok(updated);
+    }
+    finally { ambient.Set(null, null); }
+}).AllowAnonymous().DisableAntiforgery();
+
 // ===== POST /api/test/agent =====
 // Emulador de linea de WhatsApp: inyecta un mensaje "como si fuera el cliente" y corre el runtime
 // REAL del agente (ChatIngestService + AgentDispatcher) sin que la respuesta salga a ningun provider.
@@ -763,15 +811,37 @@ app.MapPost("/api/test/agent", async (
         //    gateway aunque el server termine OK — en ese caso revisar BD / /conversaciones.
         var dispatchResult = await dispatcher.DispatchForTestAsync(tenantId, conversationId.Value, line.Id, inboundText, ct);
 
-        // 8. Respuesta: el ultimo mensaje saliente queda en BD. Preferimos leer de BD (incluye lo
-        //    que agentes emiten via herramientas / markers), con fallback a dispatchResult.ReplyText.
-        var replyFromDb = await db.Messages.IgnoreQueryFilters()
+        // 8. Respuesta: TODOS los mensajes salientes del turno (orden cronologico). Un turno real
+        //    puede producir varios salientes (reaccion + texto + recursos + link resuelto). Para que
+        //    el emulador sea fiel, los devolvemos todos, no solo el primero.
+        var outboundsRaw = await db.Messages.IgnoreQueryFilters()
             .Where(m => m.TenantId == tenantId && m.ConversationId == conversationId.Value
                      && m.Direction == CubotRedManager.Domain.Enums.MessageDirection.Outbound
                      && m.SentAt >= now)
-            .OrderByDescending(m => m.SentAt)
-            .Select(m => m.Body)
-            .FirstOrDefaultAsync(ct);
+            .OrderBy(m => m.SentAt)
+            .Select(m => new { m.Body, m.MessageType, m.SentAt })
+            .ToListAsync(ct);
+        var outbounds = outboundsRaw.Select(m => new {
+            body = m.Body,
+            messageType = m.MessageType,
+            sentAt = m.SentAt
+        }).ToList();
+
+        // Validaciones post-dispatch utiles para pruebas:
+        //  - linkPagoRequested: el prompt pidio generar link ([[link_pago] aparecio al menos una vez).
+        //  - linkPagoResolved: encontramos una URL que el PaymentLinkProcessor sustituyo (http/https
+        //    reales en algun saliente). Si fue requested pero no resolved => quedo marker crudo o
+        //    fallback: ver outbounds para diagnosticar (nombre no mapeado, token expirado, catalogo).
+        //  - resolvedUrls: lista de URLs reales encontradas, para que la prueba pueda hacer HEAD.
+        //  - unresolvedMarkers: markers que quedaron sin procesar (bracket pairs sueltos).
+        var urlRegex = new System.Text.RegularExpressions.Regex(@"https?://[^\s)\]>]+", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+        var markerRegex = new System.Text.RegularExpressions.Regex(@"\[\[[^\]]+\]\]");
+        var allBodies = string.Join("\n", outboundsRaw.Select(x => x.Body ?? ""));
+        var linkPagoRequested = allBodies.Contains("[[link_pago", StringComparison.OrdinalIgnoreCase)
+            || outboundsRaw.Any(x => (x.Body ?? "").Contains("salesLink", StringComparison.OrdinalIgnoreCase));
+        var resolvedUrls = urlRegex.Matches(allBodies).Select(m => m.Value).Distinct().ToList();
+        var unresolvedMarkers = markerRegex.Matches(allBodies).Select(m => m.Value).Distinct().ToList();
+        var linkPagoResolved = linkPagoRequested && resolvedUrls.Count > 0;
 
         return Results.Ok(new
         {
@@ -780,7 +850,12 @@ app.MapPost("/api/test/agent", async (
             agentId,
             ok = dispatchResult.Ok,
             skipReason = dispatchResult.SkipReason,
-            reply = replyFromDb ?? dispatchResult.ReplyText,
+            reply = outboundsRaw.Count > 0 ? outboundsRaw[^1].Body : dispatchResult.ReplyText,
+            outbounds,
+            resolvedUrls,
+            unresolvedMarkers,
+            linkPagoRequested,
+            linkPagoResolved,
             simulated = dispatchResult.Simulated,
             leadsCreated = dispatchResult.LeadsCreated,
             inputTokens = dispatchResult.InputTokens,
@@ -1618,3 +1693,6 @@ public sealed record SuperAdminLoginRequest(string Email, string Password);
 ///   - AgentId: agente a probar; si es null, el primer activo del tenant.
 ///   - ContactPhone/ContactName: identificacion del "contacto" virtual (defaults razonables).</summary>
 public sealed record TestAgentRequest(string? Text, Guid? AgentId, string? ContactPhone, string? ContactName);
+
+/// <summary>Payload de POST /api/agents/{id}/pipeline-config.</summary>
+public sealed record PipelineConfigRequest(bool CreateLeadsInPipeline, Guid? DefaultPipelineId);
