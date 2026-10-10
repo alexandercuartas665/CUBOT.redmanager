@@ -360,7 +360,6 @@ else
             </div>
             <div class="pl-tabs">
                 <button class="pl-tab @(_tab == "datos" ? "on" : "")" @onclick='() => _tab = "datos"'>Datos</button>
-                <button class="pl-tab @(_tab == "chat" ? "on" : "")" @onclick='() => _tab = "chat"'>Chat</button>
                 <button class="pl-tab @(_tab == "notas" ? "on" : "")" @onclick='() => _tab = "notas"'>Notas (@_notes.Count)</button>
                 <button class="pl-tab @(_tab == "archivos" ? "on" : "")" @onclick='() => _tab = "archivos"'>Archivos (@_files.Count)</button>
                 <button class="pl-tab @(_tab == "actividad" ? "on" : "")" @onclick='() => _tab = "actividad"'>Actividad (@_activities.Count)</button>
@@ -460,15 +459,6 @@ else
                             }
                         </div>
                     }
-                }
-                else if (_tab == "chat")
-                {
-                    <div style="margin:-20px;">
-                        <ChatPanel LeadId="@_editLead.Id"
-                                   ContactPhone="@_editLead.ContactPhone"
-                                   ContactName="@_editLead.ContactName"
-                                   TenantId="@_tenantId" />
-                    </div>
                 }
                 else if (_tab == "notas")
                 {
@@ -871,7 +861,6 @@ else
     private bool _loading = true, _busy, _canManage, _canPurge, _leadSaved;
     private bool _newLeadOpen, _leadOpen, _historyOpen, _configOpen, _filtersOpen;
     private Guid _actor;
-    private Guid _tenantId;
     private int _conversion;
     private string _search = "", _sortBy = "time", _tab = "datos", _boardView = "kanban";
     private string _newNote = "", _newNoteColor = "yellow";
@@ -897,7 +886,6 @@ else
     {
         var st = await AuthProvider.GetAuthenticationStateAsync();
         Guid.TryParse(st.User.FindFirst(ClaimTypes.NameIdentifier)?.Value, out _actor);
-        Guid.TryParse(st.User.FindFirst("tenant_id")?.Value, out _tenantId);
         var role = st.User.FindFirst("tenant_role")?.Value;
         _canManage = role is "Owner" or "Admin";
         _canPurge = role is "Owner" or "Admin";
