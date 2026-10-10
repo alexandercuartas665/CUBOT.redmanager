@@ -463,6 +463,24 @@ public sealed class AgentDispatcher : IAgentDispatcher
             pedidoClean = _pedidoMarker.StripMarkers(leadResult.CleanText);
         }
 
+        // Resolver [[link_pago]] a URLs reales (paridad con DispatchAsync). Sin esto, el emulador
+        // guarda el marker crudo y la respuesta nunca lleva el sales-link.
+        if (pedidoClean.Contains("[[link_pago", StringComparison.OrdinalIgnoreCase))
+        {
+            var payResult = await _paymentLinker.ProcessAsync(tenantId, binding.AgentId, pedidoClean, cancellationToken);
+            pedidoClean = payResult.ProcessedText;
+            if (payResult.MarkersFound > 0)
+            {
+                var kind = payResult.LinksFailed > 0 ? AiAgentRunLogKind.Error : AiAgentRunLogKind.Tool;
+                var body = payResult.Errors.Count > 0
+                    ? string.Join(" | ", payResult.Errors)
+                    : $"OK: markers={payResult.MarkersFound} generados={payResult.LinksGenerated} fallidos={payResult.LinksFailed}"
+                      + (payResult.GeneratedUrls.Count > 0 ? "\nURLs:\n- " + string.Join("\n- ", payResult.GeneratedUrls) : "");
+                await LogRunAsync(tenantId, conversationId, binding.AgentId, kind,
+                    "Payment link processor (test)", body, null, cancellationToken);
+            }
+        }
+
         // NOTA(redmanager): sin Lead+Pipeline no hay etapas para reportar.
         var stages = new List<string>();
 
