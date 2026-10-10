@@ -917,9 +917,27 @@ else
 
     private async Task OpenConfigForAsync(Guid pipelineId)
     {
-        await SelectPipelineInternalAsync(pipelineId);
+        // Setear _currentPipelineId ANTES del await — mismo patron que SelectPipeline — para
+        // evitar un render intermedio con _currentPipeline seteado pero stages=0 que confunde al
+        // layout condicional (_stages.Count==0 muestra "sin etapas"). Try/catch defensivo para
+        // que un fallo del backend no tumbe el circuit Blazor.
         _currentPipelineId = pipelineId;
-        OpenConfig();
+        try
+        {
+            await SelectPipelineInternalAsync(pipelineId);
+            OpenConfig();
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"OpenConfigForAsync fail: {ex}");
+            // Si fallo la carga de stages/fields/leads, al menos marcamos para que el markup
+            // muestre "sin etapas" y permita abrir el modal igual (los campos editables del modal
+            // iteran sobre listas vacias sin reventar).
+            _stages ??= new();
+            _fields ??= new();
+            _leads ??= new();
+            OpenConfig();
+        }
     }
 
     private void BackToIndex()
