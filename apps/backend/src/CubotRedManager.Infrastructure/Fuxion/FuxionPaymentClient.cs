@@ -143,8 +143,11 @@ public sealed class FuxionPaymentClient : IFuxionPaymentClient
             {
                 _logger.LogWarning("FuxionPayment: response {Status} sin URL en path {Path}. Body: {Body}",
                     status, req.ResponseUrlPath, TruncateForLog(respBody));
+                // Incluir status + body truncado en ErrorDetail para que el operador pueda diagnosticar
+                // desde la bitacora del agente sin tener que buscar en logs del contenedor Railway.
+                var bodySnippet = string.IsNullOrWhiteSpace(respBody) ? "(body vacio)" : TruncateForLog(respBody, 500);
                 return FuxionGenerateLinkResult.Failure(FuxionGenerateLinkErrorKind.UnexpectedResponse,
-                    $"respuesta sin URL en '{req.ResponseUrlPath}'. Revisar overrides en /agentes.", status);
+                    $"HTTP {status} sin URL en path '{req.ResponseUrlPath}'. Body FUXION: {bodySnippet}", status);
             }
             return FuxionGenerateLinkResult.Success(url);
         }
