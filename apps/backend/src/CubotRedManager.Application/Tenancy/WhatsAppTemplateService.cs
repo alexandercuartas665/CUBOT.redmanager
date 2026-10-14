@@ -16,16 +16,18 @@ public sealed class WhatsAppTemplateService : IWhatsAppTemplateService
     private readonly ITenantContext _tenantContext;
     private readonly ISecretProtector _secretProtector;
     private readonly IYCloudApiClient _ycloud;
+    private readonly IWhatsAppConnectorService _connector;
     private readonly IAuditWriter _audit;
     private readonly TimeProvider _timeProvider;
 
     public WhatsAppTemplateService(IApplicationDbContext db, ITenantContext tenantContext, ISecretProtector secretProtector,
-        IYCloudApiClient ycloud, IAuditWriter audit, TimeProvider timeProvider)
+        IYCloudApiClient ycloud, IWhatsAppConnectorService connector, IAuditWriter audit, TimeProvider timeProvider)
     {
         _db = db;
         _tenantContext = tenantContext;
         _secretProtector = secretProtector;
         _ycloud = ycloud;
+        _connector = connector;
         _audit = audit;
         _timeProvider = timeProvider;
     }
@@ -298,5 +300,138 @@ public sealed class WhatsAppTemplateService : IWhatsAppTemplateService
             t.Id, t.Name, t.Language, t.Category, t.HeaderType, t.HeaderText, t.BodyText, t.FooterText,
             vars, t.Provider, t.WhatsAppLineId, t.WabaId, t.Status, t.ProviderTemplateId, t.RejectionReason,
             t.SubmittedAt, t.ReviewedAt);
+    }
+
+    // =========================================================================
+    // PR E — TestSend + Import + SetActive
+    // =========================================================================
+
+    public async Task<string?> SetActiveAsync(Guid id, bool active, Guid actorUserId, CancellationToken cancellationToken = default)
+    {
+        var t = await _db.WhatsAppTemplates.FirstOrDefaultAsync(x => x.Id == id, cancellationToken);
+        if (t is null) { return null; }
+        var previous = t.Status;
+        // Si se desactiva, marca Disabled; si se reactiva, vuelve a Draft si no estaba Approved/Submitted.
+        if (!active)
+        {
+            if (t.Status == "Disabled") { return t.Status; }
+            t.Status = "Disabled";
+        }
+        else
+        {
+            if (t.Status != "Disabled") { return t.Status; }
+            t.Status = string.IsNullOrWhiteSpace(t.ProviderTemplateId) ? "Draft" : "Approved";
+        }
+        t.UpdatedAt = _timeProvider.GetUtcNow();
+        _audit.Write(actorUserId, "wa-template.set-active", nameof(WhatsAppTemplate), t.Id,
+            previousValue: new { status = previous }, newValue: new { status = t.Status, active },
+            tenantId: t.TenantId);
+        await _db.SaveChangesAsync(cancellationToken);
+        return t.Status;
+    }
+
+    public async Task<TemplateTestSendResult> TestSendAsync(Guid id, Guid whatsAppLineId, string phone,
+        IReadOnlyList<string>? values, string? headerMediaUrl, Guid actorUserId,
+        CancellationToken cancellationToken = default)
+    {
+        var t = await _db.WhatsAppTemplates.AsNoTracking().FirstOrDefaultAsync(x => x.Id == id, cancellationToken);
+        if (t is null) { return new TemplateTestSendResult(false, "Plantilla no encontrada.", null); }
+        if (string.IsNullOrWhiteSpace(phone)) { return new TemplateTestSendResult(false, "Indica el numero destino.", null); }
+
+        // Si no vinieron valores, usar los ejemplos del VariablesJson (en orden).
+        List<string> bodyParams = (values ?? Array.Empty<string>()).ToList();
+        if (bodyParams.Count == 0)
+        {
+            try
+            {
+                var vars = JsonSerializer.Deserialize<List<WhatsAppTemplateVariable>>(t.VariablesJson) ?? new();
+                bodyParams = vars.Select(v => v.Example ?? v.Token).ToList();
+            }
+            catch { /* lista vacia */ }
+        }
+
+        // Header de media: toma el tipo del HeaderType (IMAGE/VIDEO/DOCUMENT) si matchea.
+        string? headerMediaType = null;
+        if (!string.IsNullOrWhiteSpace(headerMediaUrl) && !string.IsNullOrWhiteSpace(t.HeaderType))
+        {
+            var h = t.HeaderType!.Trim().ToUpperInvariant();
+            headerMediaType = h switch { "IMAGE" => "image", "VIDEO" => "video", "DOCUMENT" => "document", _ => null };
+        }
+
+        var sendResult = await _connector.SendTemplateAsync(whatsAppLineId, phone, t.Name, t.Language,
+            bodyParams, actorUserId, headerMediaType, headerMediaUrl, null, null, cancellationToken);
+        return new TemplateTestSendResult(sendResult.Ok, sendResult.Error, sendResult.MessageId);
+    }
+
+    public async Task<TemplateImportReport> ImportFromYCloudAsync(Guid whatsAppLineId, Guid actorUserId,
+        CancellationToken cancellationToken = default)
+    {
+        if (_tenantContext.TenantId is not Guid tenantId)
+        {
+            return new TemplateImportReport(false, 0, 0, 0, "Sin tenant activo.");
+        }
+        var line = await _db.WhatsAppLines.AsNoTracking().FirstOrDefaultAsync(l => l.Id == whatsAppLineId, cancellationToken);
+        if (line is null) { return new TemplateImportReport(false, 0, 0, 0, "Linea no encontrada."); }
+        if (line.Provider != WhatsAppProvider.YCloud)
+        {
+            return new TemplateImportReport(false, 0, 0, 0, "Solo lineas YCloud en este corte.");
+        }
+        if (string.IsNullOrWhiteSpace(line.YCloudApiKeyEncrypted) || string.IsNullOrWhiteSpace(line.YCloudWabaId))
+        {
+            return new TemplateImportReport(false, 0, 0, 0, "Falta API key o WABA Id en la linea.");
+        }
+        string apiKey;
+        try { apiKey = _secretProtector.Unprotect(line.YCloudApiKeyEncrypted!); }
+        catch { return new TemplateImportReport(false, 0, 0, 0, "No se pudo descifrar la API key."); }
+
+        var listRes = await _ycloud.ListTemplatesAsync(apiKey, line.YCloudWabaId!, cancellationToken);
+        if (!listRes.IsSuccess) { return new TemplateImportReport(false, 0, 0, 0, listRes.Error ?? "Error listando en YCloud."); }
+
+        int imported = 0, updated = 0, skipped = 0;
+        var now = _timeProvider.GetUtcNow();
+        foreach (var item in listRes.Items)
+        {
+            var name = item.Name;
+            var lang = item.Language ?? "es";
+            var local = await _db.WhatsAppTemplates.FirstOrDefaultAsync(x => x.Name == name && x.Language == lang, cancellationToken);
+            var mappedStatus = MapProviderStatus(item.Status) ?? "Approved";
+            if (local is null)
+            {
+                _db.WhatsAppTemplates.Add(new WhatsAppTemplate
+                {
+                    TenantId = tenantId,
+                    Name = name,
+                    Language = lang,
+                    Category = "UTILITY",
+                    BodyText = "(importada desde YCloud; edita en la UI para ver el cuerpo real)",
+                    VariablesJson = "[]",
+                    Provider = WhatsAppProvider.YCloud,
+                    WhatsAppLineId = line.Id,
+                    WabaId = line.YCloudWabaId,
+                    Status = mappedStatus,
+                    ProviderTemplateId = item.Id,
+                    RejectionReason = item.RejectedReason,
+                    ReviewedAt = now
+                });
+                imported++;
+            }
+            else
+            {
+                var changed = false;
+                if (local.Status != mappedStatus) { local.Status = mappedStatus; changed = true; }
+                if (local.ProviderTemplateId != item.Id) { local.ProviderTemplateId = item.Id; changed = true; }
+                if (local.RejectionReason != item.RejectedReason) { local.RejectionReason = item.RejectedReason; changed = true; }
+                if (changed) { local.UpdatedAt = now; local.ReviewedAt = now; updated++; }
+                else { skipped++; }
+            }
+        }
+        if (imported + updated > 0)
+        {
+            _audit.Write(actorUserId, "wa-template.import-ycloud", nameof(WhatsAppLine), line.Id,
+                previousValue: null, newValue: new { imported, updated, skipped },
+                tenantId: tenantId);
+            await _db.SaveChangesAsync(cancellationToken);
+        }
+        return new TemplateImportReport(true, imported, updated, skipped, null);
     }
 }
