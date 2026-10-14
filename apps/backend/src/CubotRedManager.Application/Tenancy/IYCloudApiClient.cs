@@ -53,7 +53,24 @@ public sealed record YCloudSendResult(bool IsSuccess, string? MessageId, string?
 /// PENDING al crear (Meta la revisa); APPROVED inmediato solo para AUTHENTICATION.</summary>
 public sealed record YCloudTemplateResult(bool IsSuccess, string? Id, string? Status, string? Error);
 
-public sealed record YCloudTemplateStatus(string Name, string? Language, string Status, string? Id, string? RejectedReason);
+/// <summary>Estado y contenido de una plantilla HSM tal como lo devuelve YCloud (formato Meta en
+/// items[]). Los campos despues de RejectedReason son opcionales y vienen poblados cuando se parsea
+/// el componentes[] completo (via YCloudTemplateParser): Category, HeaderFormat (TEXT/IMAGE/VIDEO/
+/// DOCUMENT), HeaderText (solo si HeaderFormat=TEXT), BodyText, FooterText, VariableExamples (una
+/// entrada por variable {{1}}..{{N}} del body con su ejemplo) y Buttons (QUICK_REPLY/URL/PHONE_NUMBER).
+/// Sirven al ImportFromYCloudAsync para hidratar la plantilla local sin perder su cuerpo real.</summary>
+public sealed record YCloudTemplateStatus(string Name, string? Language, string Status, string? Id, string? RejectedReason,
+    string? Category = null,
+    string? HeaderFormat = null,
+    string? HeaderText = null,
+    string? BodyText = null,
+    string? FooterText = null,
+    IReadOnlyList<string>? VariableExamples = null,
+    IReadOnlyList<WhatsAppTemplateButtonInfo>? Buttons = null);
+
+/// <summary>Metadata de un boton de plantilla devuelto por YCloud/Meta. HasVariable=true si Url
+/// contiene {{ (boton URL dinamico que necesita sufijo por envio); informativo para la UI.</summary>
+public sealed record WhatsAppTemplateButtonInfo(string Type, string? Text, string? Url, string? PhoneNumber, bool HasVariable);
 
 public sealed record YCloudTemplateListResult(bool IsSuccess, IReadOnlyList<YCloudTemplateStatus> Items, string? Error);
 

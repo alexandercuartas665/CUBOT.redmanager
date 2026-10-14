@@ -395,6 +395,13 @@ public sealed class WhatsAppTemplateService : IWhatsAppTemplateService
             var lang = item.Language ?? "es";
             var local = await _db.WhatsAppTemplates.FirstOrDefaultAsync(x => x.Name == name && x.Language == lang, cancellationToken);
             var mappedStatus = MapProviderStatus(item.Status) ?? "Approved";
+            // Variables del body: {{1}}..{{N}} con sus ejemplos del parser. Se serializa como [{token,example}].
+            var variablesJson = "[]";
+            if (item.VariableExamples is { Count: > 0 } vex)
+            {
+                var vars = vex.Select((v, i) => new WhatsAppTemplateVariable($"var{i + 1}", v)).ToList();
+                variablesJson = JsonSerializer.Serialize(vars);
+            }
             if (local is null)
             {
                 _db.WhatsAppTemplates.Add(new WhatsAppTemplate
@@ -402,9 +409,12 @@ public sealed class WhatsAppTemplateService : IWhatsAppTemplateService
                     TenantId = tenantId,
                     Name = name,
                     Language = lang,
-                    Category = "UTILITY",
-                    BodyText = "(importada desde YCloud; edita en la UI para ver el cuerpo real)",
-                    VariablesJson = "[]",
+                    Category = string.IsNullOrWhiteSpace(item.Category) ? "UTILITY" : item.Category!,
+                    HeaderType = item.HeaderFormat,
+                    HeaderText = item.HeaderText,
+                    BodyText = item.BodyText ?? "(importada desde YCloud; edita en la UI para ver el cuerpo real)",
+                    FooterText = item.FooterText,
+                    VariablesJson = variablesJson,
                     Provider = WhatsAppProvider.YCloud,
                     WhatsAppLineId = line.Id,
                     WabaId = line.YCloudWabaId,
@@ -421,6 +431,18 @@ public sealed class WhatsAppTemplateService : IWhatsAppTemplateService
                 if (local.Status != mappedStatus) { local.Status = mappedStatus; changed = true; }
                 if (local.ProviderTemplateId != item.Id) { local.ProviderTemplateId = item.Id; changed = true; }
                 if (local.RejectionReason != item.RejectedReason) { local.RejectionReason = item.RejectedReason; changed = true; }
+                // Si YCloud trae el cuerpo real y el local es el placeholder, lo hidratamos.
+                if (!string.IsNullOrWhiteSpace(item.BodyText) &&
+                    (string.IsNullOrWhiteSpace(local.BodyText) || local.BodyText.StartsWith("(importada desde YCloud")))
+                {
+                    local.BodyText = item.BodyText!;
+                    local.HeaderType = item.HeaderFormat;
+                    local.HeaderText = item.HeaderText;
+                    local.FooterText = item.FooterText;
+                    if (variablesJson != "[]") { local.VariablesJson = variablesJson; }
+                    if (!string.IsNullOrWhiteSpace(item.Category)) { local.Category = item.Category!; }
+                    changed = true;
+                }
                 if (changed) { local.UpdatedAt = now; local.ReviewedAt = now; updated++; }
                 else { skipped++; }
             }

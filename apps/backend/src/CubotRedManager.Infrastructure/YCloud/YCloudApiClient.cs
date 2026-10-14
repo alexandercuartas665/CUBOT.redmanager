@@ -270,14 +270,11 @@ internal sealed class YCloudApiClient : IYCloudApiClient
                     pageCount = items.GetArrayLength();
                     foreach (var it in items.EnumerateArray())
                     {
-                        var name = TryStr(it, "name");
-                        if (string.IsNullOrWhiteSpace(name)) { continue; }
-                        list.Add(new YCloudTemplateStatus(
-                            name!,
-                            TryStr(it, "language"),
-                            TryStr(it, "status") ?? "UNKNOWN",
-                            TryStr(it, "id"),
-                            TryStr(it, "rejectedReason") ?? TryStr(it, "qualityScore")));
+                        // YCloudTemplateParser extrae components HEADER/BODY/FOOTER/BUTTONS en
+                        // campos utiles (headerText, bodyText, varExamples, buttons). ImportFromYCloudAsync
+                        // ya puede hidratar el BodyText real sin placeholder.
+                        var parsed = YCloudTemplateParser.ParseItem(it);
+                        if (parsed is not null) { list.Add(parsed); }
                     }
                 }
             }
