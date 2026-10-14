@@ -35,18 +35,102 @@ public sealed class AgentRunLogService : IAgentRunLogService
 
         if (grouped.Count == 0) { return Array.Empty<AgentRunLogConversationDto>(); }
 
-        // TODO(port-conversations): cuando exista _db.Conversations, hacer JOIN para
-        // recuperar ContactName/ContactPhone/WhatsAppLineId y enriquecer las tarjetas.
+        // JOIN con Conversations (y WhatsAppLines) para enriquecer con ContactName/ContactPhone/
+        // LineLabel. Sin esto, la UI mostraba solo los primeros 8 chars del Guid como "telefono"
+        // y nunca el nombre del cliente, haciendo imposible identificar visualmente de QUE
+        // conversacion se trata al analizar bitacoras (bloqueador #1 para diagnostico remoto).
+        var convIds = grouped.Select(g => g.Id).ToList();
+        var conversations = await _db.Conversations.AsNoTracking()
+            .Where(c => convIds.Contains(c.Id))
+            .Select(c => new { c.Id, c.ContactName, c.ContactPhone, c.WhatsAppLineId })
+            .ToListAsync(cancellationToken);
+        var byId = conversations.ToDictionary(c => c.Id);
+
+        var lineIds = conversations.Where(c => c.WhatsAppLineId.HasValue)
+            .Select(c => c.WhatsAppLineId!.Value).Distinct().ToList();
+        var linesById = lineIds.Count == 0
+            ? new Dictionary<Guid, (string Instance, string? Phone)>()
+            : (await _db.WhatsAppLines.AsNoTracking()
+                .Where(l => lineIds.Contains(l.Id))
+                .Select(l => new { l.Id, l.InstanceName, l.PhoneNumber })
+                .ToListAsync(cancellationToken))
+                .ToDictionary(l => l.Id, l => (Instance: l.InstanceName, Phone: (string?)l.PhoneNumber));
+
         return grouped
-            .Select(g => new AgentRunLogConversationDto(
-                g.Id,
-                ContactName: null,
-                ContactPhone: g.Id.ToString().Substring(0, 8),
-                LineLabel: null,
-                LastActivityAt: g.Last,
-                Events: g.Events))
+            .Select(g =>
+            {
+                byId.TryGetValue(g.Id, out var conv);
+                string? name = conv?.ContactName;
+                // Si no hay conversacion resuelta (log huerfano) mostramos el guid cortado para
+                // no reventar la UI, pero esta ruta no deberia dispararse en operacion normal
+                // porque todo mensaje IA se enlaza a una Conversation.
+                string phone = conv?.ContactPhone ?? ("?-" + g.Id.ToString()[..8]);
+                string? lineLabel = null;
+                if (conv?.WhatsAppLineId is Guid lid && linesById.TryGetValue(lid, out var line))
+                {
+                    lineLabel = string.IsNullOrWhiteSpace(line.Phone) ? line.Instance : $"{line.Instance} ({line.Phone})";
+                }
+                return new AgentRunLogConversationDto(g.Id, name, phone, lineLabel, g.Last, g.Events);
+            })
             .OrderByDescending(c => c.LastActivityAt)
             .ToList();
+    }
+
+    public async Task<AgentRunLogConversationDto?> FindLatestByPhoneAsync(string phoneDigits, CancellationToken cancellationToken = default)
+    {
+        // Diagnostico-friendly: dado un numero (con o sin + y espacios) devuelve la ultima
+        // conversacion del tenant cuyo ContactPhone contenga esos digitos. Normalizamos ambos
+        // lados a solo digitos para tolerar formatos: "+57 300 123 4567" matchea "573001234567".
+        if (_tenantContext.TenantId is not Guid) { return null; }
+        var needle = new string((phoneDigits ?? string.Empty).Where(char.IsDigit).ToArray());
+        if (needle.Length < 5) { return null; }
+
+        // Primero: solo conversaciones que tienen entradas de bitacora (ultimo OccurredAt).
+        var activity = await _db.AiAgentRunLogs.AsNoTracking()
+            .GroupBy(l => l.ConversationId)
+            .Select(g => new { Id = g.Key, Count = g.Count(), Last = g.Max(x => x.OccurredAt) })
+            .ToListAsync(cancellationToken);
+        if (activity.Count == 0) { return null; }
+
+        var ids = activity.Select(a => a.Id).ToList();
+        var convs = await _db.Conversations.AsNoTracking()
+            .Where(c => ids.Contains(c.Id) && c.ContactPhone != null)
+            .Select(c => new { c.Id, c.ContactName, c.ContactPhone, c.WhatsAppLineId })
+            .ToListAsync(cancellationToken);
+
+        // Match por "contiene digitos" en ambos sentidos: cubre el caso E.164 vs sin indicativo.
+        var match = convs
+            .Select(c => new
+            {
+                c.Id, c.ContactName, c.ContactPhone, c.WhatsAppLineId,
+                Digits = new string(c.ContactPhone!.Where(char.IsDigit).ToArray())
+            })
+            .Where(x => x.Digits.Contains(needle, StringComparison.Ordinal)
+                     || needle.Contains(x.Digits, StringComparison.Ordinal))
+            .ToList();
+        if (match.Count == 0) { return null; }
+
+        var activityById = activity.ToDictionary(a => a.Id);
+        var winner = match
+            .Where(m => activityById.ContainsKey(m.Id))
+            .OrderByDescending(m => activityById[m.Id].Last)
+            .FirstOrDefault();
+        if (winner is null) { return null; }
+
+        string? lineLabel = null;
+        if (winner.WhatsAppLineId is Guid lid)
+        {
+            var line = await _db.WhatsAppLines.AsNoTracking()
+                .Where(l => l.Id == lid)
+                .Select(l => new { l.InstanceName, l.PhoneNumber })
+                .FirstOrDefaultAsync(cancellationToken);
+            if (line is not null)
+            {
+                lineLabel = string.IsNullOrWhiteSpace(line.PhoneNumber) ? line.InstanceName : $"{line.InstanceName} ({line.PhoneNumber})";
+            }
+        }
+        var agg = activityById[winner.Id];
+        return new AgentRunLogConversationDto(winner.Id, winner.ContactName, winner.ContactPhone!, lineLabel, agg.Last, agg.Count);
     }
 
     public async Task<IReadOnlyList<AgentRunLogEntryDto>> GetConversationLogAsync(Guid conversationId, CancellationToken cancellationToken = default)

@@ -38,6 +38,14 @@ public interface IAgentRunLogService
 {
     Task<IReadOnlyList<AgentRunLogConversationDto>> ListConversationsAsync(CancellationToken cancellationToken = default);
     Task<IReadOnlyList<AgentRunLogEntryDto>> GetConversationLogAsync(Guid conversationId, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Busca la ultima conversacion del tenant actual cuyo ContactPhone contenga los digitos del
+    /// numero dado (match tolerante al formato: con/sin "+", espacios, indicativo). Util para
+    /// endpoints de diagnostico tipo "dame la bitacora del numero X" sin tener que conocer el
+    /// conversationId. Devuelve null si no hay conversacion con bitacora que matchee.
+    /// </summary>
+    Task<AgentRunLogConversationDto?> FindLatestByPhoneAsync(string phoneDigits, CancellationToken cancellationToken = default);
     /// <summary>
     /// Borra TODA la historia de la bitacora del tenant actual (todas las conversaciones) Y el
     /// cache de datos capturados por los agentes del tenant. Asi "Limpiar historia" deja al agente

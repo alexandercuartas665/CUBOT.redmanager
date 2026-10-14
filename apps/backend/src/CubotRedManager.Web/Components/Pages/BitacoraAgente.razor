@@ -45,8 +45,16 @@ else
             }
             else
             {
+                <div style="margin-bottom:10px;">
+                    <input class="form-control form-control-sm" placeholder="Filtrar por telefono o nombre..."
+                           value="@_filter" @oninput="OnFilterChanged" />
+                </div>
+                @if (VisibleConvs.Count == 0)
+                {
+                    <p class="text-muted" style="padding:8px 2px;font-size:12px;">Ninguna conversacion coincide con "@_filter".</p>
+                }
                 <div style="display:flex;flex-direction:column;gap:4px;max-height:68vh;overflow-y:auto;">
-                    @foreach (var c in _convs)
+                    @foreach (var c in VisibleConvs)
                     {
                         <div style="display:flex;align-items:center;gap:10px;padding:9px;border-radius:10px;cursor:pointer;@(_selectedId == c.ConversationId ? "background:var(--primary-soft);" : "")" @onclick="() => SelectAsync(c.ConversationId)">
                             <span style="width:38px;height:38px;border-radius:50%;flex-shrink:0;display:grid;place-items:center;color:#fff;font-weight:800;font-size:12px;background:var(--gradient-violet);">@Initials(c.ContactName ?? c.ContactPhone)</span>
@@ -193,6 +201,7 @@ else
     private string? _clearedMsg;
     private string? _resetMsg;
     private List<AgentRunLogConversationDto> _convs = new();
+    private string _filter = string.Empty;
     private Guid? _selectedId;
     private List<AgentRunLogEntryDto> _log = new();
     private List<AgentCacheItemDto> _cache = new();
@@ -286,6 +295,37 @@ else
             await ReloadAsync();
         }
         finally { _resetting = false; }
+    }
+
+    private void OnFilterChanged(ChangeEventArgs e)
+    {
+        _filter = e.Value?.ToString() ?? string.Empty;
+    }
+
+    private List<AgentRunLogConversationDto> VisibleConvs => FilterConvs();
+
+    // Filtra client-side por telefono o nombre. Case-insensitive, contains puro: cualquier
+    // substring en digitos ("300 123", "3001234") matchea un telefono real tipo "573001234567"
+    // tras ignorar los no-digitos de la aguja, y el nombre matchea por contains normal.
+    private List<AgentRunLogConversationDto> FilterConvs()
+    {
+        if (string.IsNullOrWhiteSpace(_filter)) { return _convs; }
+        var needle = _filter.Trim();
+        var needleDigits = new string(needle.Where(char.IsDigit).ToArray());
+        return _convs.Where(c =>
+        {
+            if (!string.IsNullOrWhiteSpace(c.ContactName) && c.ContactName.Contains(needle, StringComparison.OrdinalIgnoreCase)) { return true; }
+            if (!string.IsNullOrWhiteSpace(c.ContactPhone))
+            {
+                if (c.ContactPhone.Contains(needle, StringComparison.OrdinalIgnoreCase)) { return true; }
+                if (needleDigits.Length >= 3)
+                {
+                    var phoneDigits = new string(c.ContactPhone.Where(char.IsDigit).ToArray());
+                    if (phoneDigits.Contains(needleDigits, StringComparison.Ordinal)) { return true; }
+                }
+            }
+            return false;
+        }).ToList();
     }
 
     private static string Initials(string s)

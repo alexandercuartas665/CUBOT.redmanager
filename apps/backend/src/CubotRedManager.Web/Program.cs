@@ -769,6 +769,94 @@ app.MapPost("/api/whatsapp-templates/{id:guid}/active", async (
     finally { ambient.Set(null, null); }
 }).AllowAnonymous().DisableAntiforgery();
 
+// ===== Bitacora del agente (PR H) =====
+// Expone la bitacora de atencion del agente IA por API REST autenticada con X-Api-Token, para que
+// un operador o un asistente externo pueda diagnosticar por que una conversacion no respondio
+// como se esperaba (link_pago no entregado, prompt mal armado, etc.) sin pasar por el login web.
+// Devuelve ContactPhone y ContactName REALES (gracias al JOIN del PR H1), de modo que la respuesta
+// sirva para analisis sin tener que mapear GUIDs a mano.
+
+// GET /api/agent-bitacora/conversations?take=50&q=<texto>
+// Lista las conversaciones del tenant que tienen bitacora, mas recientes primero. "q" filtra en
+// memoria por telefono o nombre (contains, case-insensitive) para ergonomia; para listados
+// grandes conviene paginar por take.
+app.MapGet("/api/agent-bitacora/conversations", async (
+    HttpContext http,
+    CubotRedManager.Application.Tenancy.IApiTokenService tokens,
+    CubotRedManager.Application.Abstractions.IAmbientTenantOverride ambient,
+    CubotRedManager.Application.Tenancy.IAgentRunLogService svc,
+    int? take,
+    string? q,
+    CancellationToken ct) =>
+{
+    var ident = await AuthenticateApiTokenAsync(http, tokens, ambient);
+    if (ident is null) { return Results.Unauthorized(); }
+    try
+    {
+        var all = await svc.ListConversationsAsync(ct);
+        IEnumerable<CubotRedManager.Application.Tenancy.AgentRunLogConversationDto> result = all;
+        if (!string.IsNullOrWhiteSpace(q))
+        {
+            var needle = q.Trim();
+            result = all.Where(c =>
+                (c.ContactPhone != null && c.ContactPhone.Contains(needle, StringComparison.OrdinalIgnoreCase))
+                || (c.ContactName != null && c.ContactName.Contains(needle, StringComparison.OrdinalIgnoreCase)));
+        }
+        var limited = result.Take(Math.Clamp(take ?? 50, 1, 500)).ToList();
+        return Results.Ok(new { ok = true, total = limited.Count, items = limited });
+    }
+    finally { ambient.Set(null, null); }
+}).AllowAnonymous().DisableAntiforgery();
+
+// GET /api/agent-bitacora/{conversationId}
+// Devuelve la linea de tiempo completa de una conversacion (orden cronologico, mas vieja primero).
+// Content y Response se devuelven completos (NO se trunca); el consumidor decide como mostrar.
+app.MapGet("/api/agent-bitacora/{conversationId:guid}", async (
+    Guid conversationId,
+    HttpContext http,
+    CubotRedManager.Application.Tenancy.IApiTokenService tokens,
+    CubotRedManager.Application.Abstractions.IAmbientTenantOverride ambient,
+    CubotRedManager.Application.Tenancy.IAgentRunLogService svc,
+    CancellationToken ct) =>
+{
+    var ident = await AuthenticateApiTokenAsync(http, tokens, ambient);
+    if (ident is null) { return Results.Unauthorized(); }
+    try
+    {
+        var entries = await svc.GetConversationLogAsync(conversationId, ct);
+        return Results.Ok(new { ok = true, conversationId, total = entries.Count, entries });
+    }
+    finally { ambient.Set(null, null); }
+}).AllowAnonymous().DisableAntiforgery();
+
+// GET /api/agent-bitacora/by-phone/{phone}
+// Shortcut de diagnostico: busca la ultima conversacion cuyo ContactPhone contenga los digitos de
+// {phone} (tolerante al formato: "+57 300 123 4567" matchea "573001234567") y devuelve el header
+// de la conversacion + su bitacora completa en una sola llamada. Pensado para "revisa que esta
+// pasando con el numero X" sin tener que listar primero y copiar un GUID.
+app.MapGet("/api/agent-bitacora/by-phone/{phone}", async (
+    string phone,
+    HttpContext http,
+    CubotRedManager.Application.Tenancy.IApiTokenService tokens,
+    CubotRedManager.Application.Abstractions.IAmbientTenantOverride ambient,
+    CubotRedManager.Application.Tenancy.IAgentRunLogService svc,
+    CancellationToken ct) =>
+{
+    var ident = await AuthenticateApiTokenAsync(http, tokens, ambient);
+    if (ident is null) { return Results.Unauthorized(); }
+    try
+    {
+        var conv = await svc.FindLatestByPhoneAsync(phone, ct);
+        if (conv is null)
+        {
+            return Results.NotFound(new { ok = false, error = $"Sin conversacion con bitacora que matchee '{phone}'." });
+        }
+        var entries = await svc.GetConversationLogAsync(conv.ConversationId, ct);
+        return Results.Ok(new { ok = true, conversation = conv, total = entries.Count, entries });
+    }
+    finally { ambient.Set(null, null); }
+}).AllowAnonymous().DisableAntiforgery();
+
 // ===== POST /api/agents/{id}/pipeline-config =====
 // Activa/desactiva CreateLeadsInPipeline y setea DefaultPipelineId en un agente IA. Body JSON:
 //   { "createLeadsInPipeline": true, "defaultPipelineId": "GUID" }
