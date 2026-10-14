@@ -12,6 +12,7 @@ public sealed class WhatsAppConnectorService : IWhatsAppConnectorService
     private readonly ITenantContext _tenantContext;
     private readonly ISecretProtector _secretProtector;
     private readonly IEvolutionApiClient _client;
+    private readonly IYCloudApiClient _ycloud;
     private readonly IAuditWriter _audit;
     private readonly TimeProvider _timeProvider;
 
@@ -20,6 +21,7 @@ public sealed class WhatsAppConnectorService : IWhatsAppConnectorService
         ITenantContext tenantContext,
         ISecretProtector secretProtector,
         IEvolutionApiClient client,
+        IYCloudApiClient ycloud,
         IAuditWriter audit,
         TimeProvider timeProvider)
     {
@@ -27,8 +29,17 @@ public sealed class WhatsAppConnectorService : IWhatsAppConnectorService
         _tenantContext = tenantContext;
         _secretProtector = secretProtector;
         _client = client;
+        _ycloud = ycloud;
         _audit = audit;
         _timeProvider = timeProvider;
+    }
+
+    // API key YCloud de la linea, descifrada, o null si falta / no se puede descifrar.
+    private string? YCloudApiKey(WhatsAppLine line)
+    {
+        if (string.IsNullOrWhiteSpace(line.YCloudApiKeyEncrypted)) { return null; }
+        try { return _secretProtector.Unprotect(line.YCloudApiKeyEncrypted!); }
+        catch { return null; }
     }
 
     public async Task<EvolutionServerSettingDto> GetServerAsync(CancellationToken cancellationToken = default)
@@ -220,6 +231,21 @@ public sealed class WhatsAppConnectorService : IWhatsAppConnectorService
         {
             return new LineSendResult(true, null, "emu-" + Guid.NewGuid().ToString("N")[..12]);
         }
+        // Linea YCloud (BSP oficial): envia via api.ycloud.com v2 con la API key y el emisor configurado.
+        if (line.Provider == WhatsAppProvider.YCloud)
+        {
+            if (line.Status != WhatsAppLineStatus.Connected) { return new LineSendResult(false, "La linea no esta conectada."); }
+            var key = YCloudApiKey(line);
+            if (key is null || string.IsNullOrWhiteSpace(line.YCloudPhoneNumberId))
+            {
+                return new LineSendResult(false, "Faltan la API key o el emisor de la linea YCloud.");
+            }
+            var digitsYc = new string(phone.Where(char.IsDigit).ToArray());
+            var yr = await _ycloud.SendTextAsync(key, line.YCloudPhoneNumberId!, digitsYc, text.Trim(), cancellationToken);
+            _audit.Write(actorUserId, "whatsapp-line.test-send", nameof(WhatsAppLine), line.Id,
+                previousValue: null, newValue: new { to = digitsYc, provider = "YCloud", ok = yr.IsSuccess }, tenantId: line.TenantId);
+            return new LineSendResult(yr.IsSuccess, yr.Error, yr.MessageId);
+        }
         if (line.Status != WhatsAppLineStatus.Connected)
         {
             return new LineSendResult(false, "La linea no esta conectada.");
@@ -245,6 +271,14 @@ public sealed class WhatsAppConnectorService : IWhatsAppConnectorService
         if (await IsEmulatorLineAsync(lineId, cancellationToken))
         {
             return new LineSendResult(true, null, "emu-" + Guid.NewGuid().ToString("N")[..12]);
+        }
+        // Rama YCloud: no acepta base64 directo; necesita URL publica. Si falta, informar al caller.
+        // TODO v2: subir el base64 a nuestro propio bucket y pasar la URL resultante a YCloud.
+        var ycLine = await _db.WhatsAppLines.IgnoreQueryFilters()
+            .FirstOrDefaultAsync(l => l.Id == lineId && l.Provider == WhatsAppProvider.YCloud, cancellationToken);
+        if (ycLine is not null)
+        {
+            return new LineSendResult(false, "El envio de media por YCloud requiere URL publica (no base64). Pendiente de v2.");
         }
         var ready = await ReadyLineAsync(lineId, phone, cancellationToken);
         if (ready.Error is not null) { return new LineSendResult(false, ready.Error); }
@@ -329,9 +363,22 @@ public sealed class WhatsAppConnectorService : IWhatsAppConnectorService
         {
             return new LineSendResult(true, null, "emu-" + Guid.NewGuid().ToString("N")[..12]);
         }
+        // Rama YCloud (BSP oficial): reacciona por el wamid del mensaje entrante (externalMessageId).
+        if (line.Provider == WhatsAppProvider.YCloud)
+        {
+            if (line.Status != WhatsAppLineStatus.Connected) { return new LineSendResult(false, "La linea no esta conectada.", null); }
+            var ycKey = YCloudApiKey(line);
+            if (ycKey is null || string.IsNullOrWhiteSpace(line.YCloudPhoneNumberId))
+            {
+                return new LineSendResult(false, "Faltan la API key o el emisor de la linea YCloud.", null);
+            }
+            var ycDigits = new string(phone.Where(char.IsDigit).ToArray());
+            var yr = await _ycloud.SendReactionAsync(ycKey, line.YCloudPhoneNumberId!, ycDigits, externalMessageId, emoji, cancellationToken);
+            return new LineSendResult(yr.IsSuccess, yr.Error, yr.MessageId);
+        }
         if (line.Provider != WhatsAppProvider.Evolution)
         {
-            return new LineSendResult(false, "Las reacciones por id solo aplican a lineas Evolution en este corte.", null);
+            return new LineSendResult(false, "Las reacciones por id solo aplican a lineas Evolution o YCloud en este corte.", null);
         }
         if (line.Status != WhatsAppLineStatus.Connected) { return new LineSendResult(false, "La linea no esta conectada.", null); }
         var server = await ResolveServerAsync(cancellationToken);
@@ -341,6 +388,52 @@ public sealed class WhatsAppConnectorService : IWhatsAppConnectorService
         var remoteJid = $"{digits}@s.whatsapp.net";
         var result = await _client.SendReactionAsync(baseUrl, apiKey, EvoInstance(line), remoteJid, externalMessageId, emoji, cancellationToken);
         return new LineSendResult(result.Ok, result.Error, null);
+    }
+
+    public async Task<LineSendResult> SendTemplateAsync(
+        Guid lineId, string phone, string templateName, string language,
+        IReadOnlyList<string> bodyParams, Guid actorUserId,
+        string? headerMediaType = null, string? headerMediaUrl = null, string? headerMediaFileName = null,
+        IReadOnlyList<WhatsAppUrlButtonParam>? urlButtons = null,
+        CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(phone) || string.IsNullOrWhiteSpace(templateName))
+        {
+            return new LineSendResult(false, "Indica el numero y la plantilla.");
+        }
+        var line = await _db.WhatsAppLines.IgnoreQueryFilters().FirstOrDefaultAsync(l => l.Id == lineId, cancellationToken);
+        if (line is null) { return new LineSendResult(false, "La linea no existe."); }
+        if (line.Status != WhatsAppLineStatus.Connected && line.Provider != WhatsAppProvider.Emulator)
+        {
+            return new LineSendResult(false, "La linea no esta conectada.");
+        }
+        var digits = new string(phone.Where(char.IsDigit).ToArray());
+        var lang = string.IsNullOrWhiteSpace(language) ? "es" : language.Trim();
+
+        if (line.Provider == WhatsAppProvider.Emulator)
+        {
+            return new LineSendResult(true, null, "emu-" + Guid.NewGuid().ToString("N")[..12]);
+        }
+        if (line.Provider == WhatsAppProvider.YCloud)
+        {
+            var key = YCloudApiKey(line);
+            if (key is null || string.IsNullOrWhiteSpace(line.YCloudPhoneNumberId))
+            {
+                return new LineSendResult(false, "Faltan la API key o el emisor de la linea YCloud.");
+            }
+            var yr = await _ycloud.SendTemplateAsync(
+                key, line.YCloudPhoneNumberId!, digits,
+                templateName.Trim(), lang,
+                bodyParams ?? Array.Empty<string>(),
+                headerMediaType, headerMediaUrl, headerMediaFileName,
+                urlButtons, cancellationToken);
+            _audit.Write(actorUserId, "whatsapp-line.send-template", nameof(WhatsAppLine), line.Id,
+                previousValue: null, newValue: new { to = digits, template = templateName, ok = yr.IsSuccess }, tenantId: line.TenantId);
+            return new LineSendResult(yr.IsSuccess, yr.Error, yr.MessageId);
+        }
+        // Evolution/Cloud: enviar plantillas HSM aun no esta portado en este corte. Dejamos un error
+        // claro para que el caller sepa que debe usar una linea YCloud.
+        return new LineSendResult(false, "El envio de plantillas HSM solo esta soportado en lineas YCloud en este corte.");
     }
 
     public Task<InboundMediaResult> FetchInboundMediaAsync(Guid lineId, string externalMessageId, CancellationToken cancellationToken = default)

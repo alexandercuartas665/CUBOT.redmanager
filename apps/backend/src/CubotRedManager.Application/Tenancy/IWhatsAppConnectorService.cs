@@ -43,6 +43,17 @@ public interface IWhatsAppConnectorService
     /// <summary>Envia una reaccion (emoji) al mensaje entrante identificado por externalId.</summary>
     Task<LineSendResult> SendReactionAsync(Guid lineId, string phone, string externalMessageId, string emoji, CancellationToken cancellationToken = default);
 
+    /// <summary>Envia una plantilla HSM aprobada por Meta. Solo soportado en lineas YCloud en este
+    /// corte. <paramref name="bodyParams"/> son los valores de las variables en orden. Header de
+    /// media opcional (image/document/video) via <paramref name="headerMediaType"/> + <paramref name="headerMediaUrl"/>.
+    /// Botones URL dinamicos opcionales via <paramref name="urlButtons"/>.</summary>
+    Task<LineSendResult> SendTemplateAsync(
+        Guid lineId, string phone, string templateName, string language,
+        IReadOnlyList<string> bodyParams, Guid actorUserId,
+        string? headerMediaType = null, string? headerMediaUrl = null, string? headerMediaFileName = null,
+        IReadOnlyList<WhatsAppUrlButtonParam>? urlButtons = null,
+        CancellationToken cancellationToken = default);
+
     /// <summary>Descarga el contenido binario (base64) de un mensaje entrante con adjunto, cuando
     /// Evolution no lo incluyo en el webhook. Devuelve Ok=false si no se pudo obtener.</summary>
     Task<InboundMediaResult> FetchInboundMediaAsync(Guid lineId, string externalMessageId, CancellationToken cancellationToken = default);
