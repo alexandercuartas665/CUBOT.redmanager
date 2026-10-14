@@ -1343,9 +1343,12 @@ if (app.Environment.IsDevelopment())
 // primero (mismo bug pero descubierto antes) y Evolution justo despues. NO reordenar.
 
 // ===== Webhooks: YCloud (WhatsApp BSP oficial) =====
-// POST /webhooks/ycloud/{tenantId}: recibe mensajes entrantes. Idempotencia por wamid.
-// Resuelve la linea por YCloudPhoneNumberId = payload.to. Guarda como InboxMessage.
-// Responde 200 rapido (Meta desconecta si > 5s). Fira-and-forget al escribir el ambient tenant.
+// POST /webhooks/ycloud/{tenantId}: recibe mensajes entrantes. Idempotencia por wamid (via dedupe
+// interno del ChatIngestService). Resuelve la linea por YCloudPhoneNumberId = payload.to y los
+// persiste en el modelo canonico Conversation/Message (igual que Evolution), para que el
+// AgentDispatcher responda automaticamente a mensajes YCloud. Antes se guardaba como InboxMessage
+// (quedaba en bandeja operador, el agente IA no respondia); PR C migra al modelo unificado.
+// Responde 200 rapido (Meta desconecta si > 5s).
 app.MapPost("/webhooks/ycloud/{tenantId:guid}", async (
     Guid tenantId,
     HttpContext http,
@@ -1365,6 +1368,7 @@ app.MapPost("/webhooks/ycloud/{tenantId:guid}", async (
     using var scope = scopeFactory.CreateScope();
     scope.ServiceProvider.GetRequiredService<IAmbientTenantOverride>().Set(tenantId, null);
     var db = scope.ServiceProvider.GetRequiredService<IApplicationDbContext>();
+    var ingest = scope.ServiceProvider.GetRequiredService<CubotRedManager.Application.Tenancy.IChatIngestService>();
 
     foreach (var m in messages)
     {
@@ -1377,27 +1381,28 @@ app.MapPost("/webhooks/ycloud/{tenantId:guid}", async (
             log.LogInformation("YCloud webhook: linea no encontrada para tenant {TenantId}, to {To}", tenantId, m.ToPhone);
             continue;
         }
-        // Idempotencia global por (network_code, external_id) -- indice unico en el modelo.
-        var exists = await db.InboxMessages
-            .IgnoreQueryFilters()
-            .AnyAsync(x => x.NetworkCode == "whatsapp" && x.ExternalId == m.Wamid);
-        if (exists) { continue; }
 
-        db.InboxMessages.Add(new CubotRedManager.Domain.Entities.InboxMessage
+        // Modelo canonico: persistir via IChatIngestService (crea/resuelve Conversation + Message
+        // + dispatch al AgentDispatcher). Dedupe interno por ExternalMessageId. enqueueDispatch:true
+        // para que el agente IA responda igual que a mensajes Evolution.
+        var payload = new CubotRedManager.Application.Tenancy.IngestMessageRequest(
+            ContactPhone: m.FromPhone,
+            ContactName: null,
+            ExternalMessageId: m.Wamid,
+            Body: m.Text ?? $"(mensaje tipo {m.MessageType})",
+            MessageType: m.MessageType,
+            SentAt: m.ReceivedAt,
+            WhatsAppLineId: line.Id);
+        try
         {
-            TenantId = tenantId,
-            ClientId = Guid.Empty, // Sin cliente vinculado hasta que se asocie manualmente.
-            NetworkCode = "whatsapp",
-            Type = CubotRedManager.Domain.Enums.InboxMessageType.DirectMessage,
-            ExternalId = m.Wamid,
-            AuthorExternalId = m.FromPhone,
-            AuthorName = m.FromPhone,
-            Body = m.Text ?? $"(mensaje tipo {m.MessageType})",
-            ReceivedAt = m.ReceivedAt,
-            Status = CubotRedManager.Domain.Enums.InboxStatus.Unread
-        });
+            await ingest.IngestTrustedAsync(tenantId, payload, http.RequestAborted, enqueueDispatch: true);
+        }
+        catch (Exception ex)
+        {
+            log.LogWarning(ex, "YCloud webhook: ingest fallo tenant={TenantId} wamid={Wamid}", tenantId, m.Wamid);
+            // Best-effort: no bloqueamos la respuesta 200 (Meta reintenta igual si devolvemos != 200).
+        }
     }
-    await db.SaveChangesAsync();
     return Results.Ok();
 }).AllowAnonymous().DisableAntiforgery();
 
