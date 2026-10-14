@@ -11,6 +11,10 @@ public static class YCloudWebhookParser
 {
     public sealed record InboundMessage(string Wamid, string FromPhone, string ToPhone, string? Text, string? MessageType, DateTimeOffset ReceivedAt);
 
+    /// <summary>Reaccion entrante YCloud: payload type=reaction con reaction.message_id (wamid
+    /// reaccionado) + reaction.emoji. ToPhone sirve para resolver la linea igual que InboundMessage.</summary>
+    public sealed record InboundReaction(string TargetWamid, string Emoji, string ToPhone);
+
     /// <summary>Extrae los mensajes entrantes del payload. Devuelve lista vacia si no aplica.</summary>
     public static List<InboundMessage> Parse(JsonDocument doc)
     {
@@ -78,6 +82,45 @@ public static class YCloudWebhookParser
         }
 
         list.Add(new InboundMessage(wamid!, from!, to!, text, type, received));
+    }
+
+    /// <summary>Extrae reacciones entrantes del payload YCloud. Formato: whatsappInboundMessage con
+    /// type=reaction y reaction={message_id, emoji}. Devuelve lista vacia si no hay reacciones.</summary>
+    public static List<InboundReaction> ParseReactions(JsonDocument doc)
+    {
+        var list = new List<InboundReaction>();
+        var root = doc.RootElement;
+        if (root.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var el in root.EnumerateArray()) { TryExtractReaction(el, list); }
+        }
+        else if (root.ValueKind == JsonValueKind.Object)
+        {
+            if (root.TryGetProperty("messages", out var arr) && arr.ValueKind == JsonValueKind.Array)
+            {
+                foreach (var el in arr.EnumerateArray()) { TryExtractReaction(el, list); }
+            }
+            else { TryExtractReaction(root, list); }
+        }
+        return list;
+    }
+
+    private static void TryExtractReaction(JsonElement el, List<InboundReaction> list)
+    {
+        JsonElement msg;
+        if (el.TryGetProperty("whatsappInboundMessage", out var em)) { msg = em; }
+        else if (el.TryGetProperty("message", out var em2)) { msg = em2; }
+        else { msg = el; }
+
+        var type = TryStr(msg, "type");
+        if (!string.Equals(type, "reaction", StringComparison.OrdinalIgnoreCase)) { return; }
+        var to = TryStr(msg, "to");
+        if (string.IsNullOrWhiteSpace(to)) { return; }
+        if (!msg.TryGetProperty("reaction", out var r) || r.ValueKind != JsonValueKind.Object) { return; }
+        var targetId = TryStr(r, "message_id") ?? TryStr(r, "messageId");
+        var emoji = TryStr(r, "emoji") ?? string.Empty;
+        if (string.IsNullOrWhiteSpace(targetId)) { return; }
+        list.Add(new InboundReaction(targetId!, emoji, to!));
     }
 
     private static string? TryStr(JsonElement el, string prop)

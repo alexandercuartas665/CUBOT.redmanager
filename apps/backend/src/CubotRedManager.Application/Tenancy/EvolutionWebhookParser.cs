@@ -11,6 +11,11 @@ namespace CubotRedManager.Application.Tenancy;
 public sealed record ParsedInbound(Guid TenantId, IngestMessageRequest Payload, string? MediaBase64 = null, string? MediaFileName = null,
     bool IsTakeControlCommand = false);
 
+/// <summary>Reaccion entrante del cliente sobre un mensaje OUTBOUND del agente. Se mapea a un
+/// UPDATE sobre Messages.Reaction del mensaje identificado por TargetExternalId (wamid/key.id).
+/// Un emoji vacio significa "quitar la reaccion".</summary>
+public sealed record ParsedReaction(Guid TenantId, string TargetExternalId, string Emoji);
+
 /// <summary>
 /// Traduce el payload crudo del webhook de Evolution (evento messages.upsert) a nuestro
 /// formato de ingesta. El tenant se deduce del nombre de instancia cubot_{tenant}_{linea}.
@@ -42,8 +47,10 @@ public static class EvolutionWebhookParser
         if (data.ValueKind != JsonValueKind.Object) { return null; }
 
         // Reacciones (emoji sobre un mensaje): WhatsApp las envia como messages.upsert con
-        // reactionMessage. NO son un mensaje de texto del cliente: no deben persistirse como mensaje
-        // (saldria "(mensaje no soportado)") ni disparar al agente. Las ignoramos por completo.
+        // reactionMessage. NO son un mensaje de texto: se procesan aparte via TryParseReaction y
+        // actualizan Message.Reaction. Si llegamos aqui con una reaccion, la ignoramos (el handler
+        // debio llamar TryParseReaction primero). Mantener este early-return protege a los agentes
+        // de "mensajes no soportados" si se llama solo a Parse().
         if (data.TryGetProperty("message", out var reactProbe) && reactProbe.ValueKind == JsonValueKind.Object
             && reactProbe.TryGetProperty("reactionMessage", out _))
         {
@@ -171,6 +178,36 @@ public static class EvolutionWebhookParser
 
     private static double? ReadDouble(JsonElement obj, string prop)
         => obj.ValueKind == JsonValueKind.Object && obj.TryGetProperty(prop, out var v) && v.ValueKind == JsonValueKind.Number && v.TryGetDouble(out var d) ? d : null;
+
+    /// <summary>Si el evento Evolution es una reaccion del cliente sobre un mensaje OUTBOUND del
+    /// agente (reactionMessage), extrae el target wamid y el emoji. Devuelve null si no aplica.
+    /// Se llama ANTES que Parse() para no mezclar flows.</summary>
+    public static ParsedReaction? TryParseReaction(JsonElement root)
+    {
+        if (root.ValueKind != JsonValueKind.Object) { return null; }
+        if (root.TryGetProperty("event", out var ev) && ev.ValueKind == JsonValueKind.String)
+        {
+            var name = ev.GetString()!.Replace("_", ".").ToLowerInvariant();
+            if (name != "messages.upsert") { return null; }
+        }
+        if (!root.TryGetProperty("instance", out var instEl) || instEl.ValueKind != JsonValueKind.String) { return null; }
+        var (tenantId, _) = TenantAndLineFromInstance(instEl.GetString()!);
+        if (tenantId is null) { return null; }
+
+        if (!root.TryGetProperty("data", out var data)) { return null; }
+        if (data.ValueKind == JsonValueKind.Array) { data = data.EnumerateArray().FirstOrDefault(); }
+        if (data.ValueKind != JsonValueKind.Object) { return null; }
+        if (!data.TryGetProperty("message", out var msg) || msg.ValueKind != JsonValueKind.Object) { return null; }
+        if (!msg.TryGetProperty("reactionMessage", out var react) || react.ValueKind != JsonValueKind.Object) { return null; }
+
+        // reactionMessage: { text: "<emoji>", key: { id: "<wamid del mensaje reaccionado>" } }.
+        // text vacio = quitar reaccion previa (nativo de WhatsApp).
+        var emoji = react.TryGetProperty("text", out var t) && t.ValueKind == JsonValueKind.String ? t.GetString() : null;
+        if (!react.TryGetProperty("key", out var rk) || rk.ValueKind != JsonValueKind.Object) { return null; }
+        var targetId = rk.TryGetProperty("id", out var tid) && tid.ValueKind == JsonValueKind.String ? tid.GetString() : null;
+        if (string.IsNullOrWhiteSpace(targetId)) { return null; }
+        return new ParsedReaction(tenantId.Value, targetId!, emoji ?? string.Empty);
+    }
 
     // Instancia cubot_{tenant:N}_{linea:N} -> (tenant, linea opcional).
     private static (Guid? Tenant, Guid? Line) TenantAndLineFromInstance(string instance)

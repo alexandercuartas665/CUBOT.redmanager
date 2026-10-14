@@ -141,4 +141,29 @@ public sealed class ChatIngestService : IChatIngestService
         }
         return ChatIngestResult.Accepted;
     }
+
+    public async Task<bool> ApplyReactionAsync(Guid tenantId, string targetExternalId, string emoji, CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(targetExternalId)) { return false; }
+        // Localiza el mensaje OUTBOUND (del agente / asesor) por ExternalId. IgnoreQueryFilters
+        // porque viene del webhook sin tenant scope en sesion.
+        var msg = await _db.Messages.IgnoreQueryFilters()
+            .FirstOrDefaultAsync(m => m.TenantId == tenantId && m.ExternalId == targetExternalId, ct);
+        if (msg is null)
+        {
+            _logger.LogInformation("ApplyReactionAsync: no se encontro mensaje tenant={Tenant} wamid={Wamid}", tenantId, targetExternalId);
+            return false;
+        }
+        // Un emoji vacio = retirar reaccion previa (comportamiento nativo WhatsApp).
+        msg.Reaction = string.IsNullOrWhiteSpace(emoji) ? null : emoji.Trim();
+        await _db.SaveChangesAsync(ct);
+        try
+        {
+            var dto = new MessageDto(msg.Id, msg.ConversationId, msg.Direction, msg.Body ?? string.Empty,
+                msg.MessageType, msg.SentAt, msg.MediaType, msg.MediaUrl, msg.MediaMimeType, msg.SentByName, msg.Reaction);
+            await _broadcaster.MessageAddedAsync(tenantId, msg.ConversationId, dto, ct);
+        }
+        catch { /* broadcast best-effort */ }
+        return true;
+    }
 }

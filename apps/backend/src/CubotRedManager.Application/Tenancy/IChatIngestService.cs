@@ -21,4 +21,9 @@ public interface IChatIngestService
     /// Marca <paramref name="enqueueDispatch"/> = true para (en Fase 3) despertar al AgentDispatcher.
     /// </summary>
     Task<ChatIngestResult> IngestTrustedAsync(Guid tenantId, IngestMessageRequest payload, CancellationToken ct = default, bool enqueueDispatch = true);
+
+    /// <summary>Aplica una reaccion entrante del cliente al mensaje OUTBOUND identificado por
+    /// <paramref name="targetExternalId"/> (wamid). Un emoji vacio significa "quitar la reaccion".
+    /// Devuelve true si se actualizo algun mensaje; false si no se encontro el mensaje referenciado.</summary>
+    Task<bool> ApplyReactionAsync(Guid tenantId, string targetExternalId, string emoji, CancellationToken ct = default);
 }

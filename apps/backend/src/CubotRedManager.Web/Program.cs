@@ -1361,14 +1361,26 @@ app.MapPost("/webhooks/ycloud/{tenantId:guid}", async (
     catch (Exception ex) { log.LogWarning(ex, "YCloud webhook: JSON invalido para tenant {TenantId}", tenantId); return Results.Ok(); }
 
     List<CubotRedManager.Web.Webhooks.YCloudWebhookParser.InboundMessage> messages;
-    try { messages = CubotRedManager.Web.Webhooks.YCloudWebhookParser.Parse(doc); }
+    List<CubotRedManager.Web.Webhooks.YCloudWebhookParser.InboundReaction> reactions;
+    try
+    {
+        messages = CubotRedManager.Web.Webhooks.YCloudWebhookParser.Parse(doc);
+        reactions = CubotRedManager.Web.Webhooks.YCloudWebhookParser.ParseReactions(doc);
+    }
     finally { doc.Dispose(); }
-    if (messages.Count == 0) { return Results.Ok(); }
+    if (messages.Count == 0 && reactions.Count == 0) { return Results.Ok(); }
 
     using var scope = scopeFactory.CreateScope();
     scope.ServiceProvider.GetRequiredService<IAmbientTenantOverride>().Set(tenantId, null);
     var db = scope.ServiceProvider.GetRequiredService<IApplicationDbContext>();
     var ingest = scope.ServiceProvider.GetRequiredService<CubotRedManager.Application.Tenancy.IChatIngestService>();
+
+    // Reacciones primero (son UPDATE Messages.Reaction, no insertan mensaje nuevo).
+    foreach (var r in reactions)
+    {
+        try { await ingest.ApplyReactionAsync(tenantId, r.TargetWamid, r.Emoji, http.RequestAborted); }
+        catch (Exception ex) { log.LogWarning(ex, "YCloud webhook: ApplyReaction fallo wamid={Wamid}", r.TargetWamid); }
+    }
 
     foreach (var m in messages)
     {
@@ -1459,8 +1471,25 @@ app.MapPost("/webhooks/evolution/{tenantId:guid}", async (
     catch (Exception ex) { log.LogWarning(ex, "Evolution webhook: JSON invalido"); return Results.Ok(); }
 
     CubotRedManager.Application.Tenancy.ParsedInbound? parsed;
-    try { parsed = CubotRedManager.Application.Tenancy.EvolutionWebhookParser.Parse(doc.RootElement); }
+    CubotRedManager.Application.Tenancy.ParsedReaction? reaction;
+    try
+    {
+        // Primero chequeo si es reaccion inbound (reactionMessage sobre un wamid de nuestro
+        // mensaje OUTBOUND). Si lo es, actualizo Message.Reaction y termino.
+        reaction = CubotRedManager.Application.Tenancy.EvolutionWebhookParser.TryParseReaction(doc.RootElement);
+        parsed = reaction is null
+            ? CubotRedManager.Application.Tenancy.EvolutionWebhookParser.Parse(doc.RootElement)
+            : null;
+    }
     finally { doc.Dispose(); }
+    if (reaction is not null)
+    {
+        tenantOverride.Set(tenantId, null);
+        var applied = await ingest.ApplyReactionAsync(reaction.TenantId, reaction.TargetExternalId, reaction.Emoji, ct);
+        log.LogInformation("Evolution webhook: reaccion '{Emoji}' sobre wamid={Wamid} applied={Applied}",
+            reaction.Emoji, reaction.TargetExternalId, applied);
+        return Results.Ok(new { status = applied ? "reaction-applied" : "reaction-no-match" });
+    }
     if (parsed is null)
     {
         log.LogInformation("Evolution webhook: parser devolvio null (evento no ingestable)");
