@@ -23,6 +23,16 @@ public interface IYCloudApiClient
     /// <summary>Envia media (imagen/video/audio/documento) por URL publica.</summary>
     Task<YCloudSendResult> SendMediaAsync(string apiKey, string fromPhone, string toPhone, YCloudMediaKind kind, string mediaUrl, string? caption, string? fileName, CancellationToken cancellationToken = default);
 
+    /// <summary>Envia una plantilla HSM aprobada. <paramref name="bodyParams"/> son los valores de las
+    /// variables {{1}}...{{N}} del body EN ORDEN. <paramref name="headerMediaType"/> (image/document/video)
+    /// y <paramref name="headerMediaUrl"/> solo cuando la plantilla fue creada con header de media. Los
+    /// <paramref name="urlButtons"/> aplican a plantillas con botones URL dinamicos (parametro en el path).</summary>
+    Task<YCloudSendResult> SendTemplateAsync(string apiKey, string fromPhone, string toPhone, string templateName, string language, IReadOnlyList<string> bodyParams, string? headerMediaType = null, string? headerMediaUrl = null, string? headerMediaFileName = null, IReadOnlyList<WhatsAppUrlButtonParam>? urlButtons = null, CancellationToken cancellationToken = default);
+
+    /// <summary>Envia una reaccion (emoji) al mensaje identificado por <paramref name="messageId"/> (wamid).
+    /// Un emoji vacio quita la reaccion previa (comportamiento nativo de WhatsApp).</summary>
+    Task<YCloudSendResult> SendReactionAsync(string apiKey, string fromPhone, string toPhone, string messageId, string emoji, CancellationToken cancellationToken = default);
+
     // === Plantillas HSM (F2) =================================================
     /// <summary>Crea/somete una plantilla a revision de Meta a traves de YCloud.
     /// <paramref name="components"/> es el arreglo de componentes ya armado por el servicio
@@ -46,3 +56,8 @@ public sealed record YCloudTemplateResult(bool IsSuccess, string? Id, string? St
 public sealed record YCloudTemplateStatus(string Name, string? Language, string Status, string? Id, string? RejectedReason);
 
 public sealed record YCloudTemplateListResult(bool IsSuccess, IReadOnlyList<YCloudTemplateStatus> Items, string? Error);
+
+/// <summary>Parametro de un boton URL dinamico de una plantilla HSM. <paramref name="Index"/> es la
+/// posicion del boton (1-based) dentro del arreglo de buttons de la plantilla. <paramref name="Text"/>
+/// es el sufijo que WhatsApp inyecta en el placeholder {{1}} de la URL del boton.</summary>
+public sealed record WhatsAppUrlButtonParam(int Index, string Text);

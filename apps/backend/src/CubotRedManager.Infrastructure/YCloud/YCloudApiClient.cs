@@ -98,6 +98,94 @@ internal sealed class YCloudApiClient : IYCloudApiClient
         return SendMessageAsync(apiKey, payload, cancellationToken);
     }
 
+    public Task<YCloudSendResult> SendTemplateAsync(string apiKey, string fromPhone, string toPhone, string templateName, string language, IReadOnlyList<string> bodyParams, string? headerMediaType = null, string? headerMediaUrl = null, string? headerMediaFileName = null, IReadOnlyList<WhatsAppUrlButtonParam>? urlButtons = null, CancellationToken cancellationToken = default)
+    {
+        // Payload de plantilla (WhatsApp/YCloud v2): componentes con los parametros en orden.
+        // Header de media (imagen/documento/video): { type:"header", parameters:[{ type:"image", image:{ link } }] }.
+        // Body: { type:"body", parameters:[{ type:"text", text }] }. Si no hay variables ni header, se omiten.
+        var components = new List<object>();
+        if (!string.IsNullOrWhiteSpace(headerMediaType) && !string.IsNullOrWhiteSpace(headerMediaUrl))
+        {
+            var kind = headerMediaType!.Trim().ToLowerInvariant();   // "image" | "document" | "video"
+            var mediaObj = new Dictionary<string, object?> { ["link"] = headerMediaUrl!.Trim() };
+            // Solo el DOCUMENTO admite nombre visible: sin el, WhatsApp lo muestra como "Sin titulo". Se usa el
+            // nombre dado o, en su defecto, el ultimo segmento de la URL (decodificado).
+            if (kind == "document")
+            {
+                var fileName = !string.IsNullOrWhiteSpace(headerMediaFileName)
+                    ? headerMediaFileName!.Trim()
+                    : FileNameFromUrl(headerMediaUrl!);
+                if (!string.IsNullOrWhiteSpace(fileName)) { mediaObj["filename"] = fileName; }
+            }
+            components.Add(new Dictionary<string, object?>
+            {
+                ["type"] = "header",
+                ["parameters"] = new[] { new Dictionary<string, object?> { ["type"] = kind, [kind] = mediaObj } }
+            });
+        }
+        if (bodyParams.Count > 0)
+        {
+            components.Add(new
+            {
+                type = "body",
+                parameters = bodyParams.Select(p => new { type = "text", text = p }).ToArray()
+            });
+        }
+        // Botones URL DINAMICOS: un componente por boton con su indice y el sufijo que reemplaza {{1}}.
+        // { type:"button", sub_type:"url", index:N, parameters:[{ type:"text", text }] }.
+        if (urlButtons is { Count: > 0 })
+        {
+            foreach (var b in urlButtons)
+            {
+                components.Add(new Dictionary<string, object?>
+                {
+                    ["type"] = "button",
+                    ["sub_type"] = "url",
+                    ["index"] = b.Index,
+                    ["parameters"] = new[] { new Dictionary<string, object?> { ["type"] = "text", ["text"] = b.Text } }
+                });
+            }
+        }
+        var template = new Dictionary<string, object?>
+        {
+            ["name"] = templateName,
+            ["language"] = new { code = language }
+        };
+        if (components.Count > 0) { template["components"] = components; }
+        var payload = new Dictionary<string, object?>
+        {
+            ["from"] = fromPhone,
+            ["to"] = toPhone,
+            ["type"] = "template",
+            ["template"] = template
+        };
+        return SendMessageAsync(apiKey, payload, cancellationToken);
+    }
+
+    public Task<YCloudSendResult> SendReactionAsync(string apiKey, string fromPhone, string toPhone, string messageId, string emoji, CancellationToken cancellationToken = default)
+    {
+        // WhatsApp/YCloud v2: mensaje type=reaction con el wamid del mensaje a reaccionar y el emoji.
+        // Un emoji vacio quita la reaccion (comportamiento nativo de WhatsApp).
+        var payload = new Dictionary<string, object?>
+        {
+            ["from"] = fromPhone,
+            ["to"] = toPhone,
+            ["type"] = "reaction",
+            ["reaction"] = new { message_id = messageId, emoji }
+        };
+        return SendMessageAsync(apiKey, payload, cancellationToken);
+    }
+
+    // Ultimo segmento de una URL como nombre de archivo (decodificado), o null. Da titulo al documento del header.
+    private static string? FileNameFromUrl(string url)
+    {
+        if (string.IsNullOrWhiteSpace(url)) { return null; }
+        var noQuery = url.Split('?', '#')[0].TrimEnd('/');
+        var last = noQuery.Split('/').LastOrDefault();
+        if (string.IsNullOrWhiteSpace(last)) { return null; }
+        try { return Uri.UnescapeDataString(last); } catch { return last; }
+    }
+
     private async Task<YCloudSendResult> SendMessageAsync(string apiKey, object payload, CancellationToken ct)
     {
         using var req = new HttpRequestMessage(HttpMethod.Post, $"{ApiBase}/whatsapp/messages");
