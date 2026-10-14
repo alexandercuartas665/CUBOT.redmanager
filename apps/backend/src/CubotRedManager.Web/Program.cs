@@ -695,6 +695,80 @@ app.MapPost("/api/agents/{id:guid}/system-prompt", async (
     finally { ambient.Set(null, null); }
 }).AllowAnonymous().DisableAntiforgery();
 
+// ===== Plantillas HSM (PR G) =====
+
+// POST /api/whatsapp-templates/{id}/send
+// Envia una plantilla HSM aprobada a un numero de prueba via la linea indicada. Autenticado por
+// X-Api-Token. Body: { "whatsAppLineId": "GUID", "phone": "573001234567", "values": ["Juan","15:00"],
+// "headerMediaUrl": "https://..." }. Devuelve ok + messageId del provider si se logro.
+app.MapPost("/api/whatsapp-templates/{id:guid}/send", async (
+    Guid id,
+    HttpContext http,
+    CubotRedManager.Application.Tenancy.IApiTokenService tokens,
+    CubotRedManager.Application.Abstractions.IAmbientTenantOverride ambient,
+    CubotRedManager.Application.Tenancy.IWhatsAppTemplateService svc,
+    TemplateSendRequest body,
+    CancellationToken ct) =>
+{
+    var ident = await AuthenticateApiTokenAsync(http, tokens, ambient);
+    if (ident is null) { return Results.Unauthorized(); }
+    try
+    {
+        var res = await svc.TestSendAsync(id, body.WhatsAppLineId, body.Phone ?? "",
+            body.Values, body.HeaderMediaUrl, ident.UserId, ct);
+        return res.Ok
+            ? Results.Ok(new { ok = true, messageId = res.MessageId })
+            : Results.BadRequest(new { ok = false, error = res.Error });
+    }
+    finally { ambient.Set(null, null); }
+}).AllowAnonymous().DisableAntiforgery();
+
+// POST /api/whatsapp-templates/import/{lineId}
+// Importa (upsert) todas las plantillas que YCloud tiene para la WABA de la linea. Devuelve
+// contadores imported/updated/skipped.
+app.MapPost("/api/whatsapp-templates/import/{lineId:guid}", async (
+    Guid lineId,
+    HttpContext http,
+    CubotRedManager.Application.Tenancy.IApiTokenService tokens,
+    CubotRedManager.Application.Abstractions.IAmbientTenantOverride ambient,
+    CubotRedManager.Application.Tenancy.IWhatsAppTemplateService svc,
+    CancellationToken ct) =>
+{
+    var ident = await AuthenticateApiTokenAsync(http, tokens, ambient);
+    if (ident is null) { return Results.Unauthorized(); }
+    try
+    {
+        var r = await svc.ImportFromYCloudAsync(lineId, ident.UserId, ct);
+        return r.Ok
+            ? Results.Ok(new { ok = true, imported = r.Imported, updated = r.Updated, skipped = r.Skipped })
+            : Results.BadRequest(new { ok = false, error = r.Error });
+    }
+    finally { ambient.Set(null, null); }
+}).AllowAnonymous().DisableAntiforgery();
+
+// POST /api/whatsapp-templates/{id}/active  Body: { "active": true/false }
+// Soft-delete / rehabilitar. Devuelve el nuevo Status.
+app.MapPost("/api/whatsapp-templates/{id:guid}/active", async (
+    Guid id,
+    HttpContext http,
+    CubotRedManager.Application.Tenancy.IApiTokenService tokens,
+    CubotRedManager.Application.Abstractions.IAmbientTenantOverride ambient,
+    CubotRedManager.Application.Tenancy.IWhatsAppTemplateService svc,
+    TemplateSetActiveRequest body,
+    CancellationToken ct) =>
+{
+    var ident = await AuthenticateApiTokenAsync(http, tokens, ambient);
+    if (ident is null) { return Results.Unauthorized(); }
+    try
+    {
+        var status = await svc.SetActiveAsync(id, body.Active, ident.UserId, ct);
+        return status is null
+            ? Results.NotFound(new { error = "Plantilla no encontrada." })
+            : Results.Ok(new { ok = true, status });
+    }
+    finally { ambient.Set(null, null); }
+}).AllowAnonymous().DisableAntiforgery();
+
 // ===== POST /api/agents/{id}/pipeline-config =====
 // Activa/desactiva CreateLeadsInPipeline y setea DefaultPipelineId en un agente IA. Body JSON:
 //   { "createLeadsInPipeline": true, "defaultPipelineId": "GUID" }
@@ -1776,3 +1850,9 @@ public sealed record PipelineConfigRequest(bool CreateLeadsInPipeline, Guid? Def
 /// <summary>Payload de POST /api/agents/{id}/system-prompt. Minimo 50 chars; requiere header
 /// X-Confirm-Agent-Edit: yes.</summary>
 public sealed record SystemPromptRequest(string? SystemPrompt);
+
+/// <summary>Payload de POST /api/whatsapp-templates/{id}/send.</summary>
+public sealed record TemplateSendRequest(Guid WhatsAppLineId, string? Phone, IReadOnlyList<string>? Values, string? HeaderMediaUrl);
+
+/// <summary>Payload de POST /api/whatsapp-templates/{id}/active.</summary>
+public sealed record TemplateSetActiveRequest(bool Active);
