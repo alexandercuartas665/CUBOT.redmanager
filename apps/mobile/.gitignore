@@ -3,8 +3,40 @@ node_modules/
 dist/
 dist-ssr/
 
-# capacitor (native platforms - se generan con 'npx cap add android')
-android/
+# capacitor (native platforms - 'npx cap add android' regenera la mayoria de archivos)
+# Antes ignorabamos android/ entero, pero eso descartaba el plugin custom
+# FuxionCapturePlugin.java + la MainActivity que lo registra, y el fix al bug de
+# captura de token se perdia en cada 'cap sync'. git NO permite re-incluir archivos
+# cuyo PADRE ya esta ignorado, asi que hacemos "tunneling" explicito hasta la
+# carpeta del package com.cubot (nuestro codigo propio) y luego ignoramos solo
+# los artefactos de build de gradle.
+
+android/*
+!android/app/
+android/app/*
+!android/app/src/
+!android/app/build.gradle
+!android/app/proguard-rules.pro
+android/app/src/*
+!android/app/src/main/
+android/app/src/main/*
+!android/app/src/main/java/
+!android/app/src/main/AndroidManifest.xml
+!android/app/src/main/res/
+android/app/src/main/java/*
+!android/app/src/main/java/com/
+android/app/src/main/java/com/*
+!android/app/src/main/java/com/cubot/
+
+# Artefactos de build que SIEMPRE se ignoran, aunque esten dentro de carpetas rastreadas.
+android/build/
+android/app/build/
+android/.gradle/
+android/local.properties
+android/captures/
+android/*.iml
+android/app/*.iml
+
 ios/
 
 # builds android que salen de gradle (los ignoramos para no versionar APKs)
