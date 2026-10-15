@@ -432,6 +432,14 @@ public sealed class AgentDispatcher : IAgentDispatcher
 
         // NOTA(redmanager): candado del asesor omitido (sin Lead+Pipeline).
 
+        // BITACORA(test): mensaje recibido en el emulador. Marcamos "(test)" en el titulo para que
+        // en /bitacora-agente el operador distinga los eventos del emulador vs la atencion real.
+        // Sin esta instrumentacion las pruebas del simulador quedaban mudas: no habia forma de ver
+        // el prompt exacto que vio el LLM ni la respuesta cruda, lo cual rompia justamente el
+        // proposito del emulador (iterar sobre el agente viendo QUE paso en cada turno).
+        await LogRunAsync(tenantId, conversationId, binding.AgentId, AiAgentRunLogKind.Inbound,
+            "Mensaje recibido (test)", inboundBody, null, cancellationToken);
+
         var resetAt = conv.AgentContextResetAt;
         var recentMessages = await _db.Messages.IgnoreQueryFilters()
             .Where(m => m.TenantId == tenantId && m.ConversationId == conversationId
@@ -449,8 +457,36 @@ public sealed class AgentDispatcher : IAgentDispatcher
         }
         if (turns.Count == 0) { turns.Add(new AiChatTurn("user", inboundBody)); }
 
+        // BITACORA(test): mismo resumen de contexto que DispatchAsync, para poder diagnosticar
+        // si el emulador esta armando turnos distintos del flujo real.
+        var totalCharsT = turns.Sum(t => t.Text?.Length ?? 0);
+        var turnsSummaryT = string.Join('\n', turns.Select((t, i) =>
+            $"[{i + 1}] role={t.Role} chars={t.Text?.Length ?? 0} body=\"{Preview(t.Text, 120)}\""));
+        await LogRunAsync(tenantId, conversationId, binding.AgentId, AiAgentRunLogKind.Info,
+            $"Contexto enviado al LLM (test) ({turns.Count} turnos, {totalCharsT} chars)",
+            turnsSummaryT, null, cancellationToken);
+
         var result = await RunInferenceWithToolLoopAsync(binding.AgentId, tenantId, conversationId, turns, cancellationToken);
-        if (!result.Ok) { return Skip($"La inferencia fallo: {result.Error ?? "(sin detalle)"}"); }
+
+        // BITACORA(test): prompts del inference service (principal + extractores de cache si
+        // aplican). Mismo content y response COMPLETOS que en DispatchAsync — el valor de la
+        // bitacora depende de guardar el prompt literal, no un resumen.
+        if (result.DebugPrompts is not null)
+        {
+            foreach (var d in result.DebugPrompts)
+            {
+                await LogRunAsync(tenantId, conversationId, binding.AgentId,
+                    AiAgentRunLogKind.Prompt, d.Title + " (test)", d.Content, d.Response, cancellationToken);
+            }
+        }
+
+        if (!result.Ok)
+        {
+            // BITACORA(test): error con el cuerpo crudo del proveedor (clave para ver 401/400/etc).
+            await LogRunAsync(tenantId, conversationId, binding.AgentId, AiAgentRunLogKind.Error,
+                "Inferencia fallo (test)", result.Error, null, cancellationToken);
+            return Skip($"La inferencia fallo: {result.Error ?? "(sin detalle)"}");
+        }
 
         var leadResult = await _leadMarker.ProcessAsync(tenantId, binding.AgentId, conversationId, result.Text ?? string.Empty, cancellationToken);
         var pedidoClean = _pedidoMarker.StripMarkers(leadResult.CleanText);
@@ -493,6 +529,17 @@ public sealed class AgentDispatcher : IAgentDispatcher
         {
             await PersistOutboundAsync(tenantId, conversationId, simBody, "ai_sim", null, cancellationToken);
         }
+
+        // BITACORA(test): respuesta final que vio el usuario del emulador. En DispatchAsync el log
+        // de Reply resume texto+adjuntos; aqui replicamos la misma idea con el conteo de recursos
+        // simulados. Si markersLeaked=true, lo subrayamos: significa que el ScrubResidualMarkers del
+        // flujo real podria estar divergiendo del flujo test (en test no se corre).
+        var leakedWarn = markersLeaked ? " [MARCADORES RESIDUALES NO LIMPIADOS]" : string.Empty;
+        await LogRunAsync(tenantId, conversationId, binding.AgentId, AiAgentRunLogKind.Reply,
+            "Respuesta simulada (test)" + leakedWarn,
+            string.IsNullOrWhiteSpace(simBody) ? "(sin texto; solo adjuntos)" : simBody,
+            $"turnos={turns.Count} in_tok={result.InputTokens} out_tok={result.OutputTokens} adj={atts.Count}",
+            cancellationToken);
 
         return new AgentDispatchResult(
             Ok: true, SkipReason: null, ReplyText: pedidoClean, RawLlmResponse: result.Text,
