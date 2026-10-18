@@ -676,6 +676,43 @@ app.MapMethods("/api/agents/{id:guid}", new[] { "PATCH" }, async (
     finally { ambient.Set(null, null); }
 }).AllowAnonymous().DisableAntiforgery();
 
+// TEMPORAL (remover en el siguiente commit): GET /api/admin/platform-users-debug
+// Endpoint de UN SOLO uso para diagnosticar un reset de clave de SuperAdmin que no estaba
+// funcionando. Devuelve solo id, email, role, auth_provider y PREFIJO del password_hash
+// (nunca el hash completo). Autenticado con X-Api-Token del tenant (no requiere SuperAdmin
+// porque eso es justo lo que estamos arreglando). Se borrara en el siguiente deploy.
+app.MapGet("/api/admin/platform-users-debug", async (
+    HttpContext http,
+    CubotRedManager.Application.Tenancy.IApiTokenService tokens,
+    CubotRedManager.Application.Abstractions.IAmbientTenantOverride ambient,
+    CubotRedManager.Application.Abstractions.IApplicationDbContext db,
+    CancellationToken ct) =>
+{
+    var ident = await AuthenticateApiTokenAsync(http, tokens, ambient);
+    if (ident is null) { return Results.Unauthorized(); }
+    try
+    {
+        var rows = await db.PlatformUsers
+            .AsNoTracking()
+            .Select(u => new {
+                id = u.Id,
+                email = u.Email,
+                displayName = u.DisplayName,
+                platformRole = u.PlatformRole.ToString(),
+                authProvider = u.AuthProvider.ToString(),
+                emailVerified = u.EmailVerified,
+                createdAt = u.CreatedAt,
+                hashPrefix = u.PasswordHash != null && u.PasswordHash.Length > 25
+                    ? u.PasswordHash.Substring(0, 25)
+                    : u.PasswordHash,
+                hashLen = u.PasswordHash != null ? u.PasswordHash.Length : 0
+            })
+            .ToListAsync(ct);
+        return Results.Ok(new { ok = true, total = rows.Count, users = rows });
+    }
+    finally { ambient.Set(null, null); }
+}).AllowAnonymous().DisableAntiforgery();
+
 // POST /api/agents/{id}/active - encender o apagar el agente. Body JSON: {"active": true/false}.
 // Un agente recien creado por POST /api/agents arranca apagado (IsActive=false) para que el operador
 // lo revise antes de dejar que atienda. Este endpoint es el toggle que la UI /agentes hace por un
