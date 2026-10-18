@@ -676,6 +676,34 @@ app.MapMethods("/api/agents/{id:guid}", new[] { "PATCH" }, async (
     finally { ambient.Set(null, null); }
 }).AllowAnonymous().DisableAntiforgery();
 
+// POST /api/agents/{id}/active - encender o apagar el agente. Body JSON: {"active": true/false}.
+// Un agente recien creado por POST /api/agents arranca apagado (IsActive=false) para que el operador
+// lo revise antes de dejar que atienda. Este endpoint es el toggle que la UI /agentes hace por un
+// click; via API permite scripts tipo "crea + configura + activa" en una secuencia unica.
+app.MapPost("/api/agents/{id:guid}/active", async (
+    Guid id,
+    HttpContext http,
+    CubotRedManager.Application.Tenancy.IApiTokenService tokens,
+    CubotRedManager.Application.Abstractions.IAmbientTenantOverride ambient,
+    CubotRedManager.Application.Tenancy.IAiAgentService svc,
+    CancellationToken ct) =>
+{
+    var ident = await AuthenticateApiTokenAsync(http, tokens, ambient);
+    if (ident is null) { return Results.Unauthorized(); }
+    try
+    {
+        using var body = await System.Text.Json.JsonDocument.ParseAsync(http.Request.Body, cancellationToken: ct);
+        if (!body.RootElement.TryGetProperty("active", out var activeEl) ||
+            (activeEl.ValueKind != System.Text.Json.JsonValueKind.True && activeEl.ValueKind != System.Text.Json.JsonValueKind.False))
+        {
+            return Results.BadRequest(new { error = "body debe tener {active: true/false}" });
+        }
+        var updated = await svc.SetActiveAsync(id, activeEl.GetBoolean(), ident.UserId, ct);
+        return updated is null ? Results.NotFound() : Results.Ok(updated);
+    }
+    finally { ambient.Set(null, null); }
+}).AllowAnonymous().DisableAntiforgery();
+
 // GET /api/agents/{id}/run-logs?take=N - ultimas N entradas de bitacora del agente (todas las
 // conversaciones que atendio). Sirve para diagnosticar por que no responde con imagen o por que
 // no marca reacciones. Sin este endpoint habia que abrir la UI /agentes -> Bitacora manualmente.
