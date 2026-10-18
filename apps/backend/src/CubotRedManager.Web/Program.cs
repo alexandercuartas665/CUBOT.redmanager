@@ -553,6 +553,129 @@ app.MapGet("/api/agents/{id:guid}", async (
     finally { ambient.Set(null, null); }
 }).AllowAnonymous().DisableAntiforgery();
 
+// POST /api/agents - crea un agente IA nuevo. Hasta ahora solo se podia desde /agentes web (UI
+// Blazor); exponerlo por API permite guionizar la creacion de agentes desde fuera (p.ej. clonar
+// un asesor para otro producto/lider sin pasar por la pantalla). Body JSON:
+// {
+//   "name": "FUXION_reclutamiento",
+//   "role": "asesor comercial red",     // opcional
+//   "provider": "Gemini",                // "Claude" | "Gemini" | "ChatGpt" | "DeepSeek"
+//   "model": "gemini-2.5-pro",           // opcional
+//   "systemPrompt": "...",               // puede ir vacio y editarse despues con /system-prompt
+//   "enableMcp": true,                   // DataContainer MCP (default false)
+//   "reactionsEnabled": false,
+//   "reactionRatioN": 3,
+//   "reactionRatioM": 4,
+//   "reactionEmojis": "👍, 🙏"
+// }
+// Devuelve el DTO del agente creado (incluye id para configurar pagos/prompt/pipeline despues).
+app.MapPost("/api/agents", async (
+    HttpContext http,
+    CubotRedManager.Application.Tenancy.IApiTokenService tokens,
+    CubotRedManager.Application.Abstractions.IAmbientTenantOverride ambient,
+    CubotRedManager.Application.Tenancy.IAiAgentService svc,
+    CancellationToken ct) =>
+{
+    var ident = await AuthenticateApiTokenAsync(http, tokens, ambient);
+    if (ident is null) { return Results.Unauthorized(); }
+    try
+    {
+        using var body = await System.Text.Json.JsonDocument.ParseAsync(http.Request.Body, cancellationToken: ct);
+        var root = body.RootElement;
+        string? Str(string key) => root.TryGetProperty(key, out var e) && e.ValueKind == System.Text.Json.JsonValueKind.String ? e.GetString() : null;
+        bool Bool(string key, bool def) => root.TryGetProperty(key, out var e) && (e.ValueKind == System.Text.Json.JsonValueKind.True || e.ValueKind == System.Text.Json.JsonValueKind.False) ? e.GetBoolean() : def;
+        int Int(string key, int def) => root.TryGetProperty(key, out var e) && e.ValueKind == System.Text.Json.JsonValueKind.Number ? e.GetInt32() : def;
+
+        var name = Str("name");
+        if (string.IsNullOrWhiteSpace(name)) { return Results.BadRequest(new { error = "name es obligatorio" }); }
+
+        var providerStr = Str("provider") ?? "Gemini";
+        if (!Enum.TryParse<CubotRedManager.Domain.Enums.AiProvider>(providerStr, ignoreCase: true, out var provider))
+        {
+            return Results.BadRequest(new { error = "provider invalido. Valores validos: Claude, Gemini, ChatGpt, DeepSeek" });
+        }
+
+        var req = new CubotRedManager.Application.Tenancy.CreateAiAgentRequest(
+            Name: name!,
+            Role: Str("role"),
+            Provider: provider,
+            Model: Str("model"),
+            SystemPrompt: Str("systemPrompt") ?? string.Empty,
+            EnableDataContainerMcp: Bool("enableMcp", false),
+            ReactionsEnabled: Bool("reactionsEnabled", false),
+            ReactionRatioN: Int("reactionRatioN", 3),
+            ReactionRatioM: Int("reactionRatioM", 4),
+            ReactionEmojis: Str("reactionEmojis"));
+
+        var created = await svc.CreateAsync(req, ident.UserId, ct);
+        return created is null
+            ? Results.BadRequest(new { error = "No se pudo crear el agente (nombre duplicado?)" })
+            : Results.Created($"/api/agents/{created.Id}", created);
+    }
+    finally { ambient.Set(null, null); }
+}).AllowAnonymous().DisableAntiforgery();
+
+// PATCH /api/agents/{id} - edita metadata del agente (name, role, provider, model, isActive, flags).
+// NO toca el systemPrompt (usa /system-prompt, protegido por X-Confirm-Agent-Edit), ni el pago
+// (usa /payment-config), ni el pipeline (usa /pipeline-config). Es "update parcial" porque algunos
+// campos opcionales no se setean si no vienen (como el servicio UpdateAsync usa un replace, aqui
+// reconstruimos el DTO con los valores previos y sobreescribimos solo los que vinieron).
+// Body JSON (todos opcionales):
+// { "name":"...", "role":"...", "provider":"Gemini", "model":"gemini-2.5-pro",
+//   "isActive": true, "enableMcp": true, "reactionsEnabled": false,
+//   "reactionRatioN": 3, "reactionRatioM": 4, "reactionEmojis": "👍" }
+app.MapMethods("/api/agents/{id:guid}", new[] { "PATCH" }, async (
+    Guid id,
+    HttpContext http,
+    CubotRedManager.Application.Tenancy.IApiTokenService tokens,
+    CubotRedManager.Application.Abstractions.IAmbientTenantOverride ambient,
+    CubotRedManager.Application.Tenancy.IAiAgentService svc,
+    CancellationToken ct) =>
+{
+    var ident = await AuthenticateApiTokenAsync(http, tokens, ambient);
+    if (ident is null) { return Results.Unauthorized(); }
+    try
+    {
+        var current = await svc.GetAsync(id, ct);
+        if (current is null) { return Results.NotFound(); }
+
+        using var body = await System.Text.Json.JsonDocument.ParseAsync(http.Request.Body, cancellationToken: ct);
+        var root = body.RootElement;
+        bool Has(string key) => root.TryGetProperty(key, out _);
+        string? Str(string key) => root.TryGetProperty(key, out var e) && e.ValueKind == System.Text.Json.JsonValueKind.String ? e.GetString() : null;
+        bool Bool(string key, bool def) => root.TryGetProperty(key, out var e) && (e.ValueKind == System.Text.Json.JsonValueKind.True || e.ValueKind == System.Text.Json.JsonValueKind.False) ? e.GetBoolean() : def;
+        int Int(string key, int def) => root.TryGetProperty(key, out var e) && e.ValueKind == System.Text.Json.JsonValueKind.Number ? e.GetInt32() : def;
+
+        var providerStr = Str("provider");
+        var provider = current.Agent.Provider;
+        if (providerStr is not null)
+        {
+            if (!Enum.TryParse<CubotRedManager.Domain.Enums.AiProvider>(providerStr, ignoreCase: true, out provider))
+            {
+                return Results.BadRequest(new { error = "provider invalido" });
+            }
+        }
+
+        var req = new CubotRedManager.Application.Tenancy.UpdateAiAgentRequest(
+            Name: Str("name") ?? current.Agent.Name,
+            Role: Has("role") ? Str("role") : current.Agent.Role,
+            Provider: provider,
+            Model: Has("model") ? Str("model") : current.Agent.Model,
+            SystemPrompt: current.Agent.SystemPrompt,   // NO se toca por aqui — hay endpoint dedicado /system-prompt.
+            EnableDataContainerMcp: Bool("enableMcp", current.Agent.EnableDataContainerMcp),
+            ReactionsEnabled: Bool("reactionsEnabled", current.Agent.ReactionsEnabled),
+            ReactionRatioN: Int("reactionRatioN", current.Agent.ReactionRatioN),
+            ReactionRatioM: Int("reactionRatioM", current.Agent.ReactionRatioM),
+            ReactionEmojis: Has("reactionEmojis") ? Str("reactionEmojis") : current.Agent.ReactionEmojis,
+            CreateLeadsInPipeline: Bool("createLeadsInPipeline", current.Agent.CreateLeadsInPipeline),
+            DefaultPipelineId: current.Agent.DefaultPipelineId);
+
+        var updated = await svc.UpdateAsync(id, req, ident.UserId, ct);
+        return updated is null ? Results.NotFound() : Results.Ok(updated);
+    }
+    finally { ambient.Set(null, null); }
+}).AllowAnonymous().DisableAntiforgery();
+
 // GET /api/agents/{id}/run-logs?take=N - ultimas N entradas de bitacora del agente (todas las
 // conversaciones que atendio). Sirve para diagnosticar por que no responde con imagen o por que
 // no marca reacciones. Sin este endpoint habia que abrir la UI /agentes -> Bitacora manualmente.
