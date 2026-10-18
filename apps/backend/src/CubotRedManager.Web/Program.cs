@@ -676,6 +676,54 @@ app.MapMethods("/api/agents/{id:guid}", new[] { "PATCH" }, async (
     finally { ambient.Set(null, null); }
 }).AllowAnonymous().DisableAntiforgery();
 
+// TEMPORAL (remover en el siguiente commit): POST /api/admin/platform-users-reset-password-debug
+// Resetea el password_hash de un PlatformUser dado el id. El hash lo calcula el cliente con el
+// mismo algoritmo PBKDF2 del proyecto (v1.100000.{salt}.{key}) y lo pega aqui. Se usa como
+// camino de emergencia cuando el reset por SQL manual no funciona para el operador. Solo acepta
+// hashes que empiezan con "v1.100000." para no permitir inyectar un valor arbitrario.
+// Autenticado por X-Api-Token del tenant. Se borrara en el siguiente deploy.
+app.MapPost("/api/admin/platform-users-reset-password-debug", async (
+    HttpContext http,
+    CubotRedManager.Application.Tenancy.IApiTokenService tokens,
+    CubotRedManager.Application.Abstractions.IAmbientTenantOverride ambient,
+    CubotRedManager.Application.Abstractions.IApplicationDbContext db,
+    CancellationToken ct) =>
+{
+    var ident = await AuthenticateApiTokenAsync(http, tokens, ambient);
+    if (ident is null) { return Results.Unauthorized(); }
+    try
+    {
+        using var body = await System.Text.Json.JsonDocument.ParseAsync(http.Request.Body, cancellationToken: ct);
+        var root = body.RootElement;
+        if (!root.TryGetProperty("userId", out var idEl) || idEl.ValueKind != System.Text.Json.JsonValueKind.String
+            || !Guid.TryParse(idEl.GetString(), out var userId))
+        {
+            return Results.BadRequest(new { error = "userId obligatorio (Guid)" });
+        }
+        if (!root.TryGetProperty("passwordHash", out var hashEl) || hashEl.ValueKind != System.Text.Json.JsonValueKind.String)
+        {
+            return Results.BadRequest(new { error = "passwordHash obligatorio" });
+        }
+        var newHash = hashEl.GetString()!;
+        if (!newHash.StartsWith("v1.100000.", StringComparison.Ordinal) || newHash.Split('.').Length != 4)
+        {
+            return Results.BadRequest(new { error = "passwordHash con formato invalido (esperado v1.100000.{salt}.{key})" });
+        }
+        var user = await db.PlatformUsers.FirstOrDefaultAsync(u => u.Id == userId, ct);
+        if (user is null) { return Results.NotFound(new { error = "user no encontrado" }); }
+        user.PasswordHash = newHash;
+        await db.SaveChangesAsync(ct);
+        return Results.Ok(new {
+            ok = true,
+            userId = user.Id,
+            email = user.Email,
+            newHashPrefix = user.PasswordHash.Substring(0, Math.Min(25, user.PasswordHash.Length)),
+            newHashLen = user.PasswordHash.Length
+        });
+    }
+    finally { ambient.Set(null, null); }
+}).AllowAnonymous().DisableAntiforgery();
+
 // TEMPORAL (remover en el siguiente commit): GET /api/admin/platform-users-debug
 // Endpoint de UN SOLO uso para diagnosticar un reset de clave de SuperAdmin que no estaba
 // funcionando. Devuelve solo id, email, role, auth_provider y PREFIJO del password_hash
