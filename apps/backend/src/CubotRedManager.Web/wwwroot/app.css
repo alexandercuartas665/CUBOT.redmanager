@@ -691,3 +691,150 @@ h1, h2, h3 { letter-spacing: -0.01em; }
     .pl-chat { border-left: none; border-top: 1px solid var(--border); }
 }
 
+/* ============================================================================
+   Servidores de IA (/admin/servidores-ia) — tarjetas de proveedores (Claude,
+   Gemini, ChatGPT, DeepSeek). Antes el HTML referenciaba .ai-grid / .ai-card
+   pero las clases no estaban definidas: la pagina se veia como lista plana
+   sin estilos. Las agregamos siguiendo la paleta y el patron de la familia.
+   ============================================================================ */
+
+.ai-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+    gap: 18px;
+    margin-top: 24px;
+    max-width: 1200px;
+}
+
+.ai-card {
+    display: flex;
+    flex-direction: column;
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 1rem;
+    padding: 18px 18px 16px;
+    box-shadow: var(--shadow-soft);
+    transition: box-shadow .15s ease, transform .15s ease, border-color .15s ease;
+}
+
+.ai-card:hover {
+    box-shadow: var(--shadow-card);
+    border-color: oklch(0.55 0.22 285 / 0.35);
+    transform: translateY(-2px);
+}
+
+.ai-card-head {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-bottom: 14px;
+}
+
+.ai-card-head .badge {
+    font-size: 10.5px;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    padding: 4px 9px;
+    border-radius: 999px;
+}
+
+.ai-logo {
+    width: 42px;
+    height: 42px;
+    flex: none;
+    border-radius: 11px;
+    display: grid;
+    place-items: center;
+    color: #fff;
+    font-weight: 800;
+    font-size: 15px;
+    letter-spacing: 0.02em;
+    box-shadow: var(--shadow-soft);
+}
+
+/* Un color por proveedor para que el ojo los distinga rapido. Siguen la familia
+   violeta como acento comun pero cada marca tiene su tono asignado. */
+.ai-logo.p-claude   { background: linear-gradient(135deg, #e8a86b, #c97548); }
+.ai-logo.p-gemini   { background: linear-gradient(135deg, #4f8bff, #1f5fe0); }
+.ai-logo.p-gpt      { background: linear-gradient(135deg, #10a37f, #0b7a60); }
+.ai-logo.p-deepseek { background: linear-gradient(135deg, #7c6cff, #4b3edc); }
+
+.ai-name {
+    font-size: 15.5px;
+    font-weight: 700;
+    color: var(--foreground);
+    line-height: 1.15;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.ai-prov {
+    font-size: 11.5px;
+    color: var(--muted-foreground);
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    margin-top: 2px;
+}
+
+.ai-rows {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding: 12px 0;
+    border-top: 1px solid var(--border);
+    border-bottom: 1px solid var(--border);
+    margin-bottom: 4px;
+}
+
+.ai-rows > div {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    gap: 12px;
+    font-size: 12.5px;
+}
+
+.ai-rows > div > span {
+    color: var(--muted-foreground);
+    font-size: 11.5px;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    flex: none;
+}
+
+.ai-rows > div > strong {
+    color: var(--foreground);
+    font-weight: 600;
+    text-align: right;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.ai-toggle {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 12px;
+    margin: 8px 0 4px;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    background: var(--muted);
+    cursor: pointer;
+    user-select: none;
+    font-size: 13px;
+}
+
+.ai-toggle input[type="checkbox"] {
+    width: 16px;
+    height: 16px;
+    accent-color: var(--primary);
+}
+
+@media (max-width: 640px) {
+    .ai-grid { grid-template-columns: 1fr; max-width: 100%; }
+    .ai-card { padding: 16px; }
+}
+
