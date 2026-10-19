@@ -1955,14 +1955,17 @@ app.MapPost("/webhooks/ycloud/{tenantId:guid}", async (
     }
     finally { doc.Dispose(); }
 
-    // Registrar SIEMPRE la llegada (aunque no haya mensajes ni reacciones reconocidas): este es
-    // el camino para diagnosticar "YCloud dispara pero el parser no reconoce" vs "YCloud nunca
-    // dispara". El endpoint /api/debug/webhook-payloads muestra el buffer.
-    webhookBuffer.Record("ycloud", tenantId.ToString(), 200, contentType, userAgent, remoteIp,
-        body, messages.Count, reactions.Count,
-        notes: messages.Count == 0 && reactions.Count == 0 ? "Sin mensajes ni reacciones reconocidas" : null);
+    if (messages.Count == 0 && reactions.Count == 0)
+    {
+        webhookBuffer.Record("ycloud", tenantId.ToString(), 200, contentType, userAgent, remoteIp,
+            body, 0, 0, notes: "Sin mensajes ni reacciones reconocidas");
+        return Results.Ok();
+    }
 
-    if (messages.Count == 0 && reactions.Count == 0) { return Results.Ok(); }
+    // Acumular notas por mensaje/reaccion procesada para que el buffer refleje si cada uno
+    // completo el flujo (lineResolved / ingested / error). Antes el Record se llamaba antes del
+    // procesamiento y perdiamos esa visibilidad.
+    var handlerNotes = new List<string>();
 
     using var scope = scopeFactory.CreateScope();
     scope.ServiceProvider.GetRequiredService<IAmbientTenantOverride>().Set(tenantId, null);
@@ -1970,14 +1973,24 @@ app.MapPost("/webhooks/ycloud/{tenantId:guid}", async (
     var ingest = scope.ServiceProvider.GetRequiredService<CubotRedManager.Application.Tenancy.IChatIngestService>();
 
     // Reacciones primero (son UPDATE Messages.Reaction, no insertan mensaje nuevo).
-    foreach (var r in reactions)
+    for (int ri = 0; ri < reactions.Count; ri++)
     {
-        try { await ingest.ApplyReactionAsync(tenantId, r.TargetWamid, r.Emoji, http.RequestAborted); }
-        catch (Exception ex) { log.LogWarning(ex, "YCloud webhook: ApplyReaction fallo wamid={Wamid}", r.TargetWamid); }
+        var r = reactions[ri];
+        try
+        {
+            await ingest.ApplyReactionAsync(tenantId, r.TargetWamid, r.Emoji, http.RequestAborted);
+            handlerNotes.Add($"rx[{ri}]=OK target={r.TargetWamid.Substring(0, Math.Min(16, r.TargetWamid.Length))}");
+        }
+        catch (Exception ex)
+        {
+            log.LogWarning(ex, "YCloud webhook: ApplyReaction fallo wamid={Wamid}", r.TargetWamid);
+            handlerNotes.Add($"rx[{ri}]=ERROR {ex.GetType().Name}: {ex.Message}");
+        }
     }
 
-    foreach (var m in messages)
+    for (int mi = 0; mi < messages.Count; mi++)
     {
+        var m = messages[mi];
         // Resuelve la linea por sender (to). Si la linea no existe en el tenant o no es YCloud,
         // se descarta silenciosamente (podria ser un webhook mal configurado).
         var line = await db.WhatsAppLines.FirstOrDefaultAsync(l =>
@@ -1985,6 +1998,7 @@ app.MapPost("/webhooks/ycloud/{tenantId:guid}", async (
         if (line is null)
         {
             log.LogInformation("YCloud webhook: linea no encontrada para tenant {TenantId}, to {To}", tenantId, m.ToPhone);
+            handlerNotes.Add($"msg[{mi}]=LINE_NOT_FOUND to={m.ToPhone}");
             continue;
         }
 
@@ -2001,14 +2015,22 @@ app.MapPost("/webhooks/ycloud/{tenantId:guid}", async (
             WhatsAppLineId: line.Id);
         try
         {
-            await ingest.IngestTrustedAsync(tenantId, payload, http.RequestAborted, enqueueDispatch: true);
+            var ingestResult = await ingest.IngestTrustedAsync(tenantId, payload, http.RequestAborted, enqueueDispatch: true);
+            handlerNotes.Add($"msg[{mi}]=LINE_OK line={line.InstanceName} ingest={ingestResult} from={m.FromPhone}");
         }
         catch (Exception ex)
         {
             log.LogWarning(ex, "YCloud webhook: ingest fallo tenant={TenantId} wamid={Wamid}", tenantId, m.Wamid);
+            handlerNotes.Add($"msg[{mi}]=INGEST_ERROR {ex.GetType().Name}: {ex.Message}");
             // Best-effort: no bloqueamos la respuesta 200 (Meta reintenta igual si devolvemos != 200).
         }
     }
+
+    // Registrar al final con TODAS las notas acumuladas del procesamiento. Asi el buffer refleja
+    // exactamente que paso con cada mensaje/reaccion (resolucion de linea, resultado del ingest).
+    webhookBuffer.Record("ycloud", tenantId.ToString(), 200, contentType, userAgent, remoteIp,
+        body, messages.Count, reactions.Count,
+        notes: handlerNotes.Count > 0 ? string.Join(" | ", handlerNotes) : null);
     return Results.Ok();
 }).AllowAnonymous().DisableAntiforgery();
 
