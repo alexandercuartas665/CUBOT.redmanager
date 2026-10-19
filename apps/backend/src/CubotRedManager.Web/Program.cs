@@ -676,6 +676,33 @@ app.MapMethods("/api/agents/{id:guid}", new[] { "PATCH" }, async (
     finally { ambient.Set(null, null); }
 }).AllowAnonymous().DisableAntiforgery();
 
+// GET /api/me - identidad resuelta del X-Api-Token: tenantId + userId. Util para armar URLs
+// que llevan el tenantId (p.ej. el webhook de YCloud: /webhooks/ycloud/{tenantId}) sin tener
+// que consultarlo en la UI.
+app.MapGet("/api/me", async (
+    HttpContext http,
+    CubotRedManager.Application.Tenancy.IApiTokenService tokens,
+    CubotRedManager.Application.Abstractions.IAmbientTenantOverride ambient,
+    CancellationToken ct) =>
+{
+    _ = ct;
+    var ident = await AuthenticateApiTokenAsync(http, tokens, ambient);
+    if (ident is null) { return Results.Unauthorized(); }
+    try
+    {
+        return Results.Ok(new {
+            ok = true,
+            tenantId = ident.TenantId,
+            userId = ident.UserId,
+            webhooks = new {
+                ycloud = $"https://red.cubot.com.co/webhooks/ycloud/{ident.TenantId}",
+                evolution = $"https://red.cubot.com.co/webhooks/evolution/{ident.TenantId}"
+            }
+        });
+    }
+    finally { ambient.Set(null, null); }
+}).AllowAnonymous().DisableAntiforgery();
+
 // GET /api/whatsapp-lines - lista las lineas de WhatsApp del tenant (todos los proveedores:
 // Evolution, YCloud, Cloud API Meta, Emulator) con su proveedor, status, phone, waba_id, y el
 // agente IA vinculado (si lo tiene). Util para diagnosticar por que un mensaje de un numero
