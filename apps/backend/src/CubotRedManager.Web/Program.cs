@@ -91,6 +91,9 @@ if (fxOpts.Enabled)
 // (patron travels) para que el mismo objeto sea IAgentDispatchQueue (donde el ChatIngestService
 // encola) y BackgroundService (donde .NET lo levanta como hosted service).
 builder.Services.AddSingleton<CubotRedManager.Web.BackgroundJobs.AgentDispatchQueue>();
+// Buffer en memoria de ultimos payloads webhook (YCloud/Evolution) para diagnosticar sin pelearse
+// con los logs de Railway. Capacidad fija 50 por proveedor. No persiste al reiniciar el proceso.
+builder.Services.AddSingleton<CubotRedManager.Web.Webhooks.WebhookPayloadBuffer>();
 builder.Services.AddSingleton<CubotRedManager.Application.Tenancy.IAgentDispatchQueue>(sp =>
     sp.GetRequiredService<CubotRedManager.Web.BackgroundJobs.AgentDispatchQueue>());
 builder.Services.AddHostedService(sp =>
@@ -672,6 +675,31 @@ app.MapMethods("/api/agents/{id:guid}", new[] { "PATCH" }, async (
 
         var updated = await svc.UpdateAsync(id, req, ident.UserId, ct);
         return updated is null ? Results.NotFound() : Results.Ok(updated);
+    }
+    finally { ambient.Set(null, null); }
+}).AllowAnonymous().DisableAntiforgery();
+
+// GET /api/debug/webhook-payloads?provider=ycloud&take=20 - ultimos payloads que llegaron al
+// webhook del proveedor indicado (ycloud | evolution). Devuelve metadatos + preview del body
+// (hasta 4000 chars) + conteo de mensajes/reacciones que el parser reconocio. Pensado para
+// diagnosticar: "YCloud configuro mi webhook pero no entra nada" -> si no aparece nada aqui,
+// YCloud no esta disparando; si aparece pero con parsedMessages=0, el parser no reconoce el
+// formato que YCloud esta mandando. Buffer en memoria, no persiste al reiniciar el container.
+app.MapGet("/api/debug/webhook-payloads", async (
+    HttpContext http,
+    CubotRedManager.Application.Tenancy.IApiTokenService tokens,
+    CubotRedManager.Application.Abstractions.IAmbientTenantOverride ambient,
+    CubotRedManager.Web.Webhooks.WebhookPayloadBuffer buffer,
+    string? provider,
+    int? take) =>
+{
+    var ident = await AuthenticateApiTokenAsync(http, tokens, ambient);
+    if (ident is null) { return Results.Unauthorized(); }
+    try
+    {
+        var p = string.IsNullOrWhiteSpace(provider) ? "ycloud" : provider.ToLowerInvariant();
+        var entries = buffer.Snapshot(p, take ?? 20);
+        return Results.Ok(new { ok = true, provider = p, total = entries.Count, entries });
     }
     finally { ambient.Set(null, null); }
 }).AllowAnonymous().DisableAntiforgery();
@@ -1890,12 +1918,33 @@ app.MapPost("/webhooks/ycloud/{tenantId:guid}", async (
     Guid tenantId,
     HttpContext http,
     IServiceScopeFactory scopeFactory,
-    ILoggerFactory loggerFactory) =>
+    ILoggerFactory loggerFactory,
+    CubotRedManager.Web.Webhooks.WebhookPayloadBuffer webhookBuffer) =>
 {
     var log = loggerFactory.CreateLogger("YCloudWebhook");
+
+    // Capturamos el body como string ANTES de parsear para registrarlo en el buffer de diagnostico.
+    // Antes el handler leia el stream directo al JsonDocument y perdiamos la forma exacta de lo que
+    // YCloud mandaba cuando el parser no la reconocia (status updates, formatos distintos, etc.).
+    string body;
+    using (var reader = new StreamReader(http.Request.Body, System.Text.Encoding.UTF8, leaveOpen: false))
+    {
+        body = await reader.ReadToEndAsync();
+    }
+    var contentType = http.Request.ContentType;
+    var userAgent = http.Request.Headers.UserAgent.ToString();
+    var remoteIp = http.Connection.RemoteIpAddress?.ToString()
+                   ?? http.Request.Headers["X-Forwarded-For"].ToString();
+
     System.Text.Json.JsonDocument doc;
-    try { doc = await System.Text.Json.JsonDocument.ParseAsync(http.Request.Body); }
-    catch (Exception ex) { log.LogWarning(ex, "YCloud webhook: JSON invalido para tenant {TenantId}", tenantId); return Results.Ok(); }
+    try { doc = System.Text.Json.JsonDocument.Parse(body); }
+    catch (Exception ex)
+    {
+        log.LogWarning(ex, "YCloud webhook: JSON invalido para tenant {TenantId}", tenantId);
+        webhookBuffer.Record("ycloud", tenantId.ToString(), 200, contentType, userAgent, remoteIp,
+            body, 0, 0, notes: "JSON invalido: " + ex.GetType().Name);
+        return Results.Ok();
+    }
 
     List<CubotRedManager.Web.Webhooks.YCloudWebhookParser.InboundMessage> messages;
     List<CubotRedManager.Web.Webhooks.YCloudWebhookParser.InboundReaction> reactions;
@@ -1905,6 +1954,14 @@ app.MapPost("/webhooks/ycloud/{tenantId:guid}", async (
         reactions = CubotRedManager.Web.Webhooks.YCloudWebhookParser.ParseReactions(doc);
     }
     finally { doc.Dispose(); }
+
+    // Registrar SIEMPRE la llegada (aunque no haya mensajes ni reacciones reconocidas): este es
+    // el camino para diagnosticar "YCloud dispara pero el parser no reconoce" vs "YCloud nunca
+    // dispara". El endpoint /api/debug/webhook-payloads muestra el buffer.
+    webhookBuffer.Record("ycloud", tenantId.ToString(), 200, contentType, userAgent, remoteIp,
+        body, messages.Count, reactions.Count,
+        notes: messages.Count == 0 && reactions.Count == 0 ? "Sin mensajes ni reacciones reconocidas" : null);
+
     if (messages.Count == 0 && reactions.Count == 0) { return Results.Ok(); }
 
     using var scope = scopeFactory.CreateScope();
