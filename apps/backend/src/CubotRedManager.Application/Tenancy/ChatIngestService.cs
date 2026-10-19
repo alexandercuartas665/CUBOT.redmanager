@@ -66,9 +66,29 @@ public sealed class ChatIngestService : IChatIngestService
 
         var sentAt = payload.SentAt ?? _timeProvider.GetUtcNow();
 
-        // Conversacion por (TenantId, ContactPhone). Si no existe, la creamos.
-        var conversation = await _db.Conversations.IgnoreQueryFilters()
-            .FirstOrDefaultAsync(c => c.TenantId == tenantId && c.ContactPhone == payload.ContactPhone, ct);
+        // Conversacion por (TenantId, ContactPhone, WhatsAppLineId). Antes solo filtraba por
+        // (TenantId, ContactPhone), lo cual mezclaba conversaciones de un mismo contacto que
+        // escribia a lineas distintas del mismo tenant: el primer mensaje creaba la conv con
+        // WhatsAppLineId=X y los siguientes mensajes del mismo numero entrando por una linea
+        // distinta Y caian en esa conv vieja (misma conv, pero vinculada a X) -> el agente de
+        // la linea Y nunca atendia, respondia el agente de X y el envio saliente iba por X
+        // (podia estar desconectada -> status=failed). Fix: incluir la linea en el lookup
+        // cuando viene en el payload, para que cada linea tenga su propia conv por contacto.
+        Conversation? conversation;
+        if (payload.WhatsAppLineId is Guid wppLineId)
+        {
+            conversation = await _db.Conversations.IgnoreQueryFilters()
+                .FirstOrDefaultAsync(c => c.TenantId == tenantId
+                    && c.ContactPhone == payload.ContactPhone
+                    && c.WhatsAppLineId == wppLineId, ct);
+        }
+        else
+        {
+            // Backward compat (call-sites viejos sin lineId): buscar cualquiera. Mantiene el
+            // comportamiento historico de ingestas internas que todavia no cablean la linea.
+            conversation = await _db.Conversations.IgnoreQueryFilters()
+                .FirstOrDefaultAsync(c => c.TenantId == tenantId && c.ContactPhone == payload.ContactPhone, ct);
+        }
         if (conversation is null)
         {
             conversation = new Conversation
@@ -90,14 +110,12 @@ public sealed class ChatIngestService : IChatIngestService
             }
             // Desarchivar por mensaje entrante nuevo.
             conversation.ArchivedAt = null;
-            // Rellenar name/line si estaban null.
+            // Rellenar name si estaba null. (Line NO se rellena: si viene distinta ya habriamos
+            // creado una conv nueva arriba; si viene igual, ya coincide; si viene null por un
+            // call-site viejo, dejamos la de la conv tal cual.)
             if (string.IsNullOrWhiteSpace(conversation.ContactName) && !string.IsNullOrWhiteSpace(payload.ContactName))
             {
                 conversation.ContactName = payload.ContactName;
-            }
-            if (conversation.WhatsAppLineId is null && payload.WhatsAppLineId is not null)
-            {
-                conversation.WhatsAppLineId = payload.WhatsAppLineId;
             }
         }
 
