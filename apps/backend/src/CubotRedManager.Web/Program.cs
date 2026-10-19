@@ -676,6 +676,57 @@ app.MapMethods("/api/agents/{id:guid}", new[] { "PATCH" }, async (
     finally { ambient.Set(null, null); }
 }).AllowAnonymous().DisableAntiforgery();
 
+// GET /api/whatsapp-lines - lista las lineas de WhatsApp del tenant (todos los proveedores:
+// Evolution, YCloud, Cloud API Meta, Emulator) con su proveedor, status, phone, waba_id, y el
+// agente IA vinculado (si lo tiene). Util para diagnosticar por que un mensaje de un numero
+// real no llega al agente: si falta el binding, falta el status Connected, o la linea no existe.
+app.MapGet("/api/whatsapp-lines", async (
+    HttpContext http,
+    CubotRedManager.Application.Tenancy.IApiTokenService tokens,
+    CubotRedManager.Application.Abstractions.IAmbientTenantOverride ambient,
+    CubotRedManager.Application.Abstractions.IApplicationDbContext db,
+    CancellationToken ct) =>
+{
+    var ident = await AuthenticateApiTokenAsync(http, tokens, ambient);
+    if (ident is null) { return Results.Unauthorized(); }
+    try
+    {
+        var lines = await db.WhatsAppLines.AsNoTracking()
+            .OrderBy(l => l.InstanceName)
+            .Select(l => new {
+                l.Id, l.InstanceName, l.PhoneNumber, l.Provider, l.Status,
+                l.LastConnectedAt, l.LastStatusAt,
+                // Datos de proveedor NO sensibles (ids/wabas; nunca tokens):
+                yCloudWabaId = l.YCloudWabaId,
+                yCloudPhoneNumberId = l.YCloudPhoneNumberId,
+                cloudPhoneNumberId = l.CloudPhoneNumberId,
+                cloudWabaId = l.CloudBusinessAccountId
+            })
+            .ToListAsync(ct);
+        var bindings = await db.AiAgentLineBindings.AsNoTracking()
+            .Where(b => b.IsConnected)
+            .Select(b => new { b.WhatsAppLineId, b.AgentId, b.AutoConfirm })
+            .ToListAsync(ct);
+        var agentNames = await db.AiAgents.AsNoTracking()
+            .Select(a => new { a.Id, a.Name })
+            .ToDictionaryAsync(a => a.Id, a => a.Name, ct);
+        var byLine = bindings.ToDictionary(b => b.WhatsAppLineId);
+        var enriched = lines.Select(l => {
+            byLine.TryGetValue(l.Id, out var b);
+            return new {
+                l.Id, l.InstanceName, l.PhoneNumber, provider = l.Provider.ToString(), status = l.Status.ToString(),
+                l.LastConnectedAt, l.LastStatusAt,
+                l.yCloudWabaId, l.yCloudPhoneNumberId, l.cloudPhoneNumberId, l.cloudWabaId,
+                boundAgentId = b?.AgentId,
+                boundAgentName = b?.AgentId is Guid aid && agentNames.TryGetValue(aid, out var nm) ? nm : null,
+                autoConfirm = b?.AutoConfirm
+            };
+        }).ToList();
+        return Results.Ok(new { ok = true, total = enriched.Count, lines = enriched });
+    }
+    finally { ambient.Set(null, null); }
+}).AllowAnonymous().DisableAntiforgery();
+
 // GET /api/agents/{id}/cache-fields - lista los campos que el agente debe capturar durante la
 // conversacion (pais, motivacion, horas disponibles, etc.). El "extractor" LLM del AiInferenceService
 // corre despues de cada respuesta y actualiza AiAgentCacheValues con lo que detecte en el chat.
