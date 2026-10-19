@@ -338,6 +338,30 @@ public sealed class LeadMarkerProcessor : ILeadMarkerProcessor
               .Where(s => s.Length > 0)
               .ToList();
 
+    // Keys semanticas conocidas que el procesador reconoce como "nombre" cuando no hay mapping
+    // explicito. Soporta variantes en espanol/ingles para que distintos operadores puedan nombrar
+    // sus cache fields naturalmente ("nombre", "nombre_cliente", "contact_name"...).
+    private static readonly HashSet<string> KnownNameKeys = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "nombre", "nombre_cliente", "nombre_clienta", "nombre_contacto",
+        "contact_name", "contactname", "name", "client_name"
+    };
+    private static readonly HashSet<string> KnownPhoneKeys = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "telefono", "celular", "whatsapp", "contact_phone", "contactphone", "phone", "mobile"
+    };
+
+    // Keys que, si existen, se usan para componer el Topic cuando no hay mapping explicito.
+    // Orden de preferencia: lo primero que aparezca gana para la parte principal del topic;
+    // el resto se concatena como paréntesis. Ej: "Ingresos extra (Colombia, Medellin)".
+    private static readonly string[] TopicPrimaryKeys = {
+        "motivacion", "interes", "producto_interes", "producto_recomendado",
+        "sintoma_principal", "sintomas", "dolencia", "topic", "tema"
+    };
+    private static readonly string[] TopicContextKeys = {
+        "pais", "country", "ciudad", "city"
+    };
+
     private Lead? TryBuildLeadFromCache(
         Guid tenantId,
         Guid pipelineId,
@@ -351,11 +375,13 @@ public sealed class LeadMarkerProcessor : ILeadMarkerProcessor
         string? name = null, phone = null, topic = null, currency = null;
         decimal? value = null;
         var customFields = new Dictionary<string, string?>();
+        var consumedByMapping = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
         foreach (var (cacheKey, selector) in mappingsByCacheKey)
         {
             if (!cache.TryGetValue(cacheKey, out var raw) || string.IsNullOrWhiteSpace(raw)) { continue; }
             var trimmed = raw.Trim();
+            consumedByMapping.Add(cacheKey);
 
             if (selector.StartsWith("core:", StringComparison.OrdinalIgnoreCase))
             {
@@ -375,6 +401,53 @@ public sealed class LeadMarkerProcessor : ILeadMarkerProcessor
             {
                 var key = selector.Substring(6);
                 if (!string.IsNullOrWhiteSpace(key)) { customFields[key] = SerializeForField(key, trimmed, fieldMeta); }
+            }
+        }
+
+        // FALLBACK: cache keys SIN mapping explicito. Antes se perdian — el Lead quedaba casi
+        // vacio aunque el agente habia capturado datos. Ahora:
+        //   1. Los cache values quedan en FieldValuesJson usando su propio key como campo.
+        //   2. Si no se seteo name/phone/topic desde mappings, se intenta derivarlos de keys
+        //      semanticas conocidas (nombre, telefono, motivacion+pais).
+        // Asi un agente nuevo sin mappings configurados ya entrega leads con contexto, y uno con
+        // mappings explicitos los sigue respetando (los mappings tienen prioridad sobre fallback).
+        foreach (var (cacheKey, raw) in cache)
+        {
+            if (consumedByMapping.Contains(cacheKey)) { continue; }
+            if (string.IsNullOrWhiteSpace(raw)) { continue; }
+            var trimmed = raw.Trim();
+            if (name is null && KnownNameKeys.Contains(cacheKey)) { name = trimmed; continue; }
+            if (phone is null && KnownPhoneKeys.Contains(cacheKey)) { phone = trimmed; continue; }
+            // Todos los demas van al FieldValuesJson con su propio key — asi Luz ve "pais: Peru",
+            // "motivacion: Ingresos extra", "horas_disponibles: 10", etc. en la tarjeta del Kanban.
+            if (!customFields.ContainsKey(cacheKey))
+            {
+                customFields[cacheKey] = SerializeForField(cacheKey, trimmed, fieldMeta);
+            }
+        }
+
+        // Topic auto-compuesto si no se seteo explicitamente: toma la primera key semantica
+        // encontrada (motivacion, interes, sintomas...) como centro, y adjunta en parentesis
+        // la combinacion de pais/ciudad si existen. Ej: "Ingresos extra (Colombia, Medellin)".
+        if (string.IsNullOrWhiteSpace(topic))
+        {
+            string? primary = null;
+            foreach (var key in TopicPrimaryKeys)
+            {
+                if (cache.TryGetValue(key, out var v) && !string.IsNullOrWhiteSpace(v))
+                {
+                    primary = v.Trim();
+                    break;
+                }
+            }
+            if (!string.IsNullOrWhiteSpace(primary))
+            {
+                var ctx = TopicContextKeys
+                    .Select(k => cache.TryGetValue(k, out var cv) ? cv?.Trim() : null)
+                    .Where(cv => !string.IsNullOrWhiteSpace(cv))
+                    .Distinct(StringComparer.OrdinalIgnoreCase)
+                    .ToList();
+                topic = ctx.Count > 0 ? $"{primary} ({string.Join(", ", ctx!)})" : primary;
             }
         }
 

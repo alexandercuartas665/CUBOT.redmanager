@@ -676,6 +676,102 @@ app.MapMethods("/api/agents/{id:guid}", new[] { "PATCH" }, async (
     finally { ambient.Set(null, null); }
 }).AllowAnonymous().DisableAntiforgery();
 
+// GET /api/agents/{id}/cache-fields - lista los campos que el agente debe capturar durante la
+// conversacion (pais, motivacion, horas disponibles, etc.). El "extractor" LLM del AiInferenceService
+// corre despues de cada respuesta y actualiza AiAgentCacheValues con lo que detecte en el chat.
+// Al cierre con [[crear_lead_pipeline]], el LeadMarkerProcessor vuelca esos values al Lead.
+app.MapGet("/api/agents/{id:guid}/cache-fields", async (
+    Guid id,
+    HttpContext http,
+    CubotRedManager.Application.Tenancy.IApiTokenService tokens,
+    CubotRedManager.Application.Abstractions.IAmbientTenantOverride ambient,
+    CubotRedManager.Application.Tenancy.IAiAgentCacheService cacheSvc,
+    CancellationToken ct) =>
+{
+    var ident = await AuthenticateApiTokenAsync(http, tokens, ambient);
+    if (ident is null) { return Results.Unauthorized(); }
+    try { return Results.Ok(await cacheSvc.ListFieldsAsync(id, ct)); }
+    finally { ambient.Set(null, null); }
+}).AllowAnonymous().DisableAntiforgery();
+
+// POST /api/agents/{id}/cache-fields - crea en bulk los campos de captura del agente. Body:
+// { "fields": [{"label": "Pais", "description": "Pais de residencia", "isUpdatable": true}, ...] }
+// El FieldKey se auto-genera por slugify del Label (sin acentos, en snake_case). Idempotente a
+// nivel de key: si el agente ya tiene un field con el mismo key, se omite silenciosamente para
+// que ejecutar la misma llamada dos veces no genere duplicados ni rompa el flujo.
+app.MapPost("/api/agents/{id:guid}/cache-fields", async (
+    Guid id,
+    HttpContext http,
+    CubotRedManager.Application.Tenancy.IApiTokenService tokens,
+    CubotRedManager.Application.Abstractions.IAmbientTenantOverride ambient,
+    CubotRedManager.Application.Tenancy.IAiAgentCacheService cacheSvc,
+    CancellationToken ct) =>
+{
+    var ident = await AuthenticateApiTokenAsync(http, tokens, ambient);
+    if (ident is null) { return Results.Unauthorized(); }
+    try
+    {
+        using var body = await System.Text.Json.JsonDocument.ParseAsync(http.Request.Body, cancellationToken: ct);
+        if (!body.RootElement.TryGetProperty("fields", out var fieldsEl) || fieldsEl.ValueKind != System.Text.Json.JsonValueKind.Array)
+        {
+            return Results.BadRequest(new { error = "body debe tener {fields: [...]}" });
+        }
+
+        var existing = (await cacheSvc.ListFieldsAsync(id, ct))
+            .Select(f => f.FieldKey)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+        var created = new List<CubotRedManager.Application.Tenancy.AiAgentCacheFieldDto>();
+        var skipped = new List<string>();
+
+        foreach (var el in fieldsEl.EnumerateArray())
+        {
+            if (el.ValueKind != System.Text.Json.JsonValueKind.Object) { continue; }
+            var label = el.TryGetProperty("label", out var lbl) && lbl.ValueKind == System.Text.Json.JsonValueKind.String ? lbl.GetString() : null;
+            if (string.IsNullOrWhiteSpace(label)) { continue; }
+            var description = el.TryGetProperty("description", out var dsc) && dsc.ValueKind == System.Text.Json.JsonValueKind.String ? dsc.GetString() : null;
+            var isUpdatable = !el.TryGetProperty("isUpdatable", out var upd)
+                || upd.ValueKind != System.Text.Json.JsonValueKind.False;
+
+            // Pre-check de key duplicado: generamos el slug igual que el service para evitar
+            // crear uno con "label 2" cuando ya existe el mismo semantico.
+            var slug = Slugify(label!);
+            if (existing.Contains(slug)) { skipped.Add(slug); continue; }
+
+            var req = new CubotRedManager.Application.Tenancy.CreateAgentCacheFieldRequest(id, label!, description, isUpdatable);
+            var dto = await cacheSvc.CreateFieldAsync(req, ident.UserId, ct);
+            if (dto is not null)
+            {
+                created.Add(dto);
+                existing.Add(dto.FieldKey);
+            }
+        }
+        return Results.Ok(new { ok = true, created, skippedKeys = skipped });
+    }
+    finally { ambient.Set(null, null); }
+
+    // Replica el slugify del AiAgentCacheService (sin acentos, en snake_case).
+    static string Slugify(string label)
+    {
+        var normalized = label.Trim().ToLowerInvariant();
+        var sb = new System.Text.StringBuilder(normalized.Length);
+        foreach (var ch in normalized)
+        {
+            if (ch >= 'a' && ch <= 'z') { sb.Append(ch); }
+            else if (ch >= '0' && ch <= '9') { sb.Append(ch); }
+            else if (ch == 'ñ') { sb.Append('n'); }
+            else if ("áàäâã".Contains(ch)) { sb.Append('a'); }
+            else if ("éèëê".Contains(ch)) { sb.Append('e'); }
+            else if ("íìïî".Contains(ch)) { sb.Append('i'); }
+            else if ("óòöôõ".Contains(ch)) { sb.Append('o'); }
+            else if ("úùüû".Contains(ch)) { sb.Append('u'); }
+            else if (ch == ' ' || ch == '-' || ch == '_') { if (sb.Length > 0 && sb[^1] != '_') { sb.Append('_'); } }
+        }
+        var s = sb.ToString().Trim('_');
+        return string.IsNullOrEmpty(s) ? "dato" : s;
+    }
+}).AllowAnonymous().DisableAntiforgery();
+
 // POST /api/agents/{id}/active - encender o apagar el agente. Body JSON: {"active": true/false}.
 // Un agente recien creado por POST /api/agents arranca apagado (IsActive=false) para que el operador
 // lo revise antes de dejar que atienda. Este endpoint es el toggle que la UI /agentes hace por un
