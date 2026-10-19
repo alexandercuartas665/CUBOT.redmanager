@@ -50,8 +50,13 @@ public static class YCloudWebhookParser
         else { msg = el; }
 
         var wamid = TryStr(msg, "wamid") ?? TryStr(msg, "id");
-        var from = TryStr(msg, "from");
-        var to = TryStr(msg, "to");
+        // YCloud puede entregar "from"/"to" con "+" al inicio (formato E.164 completo) o sin "+"
+        // (formato Meta). Normalizamos a SIN "+" aqui para que el resto del pipeline no tenga que
+        // preocuparse: WhatsAppLine.YCloudPhoneNumberId se guarda sin "+" y el handler compara
+        // igualdad exacta — con "+" la comparacion fallaba silenciosamente y perdiamos el mensaje
+        // sin crear Conversation ni disparar al agente.
+        var from = StripPlus(TryStr(msg, "from"));
+        var to = StripPlus(TryStr(msg, "to"));
         if (string.IsNullOrWhiteSpace(wamid) || string.IsNullOrWhiteSpace(from) || string.IsNullOrWhiteSpace(to))
         {
             return;
@@ -114,7 +119,7 @@ public static class YCloudWebhookParser
 
         var type = TryStr(msg, "type");
         if (!string.Equals(type, "reaction", StringComparison.OrdinalIgnoreCase)) { return; }
-        var to = TryStr(msg, "to");
+        var to = StripPlus(TryStr(msg, "to"));
         if (string.IsNullOrWhiteSpace(to)) { return; }
         if (!msg.TryGetProperty("reaction", out var r) || r.ValueKind != JsonValueKind.Object) { return; }
         var targetId = TryStr(r, "message_id") ?? TryStr(r, "messageId");
@@ -127,4 +132,12 @@ public static class YCloudWebhookParser
         => el.ValueKind == JsonValueKind.Object && el.TryGetProperty(prop, out var v) && v.ValueKind == JsonValueKind.String
             ? v.GetString()
             : null;
+
+    /// <summary>Quita el "+" inicial si existe. Para normalizar numeros E.164 ("+573013163553")
+    /// al formato Meta/YCloud sin "+" ("573013163553") que es como se guardan en la BD.</summary>
+    private static string? StripPlus(string? s)
+    {
+        if (string.IsNullOrEmpty(s)) { return s; }
+        return s[0] == '+' ? s.Substring(1) : s;
+    }
 }
