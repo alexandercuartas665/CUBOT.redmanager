@@ -946,7 +946,10 @@ public sealed class AgentDispatcher : IAgentDispatcher
     private async Task<AiChatResult> RunInferenceWithToolLoopAsync(
         Guid agentId, Guid tenantId, Guid conversationId, List<AiChatTurn> turns, CancellationToken ct)
     {
-        AiChatResult result = await _inference.TestChatAsync(agentId, turns, systemPromptOverride: null, cancellationToken: ct);
+        // sessionId = conversationId para que la cache del agente este aislada por chat (sin esto,
+        // el extractor LLM guarda con SessionId=agentId y todas las convs del mismo agente leen la
+        // misma cache -> contamina los Lead creados por LeadMarkerProcessor).
+        AiChatResult result = await _inference.TestChatAsync(agentId, turns, systemPromptOverride: null, sessionId: conversationId, cancellationToken: ct);
         for (int iter = 0; iter < MaxToolIterations; iter++)
         {
             if (!result.Ok || string.IsNullOrWhiteSpace(result.Text)) { return result; }
@@ -973,7 +976,7 @@ public sealed class AgentDispatcher : IAgentDispatcher
                 "RESULTADOS DE BUSQUEDA (datos EXACTOS del catalogo del tenant; usa estos precios/ids " +
                 "y descarta cualquier valor que hayas mencionado antes en tu ultimo turno):\n\n" + toolBlocks));
 
-            result = await _inference.TestChatAsync(agentId, turns, systemPromptOverride: null, cancellationToken: ct);
+            result = await _inference.TestChatAsync(agentId, turns, systemPromptOverride: null, sessionId: conversationId, cancellationToken: ct);
         }
         // Si tras MaxToolIterations el LLM sigue emitiendo markers, devolvemos el ultimo resultado
         // tal cual (con markers): el ScrubResidualMarkers los limpiara antes de enviarlo al cliente

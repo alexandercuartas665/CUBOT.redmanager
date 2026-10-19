@@ -44,5 +44,12 @@ public interface IAiProviderClient
 /// <summary>Inferencia de agentes de la agencia: arma el prompt con la config del agente y llama al proveedor.</summary>
 public interface IAiInferenceService
 {
-    Task<AiChatResult> TestChatAsync(Guid agentId, IReadOnlyList<AiChatTurn> turns, string? systemPromptOverride = null, CancellationToken cancellationToken = default);
+    /// <summary>Corre la inferencia del agente para una lista de turnos. <paramref name="sessionId"/>
+    /// identifica la "sesion" de la cache de datos capturados: debe ser el conversationId cuando se
+    /// invoca desde el AgentDispatcher (produccion y emulador), para que cada conversacion tenga su
+    /// cache aislada y el LeadMarkerProcessor la lea correctamente al emitir [[crear_lead_pipeline]].
+    /// Si viene null (compat historico y pruebas unitarias), cae a agentId y la cache queda a nivel
+    /// agente (todas las conversaciones del agente comparten cache — rompe aislamiento, usar solo
+    /// en pruebas).</summary>
+    Task<AiChatResult> TestChatAsync(Guid agentId, IReadOnlyList<AiChatTurn> turns, string? systemPromptOverride = null, Guid? sessionId = null, CancellationToken cancellationToken = default);
 }

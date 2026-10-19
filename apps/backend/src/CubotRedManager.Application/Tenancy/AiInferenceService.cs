@@ -34,7 +34,7 @@ public sealed class AiInferenceService : IAiInferenceService
         _mcp = mcp;
     }
 
-    public async Task<AiChatResult> TestChatAsync(Guid agentId, IReadOnlyList<AiChatTurn> turns, string? systemPromptOverride = null, CancellationToken cancellationToken = default)
+    public async Task<AiChatResult> TestChatAsync(Guid agentId, IReadOnlyList<AiChatTurn> turns, string? systemPromptOverride = null, Guid? sessionId = null, CancellationToken cancellationToken = default)
     {
         var agent = await _db.AiAgents.AsNoTracking().FirstOrDefaultAsync(a => a.Id == agentId, cancellationToken);
         if (agent is null) { return new AiChatResult(false, null, "El agente no existe."); }
@@ -68,7 +68,14 @@ public sealed class AiInferenceService : IAiInferenceService
             .Select(r => new AiChatAttachment(r.Name, r.ResourceType, r.FileUrl, r.FileName, r.Detail))
             .ToListAsync(cancellationToken);
 
-        var sessionId = agentId;
+        // sessionId identifica la "sesion" de la cache de datos. Debe ser el conversationId para que
+        // cada chat tenga su propia cache (el LeadMarkerProcessor y GetConversationCacheAsync leen
+        // con sessionId = conversationId). Si viene null, caemos a agentId por compat con llamadas
+        // historicas, pero eso rompe el aislamiento entre conversaciones — todas las convs del
+        // mismo agente comparten cache y el lead se construye con datos cruzados. Fix para que no
+        // vuelva a quedar en agentId por accidente: todos los call-sites del dispatcher pasan el
+        // conversationId explicitamente.
+        var sessionIdResolved = sessionId ?? agentId;
 
         var cacheFields = await _db.AiAgentCacheFields.AsNoTracking()
             .Where(f => f.AgentId == agentId)
@@ -77,7 +84,7 @@ public sealed class AiInferenceService : IAiInferenceService
             .ToListAsync(cancellationToken);
 
         var cacheValues = await _db.AiAgentCacheValues.AsNoTracking()
-            .Where(v => v.AgentId == agentId && v.SessionId == sessionId)
+            .Where(v => v.AgentId == agentId && v.SessionId == sessionIdResolved)
             .ToDictionaryAsync(v => v.FieldKey, v => v.Value, cancellationToken);
 
         var systemPrompt = await BuildSystemPrompt(agentId, systemPromptOverride ?? agent.SystemPrompt, resources, cacheFields, cacheValues, turns, agent.EnableDataContainerMcp, cancellationToken);
@@ -99,7 +106,7 @@ public sealed class AiInferenceService : IAiInferenceService
             try
             {
                 await ExtractAndStoreCacheUpdatesAsync(
-                    agentId, sessionId, agent.Provider, apiKey, providerCfg.BaseUrl, model,
+                    agentId, sessionIdResolved, agent.Provider, apiKey, providerCfg.BaseUrl, model,
                     cacheFields, cacheValues, turns, result.Text!, resources, debugPrompts, cancellationToken);
             }
             catch
