@@ -805,6 +805,56 @@ app.MapGet("/api/pipelines", async (
     finally { ambient.Set(null, null); }
 }).AllowAnonymous().DisableAntiforgery();
 
+// GET /api/pipelines/{id} - detalle del Kanban: pipeline + sus stages (en orden) + los leads
+// activos de cada stage con sus FieldValues capturados. Pensado para que un script o un asistente
+// externo revise el embudo sin pasar por la UI Blazor. No incluye leads archivados ni actividades
+// (hay endpoints dedicados cuando se necesiten). Mapeo cliente -> stage por id para visualizar.
+app.MapGet("/api/pipelines/{id:guid}", async (
+    Guid id,
+    HttpContext http,
+    CubotRedManager.Application.Tenancy.IApiTokenService tokens,
+    CubotRedManager.Application.Abstractions.IAmbientTenantOverride ambient,
+    CubotRedManager.Application.Tenancy.IPipelineService pipelines,
+    CubotRedManager.Application.Tenancy.ILeadService leads,
+    CancellationToken ct) =>
+{
+    var ident = await AuthenticateApiTokenAsync(http, tokens, ambient);
+    if (ident is null) { return Results.Unauthorized(); }
+    try
+    {
+        var all = await pipelines.ListPipelinesAsync(ct);
+        var pipeline = all.FirstOrDefault(p => p.Id == id);
+        if (pipeline is null) { return Results.NotFound(new { error = "pipeline no encontrado" }); }
+        var stages = await pipelines.ListStagesAsync(id, ct);
+        var allLeads = await leads.ListAsync(pipelineId: id, cancellationToken: ct);
+        // Agrupamos los leads por stage (en orden de SortOrder) y los serializamos con sus field
+        // values. Asi un consumidor arma el Kanban sin otra consulta.
+        var stagesWithLeads = stages
+            .OrderBy(s => s.SortOrder)
+            .Select(s => new {
+                stage = s,
+                leads = allLeads
+                    .Where(l => l.StageId == s.Id)
+                    .OrderByDescending(l => l.StageChangedAt)
+                    .Select(l => new {
+                        l.Id, l.ContactName, l.ContactPhone, l.Topic,
+                        l.Status, l.StageChangedAt, l.CreatedAt,
+                        l.AttentionDurationSeconds,
+                        fieldValues = l.FieldValues
+                    })
+                    .ToList()
+            })
+            .ToList();
+        return Results.Ok(new {
+            pipeline,
+            stageCount = stages.Count,
+            totalLeads = allLeads.Count,
+            stages = stagesWithLeads
+        });
+    }
+    finally { ambient.Set(null, null); }
+}).AllowAnonymous().DisableAntiforgery();
+
 // ===== POST /api/agents/{id}/system-prompt =====
 // Reescribe el system prompt de un agente (preservando el resto de su config). Doble guard porque
 // cambiar el prompt afecta como responde el agente a conversaciones REALES:
