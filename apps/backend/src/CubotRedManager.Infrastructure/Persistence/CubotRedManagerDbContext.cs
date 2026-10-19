@@ -477,7 +477,15 @@ public class CubotRedManagerDbContext : DbContext, IApplicationDbContext, IDataP
         {
             b.Property(x => x.ContactPhone).HasMaxLength(40).IsRequired();
             b.Property(x => x.ContactName).HasMaxLength(200);
-            b.HasIndex(x => new { x.TenantId, x.ContactPhone }).IsUnique();
+            // Unique por (TenantId, ContactPhone, WhatsAppLineId) para que un mismo contacto que
+            // escriba a varias lineas del tenant tenga UNA Conversation POR LINEA (cada una con su
+            // propio agente, cache y bitacora). Antes el unique era (TenantId, ContactPhone) sin
+            // la linea, y al agregar YCloud + binding a FUXION_reclutamiento el ChatIngestService
+            // (fix v0.6.2) intentaba crear la segunda conv y Postgres la rechazaba con
+            // DbUpdateException por violacion del unique index viejo.
+            // En Postgres por default NULLS DISTINCT: multiples conversations con WhatsAppLineId=null
+            // para el mismo contacto conviven (compatibilidad con convs historicas sin linea).
+            b.HasIndex(x => new { x.TenantId, x.ContactPhone, x.WhatsAppLineId }).IsUnique();
         });
 
         // Mensaje de una conversacion. ExternalId da idempotencia a la ingesta entrante.

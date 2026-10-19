@@ -2021,7 +2021,11 @@ app.MapPost("/webhooks/ycloud/{tenantId:guid}", async (
         catch (Exception ex)
         {
             log.LogWarning(ex, "YCloud webhook: ingest fallo tenant={TenantId} wamid={Wamid}", tenantId, m.Wamid);
-            handlerNotes.Add($"msg[{mi}]=INGEST_ERROR {ex.GetType().Name}: {ex.Message}");
+            // Incluimos inner exception porque DbUpdateException deja el motivo real (unique index
+            // violation, FK, NOT NULL) en el inner. Sin esto solo veiamos el mensaje generico de EF.
+            var innerMsg = ex.InnerException?.Message;
+            handlerNotes.Add($"msg[{mi}]=INGEST_ERROR {ex.GetType().Name}: {ex.Message}" +
+                (innerMsg != null ? " || inner: " + innerMsg : ""));
             // Best-effort: no bloqueamos la respuesta 200 (Meta reintenta igual si devolvemos != 200).
         }
     }

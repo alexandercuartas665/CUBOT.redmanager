@@ -1350,9 +1350,9 @@ namespace CubotRedManager.Infrastructure.Persistence.Migrations
                     b.HasKey("Id")
                         .HasName("pk_conversations");
 
-                    b.HasIndex("TenantId", "ContactPhone")
+                    b.HasIndex("TenantId", "ContactPhone", "WhatsAppLineId")
                         .IsUnique()
-                        .HasDatabaseName("ix_conversations_tenant_id_contact_phone");
+                        .HasDatabaseName("ix_conversations_tenant_id_contact_phone_whats_app_line_id");
 
                     b.ToTable("conversations", (string)null);
                 });
