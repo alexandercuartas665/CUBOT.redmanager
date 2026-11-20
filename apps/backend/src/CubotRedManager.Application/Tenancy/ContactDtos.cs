@@ -73,6 +73,12 @@ public sealed record ContactFieldDto(
     bool IsSystem,
     bool IsHidden);
 
+/// <summary>Resultado de sincronizar un Lead con el directorio. ContactId null = no aplica
+/// (sin telefono o pipeline distinto de Productos).</summary>
+public sealed record ContactSyncResult(Guid? ContactId, bool Created);
+
+public sealed record ContactBackfillResult(int LeadsReviewed, int Created, int Linked, int Skipped);
+
 // === Mutaciones ======================================================================
 
 public sealed record CreateContactRequest(

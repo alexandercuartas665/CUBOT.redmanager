@@ -52,12 +52,14 @@ public sealed class LeadMarkerProcessor : ILeadMarkerProcessor
 
     private readonly IApplicationDbContext _db;
     private readonly TimeProvider _timeProvider;
+    private readonly IContactService _contacts;
     private readonly ILogger<LeadMarkerProcessor> _logger;
 
-    public LeadMarkerProcessor(IApplicationDbContext db, TimeProvider timeProvider, ILogger<LeadMarkerProcessor> logger)
+    public LeadMarkerProcessor(IApplicationDbContext db, TimeProvider timeProvider, IContactService contacts, ILogger<LeadMarkerProcessor> logger)
     {
         _db = db;
         _timeProvider = timeProvider;
+        _contacts = contacts;
         _logger = logger;
     }
 
@@ -262,6 +264,17 @@ public sealed class LeadMarkerProcessor : ILeadMarkerProcessor
                     tenantId, agentId, conversationId);
                 created.Clear();
                 updated.Clear();
+            }
+        }
+
+        // Directorio de contactos: cada lead nuevo o enriquecido del pipeline Productos crea o
+        // completa su Contacto. Best-effort: un fallo aqui nunca debe frenar la respuesta al cliente.
+        foreach (var leadId in created.Concat(updated))
+        {
+            try { await _contacts.SyncFromLeadAsync(tenantId, leadId, cancellationToken); }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "LeadMarkerProcessor: no se pudo sincronizar el contacto del lead {LeadId}", leadId);
             }
         }
 

@@ -184,6 +184,144 @@ public sealed class ContactService : IContactService
     }
 
     // ===================================================================================
+    // Sincronizacion desde el pipeline (PR L4)
+    // ===================================================================================
+
+    // Llaves que el agente suele capturar con otro nombre: se llevan a columnas del Contacto.
+    private static readonly string[] CountryKeys = { "pais", "country" };
+    private static readonly string[] CityKeys = { "ciudad", "city" };
+    private static readonly string[] EmailKeys = { "email", "correo", "correo_electronico" };
+
+    public async Task<ContactSyncResult> SyncFromLeadAsync(Guid tenantId, Guid leadId, CancellationToken cancellationToken = default)
+    {
+        var lead = await _db.Leads.IgnoreQueryFilters()
+            .Where(l => l.Id == leadId && l.TenantId == tenantId)
+            .Select(l => new { l.Id, l.ContactName, l.ContactPhone, l.FieldValuesJson, l.PipelineId })
+            .FirstOrDefaultAsync(cancellationToken);
+        var phone = NormalizePhone(lead?.ContactPhone ?? string.Empty);
+        if (lead is null || phone.Length < 7) { return new ContactSyncResult(null, false); }
+
+        var pipelineName = await _db.Pipelines.IgnoreQueryFilters()
+            .Where(p => p.Id == lead.PipelineId && p.TenantId == tenantId)
+            .Select(p => p.Name)
+            .FirstOrDefaultAsync(cancellationToken);
+        if (!IsProductsPipeline(pipelineName)) { return new ContactSyncResult(null, false); }
+
+        await EnsureDefaultFieldsAsync(tenantId, cancellationToken);
+        var fieldKeys = (await _db.ContactFieldDefinitions.IgnoreQueryFilters()
+                .Where(f => f.TenantId == tenantId && f.FieldType != Domain.Enums.ContactFieldType.Separator)
+                .Select(f => f.FieldKey)
+                .ToListAsync(cancellationToken))
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+        var leadValues = ParseValues(lead.FieldValuesJson)
+            .Where(kv => !string.IsNullOrWhiteSpace(kv.Value))
+            .ToDictionary(kv => kv.Key, kv => kv.Value!.Trim(), StringComparer.OrdinalIgnoreCase);
+
+        var conversationId = await _db.Conversations.IgnoreQueryFilters()
+            .Where(c => c.TenantId == tenantId && c.ContactPhone == phone)
+            .OrderByDescending(c => c.LastMessageAt)
+            .Select(c => (Guid?)c.Id)
+            .FirstOrDefaultAsync(cancellationToken);
+
+        var contact = await _db.Contacts.IgnoreQueryFilters()
+            .FirstOrDefaultAsync(c => c.TenantId == tenantId && c.Phone == phone, cancellationToken);
+        var created = contact is null;
+        if (contact is null)
+        {
+            contact = new Contact
+            {
+                TenantId = tenantId,
+                Name = string.IsNullOrWhiteSpace(lead.ContactName) ? phone : lead.ContactName.Trim(),
+                Phone = phone
+            };
+            _db.Contacts.Add(contact);
+        }
+
+        // Solo se rellenan datos vacios: lo que la agencia ya edito a mano manda sobre el agente.
+        contact.LeadId ??= lead.Id;
+        contact.ConversationId ??= conversationId;
+        contact.Country ??= FirstValue(leadValues, CountryKeys);
+        contact.City ??= FirstValue(leadValues, CityKeys);
+        contact.Email ??= FirstValue(leadValues, EmailKeys);
+
+        var profile = ParseValues(contact.FieldValuesJson);
+        var leftovers = new List<string>();
+        foreach (var (key, value) in leadValues)
+        {
+            if (CountryKeys.Contains(key, StringComparer.OrdinalIgnoreCase)
+                || CityKeys.Contains(key, StringComparer.OrdinalIgnoreCase)
+                || EmailKeys.Contains(key, StringComparer.OrdinalIgnoreCase)) { continue; }
+            if (fieldKeys.Contains(key))
+            {
+                if (string.IsNullOrWhiteSpace(profile.GetValueOrDefault(key))) { profile[key] = value; }
+            }
+            else
+            {
+                leftovers.Add($"{key.Replace('_', ' ')}: {value}");
+            }
+        }
+        // Un lead que llego por una conversacion del agente vino por WhatsApp.
+        if (conversationId is not null && fieldKeys.Contains("fuente") && string.IsNullOrWhiteSpace(profile.GetValueOrDefault("fuente")))
+        {
+            profile["fuente"] = "WhatsApp";
+        }
+        contact.FieldValuesJson = profile.Count > 0 ? JsonSerializer.Serialize(profile) : null;
+
+        // Lo capturado por el agente que no tiene campo en el perfil (sintomas, producto de
+        // interes, edad...) queda en las notas del contacto nuevo para no perderlo.
+        if (created && leftovers.Count > 0)
+        {
+            contact.Notes = "Capturado por el agente:\n" + string.Join("\n", leftovers);
+        }
+
+        if (created)
+        {
+            _audit.Write(Guid.Empty, "contact.create.from-lead", nameof(Contact), contact.Id,
+                previousValue: null, newValue: new { leadId = lead.Id, contact.Phone }, tenantId: tenantId);
+        }
+        await _db.SaveChangesAsync(cancellationToken);
+        return new ContactSyncResult(contact.Id, created);
+    }
+
+    public async Task<ContactBackfillResult> SyncAllFromLeadsAsync(CancellationToken cancellationToken = default)
+    {
+        if (_tenantContext.TenantId is not Guid tenantId) { return new ContactBackfillResult(0, 0, 0, 0); }
+        var pipelines = await _db.Pipelines.Select(p => new { p.Id, p.Name }).ToListAsync(cancellationToken);
+        var productIds = pipelines.Where(p => IsProductsPipeline(p.Name)).Select(p => p.Id).ToList();
+        var leadIds = await _db.Leads
+            .Where(l => productIds.Contains(l.PipelineId) && l.ArchivedAt == null)
+            .OrderBy(l => l.CreatedAt)
+            .Select(l => l.Id)
+            .ToListAsync(cancellationToken);
+
+        int created = 0, linked = 0, skipped = 0;
+        foreach (var id in leadIds)
+        {
+            var r = await SyncFromLeadAsync(tenantId, id, cancellationToken);
+            if (r.ContactId is null) { skipped++; }
+            else if (r.Created) { created++; }
+            else { linked++; }
+        }
+        return new ContactBackfillResult(leadIds.Count, created, linked, skipped);
+    }
+
+    /// <summary>El directorio de consumidores se alimenta solo del pipeline de productos (decision
+    /// de alcance: los prospectos de la red viven en "Negocios"). Se identifica por nombre; si la
+    /// agencia lo renombra a algo sin "producto", la creacion automatica deja de aplicar.</summary>
+    private static bool IsProductsPipeline(string? name) =>
+        !string.IsNullOrWhiteSpace(name) && name.Contains("producto", StringComparison.OrdinalIgnoreCase);
+
+    private static string? FirstValue(IReadOnlyDictionary<string, string> values, IEnumerable<string> keys)
+    {
+        foreach (var k in keys)
+        {
+            if (values.TryGetValue(k, out var v) && !string.IsNullOrWhiteSpace(v)) { return v; }
+        }
+        return null;
+    }
+
+    // ===================================================================================
     // Ordenes
     // ===================================================================================
 
@@ -287,7 +425,7 @@ public sealed class ContactService : IContactService
 
     public async Task<IReadOnlyList<ContactFieldDto>> ListFieldsAsync(bool includeHidden = true, CancellationToken cancellationToken = default)
     {
-        await EnsureDefaultFieldsAsync(cancellationToken);
+        if (_tenantContext.TenantId is Guid tid) { await EnsureDefaultFieldsAsync(tid, cancellationToken); }
         var q = _db.ContactFieldDefinitions.AsNoTracking();
         if (!includeHidden) { q = q.Where(f => !f.IsHidden); }
         var rows = await q.ToListAsync(cancellationToken);
@@ -389,10 +527,9 @@ public sealed class ContactService : IContactService
     }
 
     /// <summary>Siembra los presets de marketing la primera vez que el tenant usa el perfil.</summary>
-    private async Task EnsureDefaultFieldsAsync(CancellationToken ct)
+    private async Task EnsureDefaultFieldsAsync(Guid tenantId, CancellationToken ct)
     {
-        if (_tenantContext.TenantId is not Guid tenantId) { return; }
-        if (await _db.ContactFieldDefinitions.AnyAsync(ct)) { return; }
+        if (await _db.ContactFieldDefinitions.IgnoreQueryFilters().AnyAsync(f => f.TenantId == tenantId, ct)) { return; }
         var orderBySection = new Dictionary<string, int>();
         foreach (var p in ContactProfilePresets.All)
         {
@@ -437,12 +574,10 @@ public sealed class ContactService : IContactService
         catch (JsonException) { return new Dictionary<string, string?>(); }
     }
 
-    private static string NormalizePhone(string phone)
-    {
-        if (string.IsNullOrWhiteSpace(phone)) { return string.Empty; }
-        var trimmed = phone.Trim();
-        return trimmed.StartsWith('+') ? trimmed[1..] : trimmed;
-    }
+    // Solo digitos: mismo formato que Conversation.ContactPhone, para que el upsert por telefono
+    // encuentre el contacto aunque el lead traiga "+57 300 ..." con espacios.
+    private static string NormalizePhone(string phone) =>
+        string.IsNullOrWhiteSpace(phone) ? string.Empty : new string(phone.Where(char.IsDigit).ToArray());
 
     private static string NormalizeTag(string tag) => (tag ?? string.Empty).Trim().ToLowerInvariant().Replace(",", " ");
 

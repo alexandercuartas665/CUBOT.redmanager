@@ -756,6 +756,21 @@ app.MapGet("/api/contacts", async (
     finally { ambient.Set(null, null); }
 }).AllowAnonymous().DisableAntiforgery();
 
+// POST /api/contacts/sync-from-leads - backfill: crea/vincula contactos para todos los leads
+// activos del pipeline Productos. Idempotente (upsert por telefono). Devuelve conteos.
+app.MapPost("/api/contacts/sync-from-leads", async (
+    HttpContext http,
+    CubotRedManager.Application.Tenancy.IApiTokenService tokens,
+    CubotRedManager.Application.Abstractions.IAmbientTenantOverride ambient,
+    CubotRedManager.Application.Tenancy.IContactService svc,
+    CancellationToken ct) =>
+{
+    var ident = await AuthenticateApiTokenAsync(http, tokens, ambient);
+    if (ident is null) { return Results.Unauthorized(); }
+    try { return Results.Ok(await svc.SyncAllFromLeadsAsync(ct)); }
+    finally { ambient.Set(null, null); }
+}).AllowAnonymous().DisableAntiforgery();
+
 // GET /api/contacts/tags - etiquetas usadas en el tenant (autocompletar / filtros).
 app.MapGet("/api/contacts/tags", async (
     HttpContext http,

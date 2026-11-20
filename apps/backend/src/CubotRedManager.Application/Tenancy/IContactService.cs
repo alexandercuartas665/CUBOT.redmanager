@@ -29,6 +29,14 @@ public interface IContactService
     /// <summary>Todas las etiquetas usadas en el tenant (para autocompletar y filtrar).</summary>
     Task<IReadOnlyList<string>> ListTagsAsync(CancellationToken cancellationToken = default);
 
+    /// <summary>Crea o enriquece el Contacto de un Lead del pipeline Productos (idempotente por
+    /// telefono). No hace nada si el lead no tiene telefono o esta en otro pipeline. Recibe el
+    /// tenant explicito porque se invoca desde el agente IA en segundo plano.</summary>
+    Task<ContactSyncResult> SyncFromLeadAsync(Guid tenantId, Guid leadId, CancellationToken cancellationToken = default);
+
+    /// <summary>Backfill: sincroniza todos los leads activos del pipeline Productos del tenant actual.</summary>
+    Task<ContactBackfillResult> SyncAllFromLeadsAsync(CancellationToken cancellationToken = default);
+
     // === Ordenes ===
 
     Task<IReadOnlyList<ContactOrderDto>> ListOrdersAsync(Guid contactId, CancellationToken cancellationToken = default);

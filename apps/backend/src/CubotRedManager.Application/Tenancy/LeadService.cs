@@ -20,12 +20,14 @@ public sealed class LeadService : ILeadService
     private readonly IApplicationDbContext _db;
     private readonly ITenantContext _tenantContext;
     private readonly TimeProvider _timeProvider;
+    private readonly IContactService _contacts;
 
-    public LeadService(IApplicationDbContext db, ITenantContext tenantContext, TimeProvider timeProvider)
+    public LeadService(IApplicationDbContext db, ITenantContext tenantContext, TimeProvider timeProvider, IContactService contacts)
     {
         _db = db;
         _tenantContext = tenantContext;
         _timeProvider = timeProvider;
+        _contacts = contacts;
     }
 
     public async Task<IReadOnlyList<LeadDto>> ListAsync(Guid? pipelineId = null, Guid? stageId = null, CancellationToken cancellationToken = default)
@@ -112,6 +114,12 @@ public sealed class LeadService : ILeadService
         _db.Leads.Add(lead);
         AddActivity(tenantId, lead.Id, "lead.created", $"Lead creado en {pipeline.Name} / {stage.Name}");
         await _db.SaveChangesAsync(cancellationToken);
+
+        // Lead creado a mano en el pipeline Productos -> su ficha en el directorio de contactos.
+        // Best-effort: el lead ya quedo guardado aunque falle la sincronizacion.
+        try { await _contacts.SyncFromLeadAsync(tenantId, lead.Id, cancellationToken); }
+        catch (Exception) { /* el directorio se puede reconstruir con el backfill */ }
+
         return Map(lead);
     }
 

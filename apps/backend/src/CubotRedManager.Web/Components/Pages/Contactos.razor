@@ -23,6 +23,8 @@
         <p class="page-sub" style="margin-bottom:0;">Quien es cada cliente, que consume, cada cuanto compra y como prefiere que le hablen.</p>
     </div>
     <div style="display:flex;gap:8px;flex-wrap:wrap;">
+        <button class="btn btn-outline-secondary" @onclick="SyncFromLeadsAsync" disabled="@_busy"
+                title="Crea la ficha de cada lead del pipeline Productos que aun no este en el directorio">Traer del pipeline</button>
         <button class="btn btn-outline-secondary" @onclick="OpenFieldsConfig">Campos del perfil</button>
         <button class="btn btn-primary" @onclick="OpenNewContact">+ Nuevo contacto</button>
     </div>
@@ -837,6 +839,20 @@ else
         var ok = await ContactsSvc.DeleteOrderAsync(_detail.Contact.Id, orderId, actor);
         Flash(ok ? "Compra eliminada." : "No se encontro la compra.", ok);
         await ReloadAsync();
+    }
+
+    private async Task SyncFromLeadsAsync()
+    {
+        _busy = true;
+        try
+        {
+            var r = await ContactsSvc.SyncAllFromLeadsAsync();
+            Flash(r.LeadsReviewed == 0
+                ? "No hay leads activos en el pipeline Productos."
+                : $"Revisados {r.LeadsReviewed} leads: {r.Created} contactos nuevos, {r.Linked} ya existian (se completaron datos), {r.Skipped} sin telefono.", true);
+            await ReloadAsync();
+        }
+        finally { _busy = false; }
     }
 
     // ===== Configuracion de campos =====
