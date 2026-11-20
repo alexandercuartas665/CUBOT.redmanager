@@ -108,6 +108,8 @@ public class CubotRedManagerDbContext : DbContext, IApplicationDbContext, IDataP
     public DbSet<Conversation> Conversations => Set<Conversation>();
     public DbSet<Message> Messages => Set<Message>();
     public DbSet<ApiToken> ApiTokens => Set<ApiToken>();
+    public DbSet<Contact> Contacts => Set<Contact>();
+    public DbSet<ContactOrder> ContactOrders => Set<ContactOrder>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -134,6 +136,36 @@ public class CubotRedManagerDbContext : DbContext, IApplicationDbContext, IDataP
         modelBuilder.Entity<ApiToken>().Property(x => x.TokenPrefix).HasMaxLength(12).IsRequired();
         modelBuilder.Entity<ApiToken>().HasIndex(x => x.TokenHash).IsUnique();
         modelBuilder.Entity<ApiToken>().HasIndex(x => new { x.TenantId, x.UserId });
+
+        // === Contactos (modulo PR L1+L2) ===
+        modelBuilder.Entity<Contact>(b =>
+        {
+            b.Property(x => x.Name).HasMaxLength(200).IsRequired();
+            b.Property(x => x.Phone).HasMaxLength(40).IsRequired();
+            b.Property(x => x.Email).HasMaxLength(200);
+            b.Property(x => x.Country).HasMaxLength(80);
+            b.Property(x => x.City).HasMaxLength(120);
+            b.Property(x => x.LifetimeValue).HasColumnType("numeric(18,2)");
+            b.Property(x => x.LifetimeValueCurrency).HasMaxLength(8);
+            // Unique por (TenantId, Phone): un numero NO puede duplicarse como Contacto dentro
+            // del mismo tenant. El hook del LeadMarkerProcessor (PR L4) usa esta llave para la
+            // idempotencia: si el Lead nuevo trae un telefono que ya es Contacto, solo vincula.
+            b.HasIndex(x => new { x.TenantId, x.Phone }).IsUnique();
+            // Index por LeadId para resolver Contact desde la tarjeta del Kanban con un lookup.
+            b.HasIndex(x => new { x.TenantId, x.LeadId });
+        });
+        modelBuilder.Entity<ContactOrder>(b =>
+        {
+            b.Property(x => x.TotalAmount).HasColumnType("numeric(18,2)");
+            b.Property(x => x.Currency).HasMaxLength(8);
+            b.Property(x => x.Channel).HasMaxLength(20).IsRequired();
+            b.Property(x => x.ExternalRef).HasMaxLength(120);
+            // Index principal para traer el historial de un Contacto ordenado por fecha.
+            b.HasIndex(x => new { x.TenantId, x.ContactId, x.OrderedAt });
+            // Index opcional por ExternalRef para idempotencia cuando se sincronice con FUXION
+            // API (Fase 2): evita re-insertar la misma orden si el worker la re-trae.
+            b.HasIndex(x => new { x.TenantId, x.ExternalRef });
+        });
         modelBuilder.Entity<AiUsageLog>().Property(x => x.Provider).HasConversion<string>();
         modelBuilder.Entity<WhatsAppLine>().Property(x => x.Status).HasConversion<string>();
         modelBuilder.Entity<EvolutionMasterConfig>().Property(x => x.Status).HasConversion<string>();

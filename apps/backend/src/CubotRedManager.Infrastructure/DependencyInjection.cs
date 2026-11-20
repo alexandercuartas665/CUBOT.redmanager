@@ -93,6 +93,7 @@ public static class DependencyInjection
         services.AddScoped<IPublicationService, PublicationService>();
         services.AddScoped<IPipelineService, PipelineService>();
         services.AddScoped<ILeadService, LeadService>();
+        services.AddScoped<IContactService, ContactService>();
         services.AddScoped<IInboxService, InboxService>();
         services.AddScoped<IMessageTemplateService, MessageTemplateService>();
         services.AddScoped<IDataContainerService, DataContainerService>();

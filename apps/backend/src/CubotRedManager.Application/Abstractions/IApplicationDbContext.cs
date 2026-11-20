@@ -100,5 +100,9 @@ public interface IApplicationDbContext
     // Tokens opacos de API (X-Api-Token header) emitidos por usuarios del tenant para uso programatico.
     DbSet<ApiToken> ApiTokens { get; }
 
+    // Directorio de contactos consumidores + su historial de ordenes (Fase 1 del modulo Contactos).
+    DbSet<Contact> Contacts { get; }
+    DbSet<ContactOrder> ContactOrders { get; }
+
     Task<int> SaveChangesAsync(CancellationToken cancellationToken = default);
 }

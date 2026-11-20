@@ -731,6 +731,159 @@ app.MapGet("/api/me", async (
     finally { ambient.Set(null, null); }
 }).AllowAnonymous().DisableAntiforgery();
 
+// ===== Contactos (modulo Fase 1 — PR L1+L2) =====
+// Directorio de clientes consumidores + su historial de ordenes. Todos los endpoints autenticados
+// por X-Api-Token y filtrados por tenant via HasQueryFilter + ambient override. Las metricas
+// derivadas (LTV, cadencia, proxima compra) se recalculan automaticamente al mutar ordenes.
+
+// GET /api/contacts?q=<texto>&includeArchived=true&take=100 - lista contactos del tenant.
+app.MapGet("/api/contacts", async (
+    HttpContext http,
+    CubotRedManager.Application.Tenancy.IApiTokenService tokens,
+    CubotRedManager.Application.Abstractions.IAmbientTenantOverride ambient,
+    CubotRedManager.Application.Tenancy.IContactService svc,
+    string? q,
+    bool? includeArchived,
+    int? take,
+    CancellationToken ct) =>
+{
+    var ident = await AuthenticateApiTokenAsync(http, tokens, ambient);
+    if (ident is null) { return Results.Unauthorized(); }
+    try { return Results.Ok(await svc.ListAsync(q, includeArchived ?? false, take ?? 100, ct)); }
+    finally { ambient.Set(null, null); }
+}).AllowAnonymous().DisableAntiforgery();
+
+// GET /api/contacts/{id} - ficha detalle con historial completo de ordenes (desc por fecha).
+app.MapGet("/api/contacts/{id:guid}", async (
+    Guid id,
+    HttpContext http,
+    CubotRedManager.Application.Tenancy.IApiTokenService tokens,
+    CubotRedManager.Application.Abstractions.IAmbientTenantOverride ambient,
+    CubotRedManager.Application.Tenancy.IContactService svc,
+    CancellationToken ct) =>
+{
+    var ident = await AuthenticateApiTokenAsync(http, tokens, ambient);
+    if (ident is null) { return Results.Unauthorized(); }
+    try
+    {
+        var detail = await svc.GetAsync(id, ct);
+        return detail is null ? Results.NotFound() : Results.Ok(detail);
+    }
+    finally { ambient.Set(null, null); }
+}).AllowAnonymous().DisableAntiforgery();
+
+// POST /api/contacts - crea contacto. Falla con 409 si ya existe por telefono (usar upsert).
+// Body: {"name","phone","email?","country?","city?","birthDate?","leadId?","conversationId?","notes?"}
+app.MapPost("/api/contacts", async (
+    HttpContext http,
+    CubotRedManager.Application.Tenancy.IApiTokenService tokens,
+    CubotRedManager.Application.Abstractions.IAmbientTenantOverride ambient,
+    CubotRedManager.Application.Tenancy.IContactService svc,
+    CubotRedManager.Application.Tenancy.CreateContactRequest body,
+    CancellationToken ct) =>
+{
+    var ident = await AuthenticateApiTokenAsync(http, tokens, ambient);
+    if (ident is null) { return Results.Unauthorized(); }
+    try
+    {
+        var dto = await svc.CreateAsync(body, ident.UserId, ct);
+        return dto is null
+            ? Results.Conflict(new { error = "Contacto duplicado (phone ya existe) o datos invalidos" })
+            : Results.Created($"/api/contacts/{dto.Id}", dto);
+    }
+    finally { ambient.Set(null, null); }
+}).AllowAnonymous().DisableAntiforgery();
+
+// PATCH /api/contacts/{id} - actualiza campos opcionales. Null = no tocar, "" = borrar, otro = reemplazar.
+app.MapMethods("/api/contacts/{id:guid}", new[] { "PATCH" }, async (
+    Guid id,
+    HttpContext http,
+    CubotRedManager.Application.Tenancy.IApiTokenService tokens,
+    CubotRedManager.Application.Abstractions.IAmbientTenantOverride ambient,
+    CubotRedManager.Application.Tenancy.IContactService svc,
+    CubotRedManager.Application.Tenancy.UpdateContactRequest body,
+    CancellationToken ct) =>
+{
+    var ident = await AuthenticateApiTokenAsync(http, tokens, ambient);
+    if (ident is null) { return Results.Unauthorized(); }
+    try
+    {
+        var dto = await svc.UpdateAsync(id, body, ident.UserId, ct);
+        return dto is null ? Results.NotFound() : Results.Ok(dto);
+    }
+    finally { ambient.Set(null, null); }
+}).AllowAnonymous().DisableAntiforgery();
+
+// DELETE /api/contacts/{id} - borra el contacto y TODAS sus ordenes (cascade manual). No hay
+// soft-delete aqui — usar PATCH con {"archived":true} si solo quieres ocultarlo del directorio.
+app.MapDelete("/api/contacts/{id:guid}", async (
+    Guid id,
+    HttpContext http,
+    CubotRedManager.Application.Tenancy.IApiTokenService tokens,
+    CubotRedManager.Application.Abstractions.IAmbientTenantOverride ambient,
+    CubotRedManager.Application.Tenancy.IContactService svc,
+    CancellationToken ct) =>
+{
+    var ident = await AuthenticateApiTokenAsync(http, tokens, ambient);
+    if (ident is null) { return Results.Unauthorized(); }
+    try { return await svc.DeleteAsync(id, ident.UserId, ct) ? Results.NoContent() : Results.NotFound(); }
+    finally { ambient.Set(null, null); }
+}).AllowAnonymous().DisableAntiforgery();
+
+// GET /api/contacts/{id}/orders - historial de ordenes del contacto (desc por fecha).
+app.MapGet("/api/contacts/{id:guid}/orders", async (
+    Guid id,
+    HttpContext http,
+    CubotRedManager.Application.Tenancy.IApiTokenService tokens,
+    CubotRedManager.Application.Abstractions.IAmbientTenantOverride ambient,
+    CubotRedManager.Application.Tenancy.IContactService svc,
+    CancellationToken ct) =>
+{
+    var ident = await AuthenticateApiTokenAsync(http, tokens, ambient);
+    if (ident is null) { return Results.Unauthorized(); }
+    try { return Results.Ok(await svc.ListOrdersAsync(id, ct)); }
+    finally { ambient.Set(null, null); }
+}).AllowAnonymous().DisableAntiforgery();
+
+// POST /api/contacts/{id}/orders - registra orden (manual). Recalcula LTV + cadencia + proxima.
+// Body: {"orderedAt","totalAmount?","currency?","itemsJson?","channel?","externalRef?","notes?"}
+app.MapPost("/api/contacts/{id:guid}/orders", async (
+    Guid id,
+    HttpContext http,
+    CubotRedManager.Application.Tenancy.IApiTokenService tokens,
+    CubotRedManager.Application.Abstractions.IAmbientTenantOverride ambient,
+    CubotRedManager.Application.Tenancy.IContactService svc,
+    CubotRedManager.Application.Tenancy.CreateContactOrderRequest body,
+    CancellationToken ct) =>
+{
+    var ident = await AuthenticateApiTokenAsync(http, tokens, ambient);
+    if (ident is null) { return Results.Unauthorized(); }
+    try
+    {
+        var dto = await svc.AddOrderAsync(id, body, ident.UserId, ct);
+        return dto is null
+            ? Results.BadRequest(new { error = "Contacto no existe o ItemsJson con formato invalido" })
+            : Results.Created($"/api/contacts/{id}/orders/{dto.Id}", dto);
+    }
+    finally { ambient.Set(null, null); }
+}).AllowAnonymous().DisableAntiforgery();
+
+// DELETE /api/contacts/{id}/orders/{orderId} - borra una orden. Recalcula metricas despues.
+app.MapDelete("/api/contacts/{id:guid}/orders/{orderId:guid}", async (
+    Guid id,
+    Guid orderId,
+    HttpContext http,
+    CubotRedManager.Application.Tenancy.IApiTokenService tokens,
+    CubotRedManager.Application.Abstractions.IAmbientTenantOverride ambient,
+    CubotRedManager.Application.Tenancy.IContactService svc,
+    CancellationToken ct) =>
+{
+    var ident = await AuthenticateApiTokenAsync(http, tokens, ambient);
+    if (ident is null) { return Results.Unauthorized(); }
+    try { return await svc.DeleteOrderAsync(id, orderId, ident.UserId, ct) ? Results.NoContent() : Results.NotFound(); }
+    finally { ambient.Set(null, null); }
+}).AllowAnonymous().DisableAntiforgery();
+
 // GET /api/whatsapp-lines - lista las lineas de WhatsApp del tenant (todos los proveedores:
 // Evolution, YCloud, Cloud API Meta, Emulator) con su proveedor, status, phone, waba_id, y el
 // agente IA vinculado (si lo tiene). Util para diagnosticar por que un mensaje de un numero
