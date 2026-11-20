@@ -64,4 +64,12 @@ public class Contact : TenantEntity
     /// <summary>Contacto archivado (oculto del directorio activo). Ejemplo: baja definitiva.
     /// No se borra fisicamente para preservar historial de ordenes.</summary>
     public DateTimeOffset? ArchivedAt { get; set; }
+
+    /// <summary>Valores del perfil dinamico (jsonb): { fieldKey: valor }. Las llaves corresponden
+    /// a ContactFieldDefinition.FieldKey del tenant.</summary>
+    public string? FieldValuesJson { get; set; }
+
+    /// <summary>Etiquetas libres para segmentar campanas (ej. "vip", "cumple-diciembre"),
+    /// separadas por coma, normalizadas en minusculas.</summary>
+    public string? Tags { get; set; }
 }

@@ -1,3 +1,5 @@
+using CubotRedManager.Domain.Enums;
+
 namespace CubotRedManager.Application.Tenancy;
 
 // === Lectura ========================================================================
@@ -20,11 +22,29 @@ public sealed record ContactDto(
     int? CadenceDays,
     DateTimeOffset? NextExpectedAt,
     string? Notes,
-    bool Archived);
+    bool Archived,
+    /// <summary>Etapa del ciclo de vida calculada al vuelo (depende de la fecha actual):
+    /// Prospecto, Nuevo, Activo, Fiel, En riesgo, Dormido, Perdido.</summary>
+    string Lifecycle,
+    IReadOnlyList<string> Tags,
+    IReadOnlyDictionary<string, string?> FieldValues);
 
-/// <summary>Ficha detalle: el contacto + su historial completo de ordenes en orden cronologico
-/// descendente (lo mas reciente primero).</summary>
-public sealed record ContactDetailDto(ContactDto Contact, IReadOnlyList<ContactOrderDto> Orders);
+/// <summary>Afinidad de producto calculada desde el historial de ordenes: que consume el
+/// cliente, cuantas veces, y cada cuanto (por producto). Base de los recordatorios segmentados.</summary>
+public sealed record ContactProductAffinityDto(
+    string Product,
+    int TimesBought,
+    decimal TotalQty,
+    DateTimeOffset FirstBoughtAt,
+    DateTimeOffset LastBoughtAt,
+    int? AvgDaysBetween,
+    DateTimeOffset? NextExpectedAt);
+
+/// <summary>Ficha detalle: contacto + historial de ordenes (desc) + afinidad por producto.</summary>
+public sealed record ContactDetailDto(
+    ContactDto Contact,
+    IReadOnlyList<ContactOrderDto> Orders,
+    IReadOnlyList<ContactProductAffinityDto> Products);
 
 public sealed record ContactOrderDto(
     Guid Id,
@@ -37,6 +57,21 @@ public sealed record ContactOrderDto(
     string? ExternalRef,
     string? Notes,
     DateTimeOffset CreatedAt);
+
+public sealed record ContactFieldDto(
+    Guid Id,
+    string Section,
+    string FieldKey,
+    string Label,
+    ContactFieldType FieldType,
+    string? Options,
+    string? Description,
+    int Column,
+    int SortOrder,
+    bool ShowInList,
+    bool ShowInFilter,
+    bool IsSystem,
+    bool IsHidden);
 
 // === Mutaciones ======================================================================
 
@@ -60,13 +95,30 @@ public sealed record UpdateContactRequest(
     string? Notes = null,
     bool? Archived = null);
 
+/// <summary>Actualiza el perfil dinamico. <paramref name="FieldValues"/> se FUSIONA con lo
+/// existente (llave con valor null o "" la borra). <paramref name="Tags"/> null = no tocar;
+/// lista (aunque vacia) = reemplazar.</summary>
+public sealed record UpdateContactProfileRequest(
+    Dictionary<string, string?>? FieldValues = null,
+    IReadOnlyList<string>? Tags = null);
+
 public sealed record CreateContactOrderRequest(
     DateTimeOffset OrderedAt,
     decimal? TotalAmount = null,
     string? Currency = null,
-    /// <summary>JSON array de {name, qty, unitPrice?}. La UI lo arma antes de enviar; aqui se
-    /// guarda tal cual. Se valida JSON basico (parsea) pero no el schema de items.</summary>
+    /// <summary>JSON array de {name, qty, unitPrice?}. Se valida que parsee.</summary>
     string? ItemsJson = null,
     string Channel = "Manual",
     string? ExternalRef = null,
     string? Notes = null);
+
+public sealed record SaveContactFieldRequest(
+    string Section,
+    string Label,
+    ContactFieldType FieldType,
+    string? Options = null,
+    string? Description = null,
+    int Column = 1,
+    bool ShowInList = false,
+    bool ShowInFilter = false,
+    bool IsHidden = false);

@@ -736,7 +736,8 @@ app.MapGet("/api/me", async (
 // por X-Api-Token y filtrados por tenant via HasQueryFilter + ambient override. Las metricas
 // derivadas (LTV, cadencia, proxima compra) se recalculan automaticamente al mutar ordenes.
 
-// GET /api/contacts?q=<texto>&includeArchived=true&take=100 - lista contactos del tenant.
+// GET /api/contacts?q=&includeArchived=&take=&lifecycle=&tag= - lista contactos del tenant.
+// lifecycle: Prospecto | Nuevo | Activo | Fiel | En riesgo | Dormido | Perdido.
 app.MapGet("/api/contacts", async (
     HttpContext http,
     CubotRedManager.Application.Tenancy.IApiTokenService tokens,
@@ -745,11 +746,119 @@ app.MapGet("/api/contacts", async (
     string? q,
     bool? includeArchived,
     int? take,
+    string? lifecycle,
+    string? tag,
     CancellationToken ct) =>
 {
     var ident = await AuthenticateApiTokenAsync(http, tokens, ambient);
     if (ident is null) { return Results.Unauthorized(); }
-    try { return Results.Ok(await svc.ListAsync(q, includeArchived ?? false, take ?? 100, ct)); }
+    try { return Results.Ok(await svc.ListAsync(q, includeArchived ?? false, take ?? 100, lifecycle, tag, ct)); }
+    finally { ambient.Set(null, null); }
+}).AllowAnonymous().DisableAntiforgery();
+
+// GET /api/contacts/tags - etiquetas usadas en el tenant (autocompletar / filtros).
+app.MapGet("/api/contacts/tags", async (
+    HttpContext http,
+    CubotRedManager.Application.Tenancy.IApiTokenService tokens,
+    CubotRedManager.Application.Abstractions.IAmbientTenantOverride ambient,
+    CubotRedManager.Application.Tenancy.IContactService svc,
+    CancellationToken ct) =>
+{
+    var ident = await AuthenticateApiTokenAsync(http, tokens, ambient);
+    if (ident is null) { return Results.Unauthorized(); }
+    try { return Results.Ok(await svc.ListTagsAsync(ct)); }
+    finally { ambient.Set(null, null); }
+}).AllowAnonymous().DisableAntiforgery();
+
+// PUT /api/contacts/{id}/profile - perfil dinamico + etiquetas.
+// Body: {"fieldValues":{"meta_principal":"Estres y sueno","sabores":"[\"Citricos\"]"},"tags":["vip"]}
+// fieldValues se fusiona (valor null/"" borra la llave). tags null = no tocar; lista = reemplazar.
+app.MapPut("/api/contacts/{id:guid}/profile", async (
+    Guid id,
+    HttpContext http,
+    CubotRedManager.Application.Tenancy.IApiTokenService tokens,
+    CubotRedManager.Application.Abstractions.IAmbientTenantOverride ambient,
+    CubotRedManager.Application.Tenancy.IContactService svc,
+    CubotRedManager.Application.Tenancy.UpdateContactProfileRequest body,
+    CancellationToken ct) =>
+{
+    var ident = await AuthenticateApiTokenAsync(http, tokens, ambient);
+    if (ident is null) { return Results.Unauthorized(); }
+    try
+    {
+        var dto = await svc.UpdateProfileAsync(id, body, ident.UserId, ct);
+        return dto is null ? Results.NotFound() : Results.Ok(dto);
+    }
+    finally { ambient.Set(null, null); }
+}).AllowAnonymous().DisableAntiforgery();
+
+// GET /api/contact-fields - campos del perfil (siembra presets de marketing en el primer uso).
+app.MapGet("/api/contact-fields", async (
+    HttpContext http,
+    CubotRedManager.Application.Tenancy.IApiTokenService tokens,
+    CubotRedManager.Application.Abstractions.IAmbientTenantOverride ambient,
+    CubotRedManager.Application.Tenancy.IContactService svc,
+    CancellationToken ct) =>
+{
+    var ident = await AuthenticateApiTokenAsync(http, tokens, ambient);
+    if (ident is null) { return Results.Unauthorized(); }
+    try { return Results.Ok(await svc.ListFieldsAsync(true, ct)); }
+    finally { ambient.Set(null, null); }
+}).AllowAnonymous().DisableAntiforgery();
+
+// POST /api/contact-fields - crea campo. Body: {"section","label","fieldType","options?","description?",
+// "column?","showInList?","showInFilter?","isHidden?"}. fieldType: Text|TextArea|Number|Currency|Date|
+// Phone|Email|Select|MultiSelect|Boolean|Rating|Separator. options: una por linea (\n).
+app.MapPost("/api/contact-fields", async (
+    HttpContext http,
+    CubotRedManager.Application.Tenancy.IApiTokenService tokens,
+    CubotRedManager.Application.Abstractions.IAmbientTenantOverride ambient,
+    CubotRedManager.Application.Tenancy.IContactService svc,
+    CubotRedManager.Application.Tenancy.SaveContactFieldRequest body,
+    CancellationToken ct) =>
+{
+    var ident = await AuthenticateApiTokenAsync(http, tokens, ambient);
+    if (ident is null) { return Results.Unauthorized(); }
+    try
+    {
+        var dto = await svc.CreateFieldAsync(body, ident.UserId, ct);
+        return dto is null ? Results.BadRequest(new { error = "section y label son obligatorios" }) : Results.Ok(dto);
+    }
+    finally { ambient.Set(null, null); }
+}).AllowAnonymous().DisableAntiforgery();
+
+// PATCH /api/contact-fields/{id} - reemplaza la definicion (mismo body que POST). FieldKey no cambia.
+app.MapMethods("/api/contact-fields/{id:guid}", new[] { "PATCH" }, async (
+    Guid id,
+    HttpContext http,
+    CubotRedManager.Application.Tenancy.IApiTokenService tokens,
+    CubotRedManager.Application.Abstractions.IAmbientTenantOverride ambient,
+    CubotRedManager.Application.Tenancy.IContactService svc,
+    CubotRedManager.Application.Tenancy.SaveContactFieldRequest body,
+    CancellationToken ct) =>
+{
+    var ident = await AuthenticateApiTokenAsync(http, tokens, ambient);
+    if (ident is null) { return Results.Unauthorized(); }
+    try
+    {
+        var dto = await svc.UpdateFieldAsync(id, body, ident.UserId, ct);
+        return dto is null ? Results.NotFound() : Results.Ok(dto);
+    }
+    finally { ambient.Set(null, null); }
+}).AllowAnonymous().DisableAntiforgery();
+
+// DELETE /api/contact-fields/{id} - borra campo propio; los presets (isSystem) se ocultan.
+app.MapDelete("/api/contact-fields/{id:guid}", async (
+    Guid id,
+    HttpContext http,
+    CubotRedManager.Application.Tenancy.IApiTokenService tokens,
+    CubotRedManager.Application.Abstractions.IAmbientTenantOverride ambient,
+    CubotRedManager.Application.Tenancy.IContactService svc,
+    CancellationToken ct) =>
+{
+    var ident = await AuthenticateApiTokenAsync(http, tokens, ambient);
+    if (ident is null) { return Results.Unauthorized(); }
+    try { return await svc.DeleteFieldAsync(id, ident.UserId, ct) ? Results.NoContent() : Results.NotFound(); }
     finally { ambient.Set(null, null); }
 }).AllowAnonymous().DisableAntiforgery();
 

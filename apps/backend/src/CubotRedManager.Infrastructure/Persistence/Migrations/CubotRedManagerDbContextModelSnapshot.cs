@@ -1335,6 +1335,10 @@ namespace CubotRedManager.Infrastructure.Persistence.Migrations
                         .HasColumnType("character varying(200)")
                         .HasColumnName("email");
 
+                    b.Property<string>("FieldValuesJson")
+                        .HasColumnType("jsonb")
+                        .HasColumnName("field_values_json");
+
                     b.Property<DateTimeOffset?>("FirstOrderAt")
                         .HasColumnType("timestamp with time zone")
                         .HasColumnName("first_order_at");
@@ -1380,6 +1384,11 @@ namespace CubotRedManager.Infrastructure.Persistence.Migrations
                         .HasColumnType("character varying(40)")
                         .HasColumnName("phone");
 
+                    b.Property<string>("Tags")
+                        .HasMaxLength(1000)
+                        .HasColumnType("character varying(1000)")
+                        .HasColumnName("tags");
+
                     b.Property<Guid>("TenantId")
                         .HasColumnType("uuid")
                         .HasColumnName("tenant_id");
@@ -1403,6 +1412,99 @@ namespace CubotRedManager.Infrastructure.Persistence.Migrations
                         .HasDatabaseName("ix_contacts_tenant_id_phone");
 
                     b.ToTable("contacts", (string)null);
+                });
+
+            modelBuilder.Entity("CubotRedManager.Domain.Entities.ContactFieldDefinition", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<int>("Column")
+                        .HasColumnType("integer")
+                        .HasColumnName("column");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at");
+
+                    b.Property<Guid?>("CreatedBy")
+                        .HasColumnType("uuid")
+                        .HasColumnName("created_by");
+
+                    b.Property<string>("Description")
+                        .HasColumnType("text")
+                        .HasColumnName("description");
+
+                    b.Property<string>("FieldKey")
+                        .IsRequired()
+                        .HasMaxLength(80)
+                        .HasColumnType("character varying(80)")
+                        .HasColumnName("field_key");
+
+                    b.Property<string>("FieldType")
+                        .IsRequired()
+                        .HasMaxLength(40)
+                        .HasColumnType("character varying(40)")
+                        .HasColumnName("field_type");
+
+                    b.Property<bool>("IsHidden")
+                        .HasColumnType("boolean")
+                        .HasColumnName("is_hidden");
+
+                    b.Property<bool>("IsSystem")
+                        .HasColumnType("boolean")
+                        .HasColumnName("is_system");
+
+                    b.Property<string>("Label")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)")
+                        .HasColumnName("label");
+
+                    b.Property<string>("Options")
+                        .HasColumnType("text")
+                        .HasColumnName("options");
+
+                    b.Property<string>("Section")
+                        .IsRequired()
+                        .HasMaxLength(120)
+                        .HasColumnType("character varying(120)")
+                        .HasColumnName("section");
+
+                    b.Property<bool>("ShowInFilter")
+                        .HasColumnType("boolean")
+                        .HasColumnName("show_in_filter");
+
+                    b.Property<bool>("ShowInList")
+                        .HasColumnType("boolean")
+                        .HasColumnName("show_in_list");
+
+                    b.Property<int>("SortOrder")
+                        .HasColumnType("integer")
+                        .HasColumnName("sort_order");
+
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("tenant_id");
+
+                    b.Property<DateTimeOffset?>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("updated_at");
+
+                    b.Property<Guid?>("UpdatedBy")
+                        .HasColumnType("uuid")
+                        .HasColumnName("updated_by");
+
+                    b.HasKey("Id")
+                        .HasName("pk_contact_field_definitions");
+
+                    b.HasIndex("TenantId", "FieldKey")
+                        .IsUnique()
+                        .HasDatabaseName("ix_contact_field_definitions_tenant_id_field_key");
+
+                    b.ToTable("contact_field_definitions", (string)null);
                 });
 
             modelBuilder.Entity("CubotRedManager.Domain.Entities.ContactOrder", b =>

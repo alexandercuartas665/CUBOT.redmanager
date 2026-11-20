@@ -103,6 +103,7 @@ public interface IApplicationDbContext
     // Directorio de contactos consumidores + su historial de ordenes (Fase 1 del modulo Contactos).
     DbSet<Contact> Contacts { get; }
     DbSet<ContactOrder> ContactOrders { get; }
+    DbSet<ContactFieldDefinition> ContactFieldDefinitions { get; }
 
     Task<int> SaveChangesAsync(CancellationToken cancellationToken = default);
 }

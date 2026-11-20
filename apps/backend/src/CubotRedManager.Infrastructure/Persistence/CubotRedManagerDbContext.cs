@@ -110,6 +110,7 @@ public class CubotRedManagerDbContext : DbContext, IApplicationDbContext, IDataP
     public DbSet<ApiToken> ApiTokens => Set<ApiToken>();
     public DbSet<Contact> Contacts => Set<Contact>();
     public DbSet<ContactOrder> ContactOrders => Set<ContactOrder>();
+    public DbSet<ContactFieldDefinition> ContactFieldDefinitions => Set<ContactFieldDefinition>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -153,6 +154,18 @@ public class CubotRedManagerDbContext : DbContext, IApplicationDbContext, IDataP
             b.HasIndex(x => new { x.TenantId, x.Phone }).IsUnique();
             // Index por LeadId para resolver Contact desde la tarjeta del Kanban con un lookup.
             b.HasIndex(x => new { x.TenantId, x.LeadId });
+            b.Property(x => x.FieldValuesJson).HasColumnType("jsonb");
+            b.Property(x => x.Tags).HasMaxLength(1000);
+        });
+        modelBuilder.Entity<ContactFieldDefinition>(b =>
+        {
+            b.Property(x => x.Section).HasMaxLength(120).IsRequired();
+            b.Property(x => x.FieldKey).HasMaxLength(80).IsRequired();
+            b.Property(x => x.Label).HasMaxLength(200).IsRequired();
+            b.Property(x => x.FieldType).HasConversion<string>().HasMaxLength(40);
+            b.Property(x => x.Options).HasColumnType("text");
+            b.Property(x => x.Description).HasColumnType("text");
+            b.HasIndex(x => new { x.TenantId, x.FieldKey }).IsUnique();
         });
         modelBuilder.Entity<ContactOrder>(b =>
         {
