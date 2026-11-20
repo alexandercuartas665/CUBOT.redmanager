@@ -1,0 +1,575 @@
+@page "/contactos"
+@attribute [Authorize(Policy = AppPolicies.TenantMember)]
+@rendermode @(new InteractiveServerRenderMode(prerender: false))
+@using System.Security.Claims
+@using System.Globalization
+@using System.Text.Json
+@using CubotRedManager.Application.Tenancy
+@using CubotRedManager.Web.Authorization
+@inject IContactService ContactsSvc
+
+<PageTitle>Contactos - CUBOT.redmanager</PageTitle>
+
+<div class="module-head">
+    <div>
+        <div class="module-eyebrow">
+            <div class="module-icon">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+            </div>
+            <span>CRM</span>
+        </div>
+        <h1 class="page-title" style="margin-top:12px;">Directorio de <span>contactos</span></h1>
+        <p class="page-sub" style="margin-bottom:0;">Clientes consumidores con historial de compras, cadencia y proxima compra proyectada.</p>
+    </div>
+    <div style="display:flex;gap:8px;">
+        <button class="btn btn-primary" @onclick="OpenNewContact">+ Nuevo contacto</button>
+        <button class="btn btn-outline-secondary" @onclick="ReloadAsync" disabled="@_loading">@(_loading ? "..." : "Actualizar")</button>
+    </div>
+</div>
+
+@if (!string.IsNullOrEmpty(_flash))
+{
+    <div class="alert @_flashClass" style="margin-top:10px;">@_flash</div>
+}
+
+@if (_loading)
+{
+    <p><em>Cargando...</em></p>
+}
+else
+{
+    <div style="display:grid;grid-template-columns:minmax(320px,420px) 1fr;gap:22px;align-items:start;margin-top:8px;">
+        <!-- LISTA -->
+        <div class="card" style="padding:14px;">
+            <div style="display:flex;gap:8px;margin-bottom:10px;">
+                <input class="form-control form-control-sm" placeholder="Buscar por nombre, telefono o email..."
+                       value="@_filter" @oninput="OnFilterInput" />
+            </div>
+            <label class="ai-toggle" style="font-size:12.5px;margin-bottom:10px;">
+                <input type="checkbox" checked="@_includeArchived" @onchange="OnToggleArchived" />
+                <span>Mostrar archivados</span>
+            </label>
+
+            @if (_contacts.Count == 0)
+            {
+                <p class="text-muted" style="padding:8px 2px;">Aun no hay contactos que coincidan. Crea el primero con "Nuevo contacto".</p>
+            }
+            else
+            {
+                <div style="display:flex;flex-direction:column;gap:4px;max-height:66vh;overflow-y:auto;">
+                    @foreach (var c in _contacts)
+                    {
+                        <div style="display:flex;align-items:center;gap:10px;padding:10px;border-radius:10px;cursor:pointer;@(_selectedId == c.Id ? "background:var(--primary-soft);" : "")" @onclick="() => SelectAsync(c.Id)">
+                            <span style="width:40px;height:40px;border-radius:50%;flex-shrink:0;display:grid;place-items:center;color:#fff;font-weight:800;font-size:13px;background:var(--gradient-violet);">@Initials(c.Name)</span>
+                            <div style="flex:1;min-width:0;">
+                                <div style="font-weight:700;font-size:13.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">
+                                    @c.Name
+                                    @if (c.Archived) { <span class="badge bg-secondary" style="margin-left:6px;font-size:9.5px;">archivado</span> }
+                                </div>
+                                <div class="text-muted" style="font-size:11px;">@c.Phone @(string.IsNullOrWhiteSpace(c.Country) ? "" : $"· {c.Country}")</div>
+                                @if (c.OrderCount > 0)
+                                {
+                                    <div class="text-muted" style="font-size:10.5px;margin-top:2px;">@c.OrderCount orden(es) · @FormatMoney(c.LifetimeValue, c.LifetimeValueCurrency)</div>
+                                }
+                            </div>
+                            @if (c.NextExpectedAt is DateTimeOffset nx)
+                            {
+                                <div style="text-align:right;">
+                                    <div class="text-muted" style="font-size:9.5px;text-transform:uppercase;letter-spacing:.05em;">Prox</div>
+                                    <div style="font-size:11px;font-weight:600;color:@NextColor(nx);">@nx.ToLocalTime().ToString("dd MMM")</div>
+                                </div>
+                            }
+                        </div>
+                    }
+                </div>
+            }
+        </div>
+
+        <!-- FICHA DETALLE -->
+        <div class="card" style="padding:22px;">
+            @if (_detail is null)
+            {
+                <p class="text-muted" style="padding:24px 0;text-align:center;">Selecciona un contacto a la izquierda para ver su ficha, o crea uno nuevo arriba.</p>
+            }
+            else
+            {
+                <div style="display:flex;align-items:center;gap:14px;margin-bottom:18px;padding-bottom:14px;border-bottom:1px solid var(--border);">
+                    <span style="width:54px;height:54px;border-radius:50%;flex-shrink:0;display:grid;place-items:center;color:#fff;font-weight:800;font-size:17px;background:var(--gradient-violet);">@Initials(_detail.Contact.Name)</span>
+                    <div style="flex:1;min-width:0;">
+                        <div style="font-size:18px;font-weight:800;">@_detail.Contact.Name</div>
+                        <div class="text-muted" style="font-size:12.5px;">@_detail.Contact.Phone @(string.IsNullOrWhiteSpace(_detail.Contact.Email) ? "" : $"· {_detail.Contact.Email}")</div>
+                    </div>
+                    <button class="btn btn-sm btn-outline-secondary" @onclick="OpenEditContact">Editar</button>
+                    <button class="btn btn-sm btn-outline-secondary" @onclick="() => ToggleArchiveAsync()" title="@(_detail.Contact.Archived ? "Desarchivar" : "Archivar")">
+                        @(_detail.Contact.Archived ? "Desarchivar" : "Archivar")
+                    </button>
+                </div>
+
+                <!-- Metricas -->
+                <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:22px;">
+                    <div class="metric-cell">
+                        <div class="metric-label">Ordenes</div>
+                        <div class="metric-value">@_detail.Contact.OrderCount</div>
+                    </div>
+                    <div class="metric-cell">
+                        <div class="metric-label">LTV</div>
+                        <div class="metric-value" style="font-size:16px;">@FormatMoney(_detail.Contact.LifetimeValue, _detail.Contact.LifetimeValueCurrency)</div>
+                    </div>
+                    <div class="metric-cell">
+                        <div class="metric-label">Cadencia</div>
+                        <div class="metric-value" style="font-size:16px;">@(_detail.Contact.CadenceDays is int cd ? $"{cd} dias" : "—")</div>
+                    </div>
+                    <div class="metric-cell">
+                        <div class="metric-label">Proxima</div>
+                        <div class="metric-value" style="font-size:14px;color:@(_detail.Contact.NextExpectedAt is DateTimeOffset ne ? NextColor(ne) : "var(--muted-foreground)");">
+                            @(_detail.Contact.NextExpectedAt is DateTimeOffset nx ? nx.ToLocalTime().ToString("dd MMM yyyy") : "—")
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Datos personales -->
+                <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px 20px;margin-bottom:22px;font-size:13px;">
+                    <div><span class="text-muted">Pais:</span> @(_detail.Contact.Country ?? "—")</div>
+                    <div><span class="text-muted">Ciudad:</span> @(_detail.Contact.City ?? "—")</div>
+                    <div><span class="text-muted">F. nacimiento:</span> @(_detail.Contact.BirthDate is DateOnly d ? d.ToString("dd MMM yyyy", CultureInfo.InvariantCulture) : "—")</div>
+                    <div><span class="text-muted">Primera compra:</span> @(_detail.Contact.FirstOrderAt is DateTimeOffset fo ? fo.ToLocalTime().ToString("dd MMM yyyy") : "—")</div>
+                </div>
+
+                @if (!string.IsNullOrWhiteSpace(_detail.Contact.Notes))
+                {
+                    <div style="padding:12px;border:1px solid var(--border);border-radius:10px;background:var(--muted);font-size:13px;color:var(--foreground);margin-bottom:22px;white-space:pre-wrap;">
+                        <div class="text-muted" style="font-size:10.5px;text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px;">Notas</div>
+                        @_detail.Contact.Notes
+                    </div>
+                }
+
+                <!-- Historial de ordenes -->
+                <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
+                    <h3 style="font-size:15px;font-weight:700;margin:0;">Historial de compras (@_detail.Orders.Count)</h3>
+                    <button class="btn btn-sm btn-primary" @onclick="OpenNewOrder">+ Registrar orden</button>
+                </div>
+
+                @if (_detail.Orders.Count == 0)
+                {
+                    <p class="text-muted" style="font-size:13px;padding:14px 0;">Sin compras registradas aun. Usa "Registrar orden" para empezar a construir el historial.</p>
+                }
+                else
+                {
+                    <div style="display:flex;flex-direction:column;gap:8px;">
+                        @foreach (var o in _detail.Orders)
+                        {
+                            <div style="padding:12px;border:1px solid var(--border);border-radius:10px;display:grid;grid-template-columns:100px 1fr auto auto;gap:14px;align-items:center;">
+                                <div>
+                                    <div style="font-weight:700;font-size:13px;">@o.OrderedAt.ToLocalTime().ToString("dd MMM yyyy")</div>
+                                    <div class="text-muted" style="font-size:10.5px;">@o.Channel</div>
+                                </div>
+                                <div style="font-size:12.5px;color:var(--foreground);min-width:0;">
+                                    @FormatItems(o.ItemsJson)
+                                    @if (!string.IsNullOrWhiteSpace(o.Notes))
+                                    {
+                                        <div class="text-muted" style="font-size:11px;margin-top:3px;font-style:italic;">@o.Notes</div>
+                                    }
+                                </div>
+                                <div style="font-weight:700;font-size:13.5px;text-align:right;white-space:nowrap;">
+                                    @FormatMoney(o.TotalAmount, o.Currency)
+                                </div>
+                                <button class="btn btn-sm btn-outline-danger" style="padding:2px 8px;font-size:11px;" @onclick="() => DeleteOrderAsync(o.Id)" title="Eliminar orden">×</button>
+                            </div>
+                        }
+                    </div>
+                }
+            }
+        </div>
+    </div>
+}
+
+<!-- MODAL: nuevo/editar contacto -->
+@if (_contactModal is not null)
+{
+    <div class="modal-overlay">
+        <div class="modal-dialog" style="max-width:520px;">
+            <div class="modal-head">
+                <h3>@(_contactModal.IsEdit ? "Editar contacto" : "Nuevo contacto")</h3>
+                <button class="modal-close" @onclick="() => _contactModal = null">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div class="field">
+                    <label class="form-label">Nombre *</label>
+                    <input class="form-control" @bind="_contactModal.Name" />
+                </div>
+                <div class="field">
+                    <label class="form-label">Telefono (sin +, formato internacional) *</label>
+                    <input class="form-control" @bind="_contactModal.Phone" disabled="@_contactModal.IsEdit" placeholder="573001234567" />
+                    @if (_contactModal.IsEdit) { <div class="text-muted" style="font-size:11px;margin-top:4px;">El telefono no se puede cambiar (identifica al contacto).</div> }
+                </div>
+                <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
+                    <div class="field">
+                        <label class="form-label">Email</label>
+                        <input class="form-control" @bind="_contactModal.Email" placeholder="opcional" />
+                    </div>
+                    <div class="field">
+                        <label class="form-label">F. nacimiento</label>
+                        <input class="form-control" type="date" @bind="_contactModal.BirthDate" />
+                    </div>
+                </div>
+                <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
+                    <div class="field">
+                        <label class="form-label">Pais</label>
+                        <input class="form-control" @bind="_contactModal.Country" />
+                    </div>
+                    <div class="field">
+                        <label class="form-label">Ciudad</label>
+                        <input class="form-control" @bind="_contactModal.City" />
+                    </div>
+                </div>
+                <div class="field">
+                    <label class="form-label">Notas</label>
+                    <textarea class="form-control" rows="3" @bind="_contactModal.Notes" placeholder="Alergias, preferencias, meta de salud, contexto familiar..."></textarea>
+                </div>
+                @if (!string.IsNullOrEmpty(_contactModal.Error))
+                {
+                    <div class="text-danger small" style="margin-top:8px;">@_contactModal.Error</div>
+                }
+            </div>
+            <div class="modal-foot">
+                <button class="btn btn-outline-secondary" @onclick="() => _contactModal = null">Cancelar</button>
+                <button class="btn btn-primary" @onclick="SaveContactAsync" disabled="@_busy">Guardar</button>
+            </div>
+        </div>
+    </div>
+}
+
+<!-- MODAL: nueva orden -->
+@if (_orderModal is not null)
+{
+    <div class="modal-overlay">
+        <div class="modal-dialog" style="max-width:520px;">
+            <div class="modal-head">
+                <h3>Registrar orden</h3>
+                <button class="modal-close" @onclick="() => _orderModal = null">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
+                    <div class="field">
+                        <label class="form-label">Fecha de la compra *</label>
+                        <input class="form-control" type="date" @bind="_orderModal.OrderedAt" />
+                    </div>
+                    <div class="field">
+                        <label class="form-label">Canal</label>
+                        <select class="form-control" @bind="_orderModal.Channel">
+                            <option value="Manual">Manual</option>
+                            <option value="Fuxion">FUXION (sync)</option>
+                            <option value="LinkPago">Link de pago</option>
+                            <option value="Other">Otro</option>
+                        </select>
+                    </div>
+                </div>
+                <div style="display:grid;grid-template-columns:1fr 100px;gap:12px;">
+                    <div class="field">
+                        <label class="form-label">Monto total</label>
+                        <input class="form-control" type="number" step="0.01" @bind="_orderModal.TotalAmount" placeholder="opcional" />
+                    </div>
+                    <div class="field">
+                        <label class="form-label">Moneda</label>
+                        <input class="form-control" @bind="_orderModal.Currency" placeholder="COP" maxlength="8" />
+                    </div>
+                </div>
+                <div class="field">
+                    <label class="form-label">Productos (texto libre o JSON)</label>
+                    <textarea class="form-control" rows="3" @bind="_orderModal.ItemsJson"
+                              placeholder='Ej: [{"name":"OFF","qty":1,"unitPrice":151900}, {"name":"PRUNEX1","qty":1,"unitPrice":138100}]'></textarea>
+                    <div class="text-muted" style="font-size:11px;margin-top:4px;">Puede dejarse vacio. Si usas JSON debe ser array valido.</div>
+                </div>
+                <div class="field">
+                    <label class="form-label">Referencia externa</label>
+                    <input class="form-control" @bind="_orderModal.ExternalRef" placeholder="ID FUXION, # factura, wamid, opcional" />
+                </div>
+                <div class="field">
+                    <label class="form-label">Notas</label>
+                    <textarea class="form-control" rows="2" @bind="_orderModal.Notes" placeholder="Observaciones del pedido..."></textarea>
+                </div>
+                @if (!string.IsNullOrEmpty(_orderModal.Error))
+                {
+                    <div class="text-danger small" style="margin-top:8px;">@_orderModal.Error</div>
+                }
+            </div>
+            <div class="modal-foot">
+                <button class="btn btn-outline-secondary" @onclick="() => _orderModal = null">Cancelar</button>
+                <button class="btn btn-primary" @onclick="SaveOrderAsync" disabled="@_busy">Registrar</button>
+            </div>
+        </div>
+    </div>
+}
+
+<style>
+    .metric-cell { padding: 10px 12px; border: 1px solid var(--border); border-radius: 10px; background: var(--card); }
+    .metric-label { font-size: 10.5px; font-weight: 600; color: var(--muted-foreground); text-transform: uppercase; letter-spacing: .05em; margin-bottom: 4px; }
+    .metric-value { font-size: 22px; font-weight: 800; color: var(--primary); line-height: 1; }
+    .ai-toggle { display: flex; align-items: center; gap: 8px; padding: 6px 10px; border-radius: 8px; cursor: pointer; }
+    .ai-toggle input { width: 15px; height: 15px; accent-color: var(--primary); }
+    .field { margin-bottom: 14px; }
+</style>
+
+@code {
+    [CascadingParameter] private Task<AuthenticationState>? AuthState { get; set; }
+
+    private bool _loading = true;
+    private bool _busy;
+    private string _filter = string.Empty;
+    private bool _includeArchived;
+    private List<ContactDto> _contacts = new();
+    private Guid? _selectedId;
+    private ContactDetailDto? _detail;
+    private string? _flash;
+    private string _flashClass = "alert-success";
+
+    private ContactFormModel? _contactModal;
+    private OrderFormModel? _orderModal;
+
+    protected override async Task OnInitializedAsync() => await ReloadAsync();
+
+    private async Task ReloadAsync()
+    {
+        _loading = true;
+        try
+        {
+            _contacts = (await ContactsSvc.ListAsync(_filter, _includeArchived, 200)).ToList();
+            if (_selectedId is Guid id && _contacts.Any(c => c.Id == id))
+            {
+                _detail = await ContactsSvc.GetAsync(id);
+            }
+            else { _selectedId = null; _detail = null; }
+        }
+        finally { _loading = false; }
+    }
+
+    private async Task SelectAsync(Guid id)
+    {
+        _selectedId = id;
+        _detail = await ContactsSvc.GetAsync(id);
+    }
+
+    private async Task OnFilterInput(ChangeEventArgs e)
+    {
+        _filter = e.Value?.ToString() ?? string.Empty;
+        await ReloadAsync();
+    }
+
+    private async Task OnToggleArchived(ChangeEventArgs e)
+    {
+        _includeArchived = (bool)e.Value!;
+        await ReloadAsync();
+    }
+
+    private void OpenNewContact() => _contactModal = new ContactFormModel();
+
+    private void OpenEditContact()
+    {
+        if (_detail is null) { return; }
+        _contactModal = new ContactFormModel
+        {
+            IsEdit = true,
+            Id = _detail.Contact.Id,
+            Name = _detail.Contact.Name,
+            Phone = _detail.Contact.Phone,
+            Email = _detail.Contact.Email,
+            Country = _detail.Contact.Country,
+            City = _detail.Contact.City,
+            BirthDate = _detail.Contact.BirthDate?.ToDateTime(TimeOnly.MinValue),
+            Notes = _detail.Contact.Notes
+        };
+    }
+
+    private async Task SaveContactAsync()
+    {
+        if (_contactModal is null) { return; }
+        _contactModal.Error = null;
+        _busy = true;
+        try
+        {
+            var actor = await ActorAsync();
+            var birth = _contactModal.BirthDate is DateTime dt ? DateOnly.FromDateTime(dt) : (DateOnly?)null;
+            if (_contactModal.IsEdit && _contactModal.Id is Guid eid)
+            {
+                var req = new UpdateContactRequest(
+                    Name: _contactModal.Name,
+                    Email: _contactModal.Email ?? string.Empty,
+                    Country: _contactModal.Country ?? string.Empty,
+                    City: _contactModal.City ?? string.Empty,
+                    BirthDate: birth,
+                    Notes: _contactModal.Notes ?? string.Empty,
+                    Archived: null);
+                var updated = await ContactsSvc.UpdateAsync(eid, req, actor);
+                if (updated is null) { _contactModal.Error = "No se pudo actualizar."; return; }
+                Flash("Contacto actualizado.", true);
+            }
+            else
+            {
+                if (string.IsNullOrWhiteSpace(_contactModal.Name) || string.IsNullOrWhiteSpace(_contactModal.Phone))
+                {
+                    _contactModal.Error = "Nombre y telefono son obligatorios.";
+                    return;
+                }
+                var req = new CreateContactRequest(
+                    Name: _contactModal.Name,
+                    Phone: _contactModal.Phone,
+                    Email: _contactModal.Email,
+                    Country: _contactModal.Country,
+                    City: _contactModal.City,
+                    BirthDate: birth,
+                    Notes: _contactModal.Notes);
+                var created = await ContactsSvc.CreateAsync(req, actor);
+                if (created is null) { _contactModal.Error = "Ya existe un contacto con ese telefono."; return; }
+                _selectedId = created.Id;
+                Flash("Contacto creado.", true);
+            }
+            _contactModal = null;
+            await ReloadAsync();
+        }
+        catch (Exception ex) { _contactModal!.Error = ex.Message; }
+        finally { _busy = false; }
+    }
+
+    private async Task ToggleArchiveAsync()
+    {
+        if (_detail is null) { return; }
+        var actor = await ActorAsync();
+        var req = new UpdateContactRequest(Archived: !_detail.Contact.Archived);
+        await ContactsSvc.UpdateAsync(_detail.Contact.Id, req, actor);
+        Flash(_detail.Contact.Archived ? "Contacto desarchivado." : "Contacto archivado.", true);
+        await ReloadAsync();
+    }
+
+    private void OpenNewOrder()
+    {
+        if (_detail is null) { return; }
+        _orderModal = new OrderFormModel { OrderedAt = DateTime.UtcNow.Date };
+    }
+
+    private async Task SaveOrderAsync()
+    {
+        if (_orderModal is null || _detail is null) { return; }
+        _orderModal.Error = null;
+        _busy = true;
+        try
+        {
+            var actor = await ActorAsync();
+            var req = new CreateContactOrderRequest(
+                OrderedAt: new DateTimeOffset(_orderModal.OrderedAt, TimeSpan.Zero),
+                TotalAmount: _orderModal.TotalAmount,
+                Currency: _orderModal.Currency,
+                ItemsJson: string.IsNullOrWhiteSpace(_orderModal.ItemsJson) ? null : _orderModal.ItemsJson,
+                Channel: string.IsNullOrWhiteSpace(_orderModal.Channel) ? "Manual" : _orderModal.Channel,
+                ExternalRef: _orderModal.ExternalRef,
+                Notes: _orderModal.Notes);
+            var created = await ContactsSvc.AddOrderAsync(_detail.Contact.Id, req, actor);
+            if (created is null) { _orderModal.Error = "No se pudo registrar (revisa el formato JSON de items si lo usaste)."; return; }
+            Flash("Orden registrada.", true);
+            _orderModal = null;
+            await SelectAsync(_detail.Contact.Id);
+            await ReloadAsync();
+        }
+        catch (Exception ex) { _orderModal!.Error = ex.Message; }
+        finally { _busy = false; }
+    }
+
+    private async Task DeleteOrderAsync(Guid orderId)
+    {
+        if (_detail is null) { return; }
+        var actor = await ActorAsync();
+        var ok = await ContactsSvc.DeleteOrderAsync(_detail.Contact.Id, orderId, actor);
+        Flash(ok ? "Orden eliminada." : "No se encontro la orden.", ok);
+        await SelectAsync(_detail.Contact.Id);
+        await ReloadAsync();
+    }
+
+    private async Task<Guid> ActorAsync()
+    {
+        if (AuthState is null) { return Guid.Empty; }
+        var state = await AuthState;
+        return Guid.TryParse(state.User.FindFirst(ClaimTypes.NameIdentifier)?.Value, out var id) ? id : Guid.Empty;
+    }
+
+    private void Flash(string msg, bool success)
+    {
+        _flash = msg;
+        _flashClass = success ? "alert-success" : "alert-danger";
+    }
+
+    // ===== Helpers de formato =====
+
+    private static string Initials(string s)
+    {
+        if (string.IsNullOrWhiteSpace(s)) { return "?"; }
+        var parts = s.Trim().Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        if (parts.Length == 1) { return parts[0].Length >= 2 ? parts[0][..2].ToUpperInvariant() : parts[0].ToUpperInvariant(); }
+        return ((parts[0][0]).ToString() + parts[^1][0]).ToUpperInvariant();
+    }
+
+    private static string FormatMoney(decimal? amount, string? currency)
+    {
+        if (amount is not decimal a || a == 0) { return "—"; }
+        var cur = string.IsNullOrWhiteSpace(currency) ? "" : $" {currency}";
+        return a.ToString("N0", CultureInfo.InvariantCulture).Replace(",", ".") + cur;
+    }
+
+    // Color del NextExpectedAt: rojo si ya paso (cliente dormido), amber si <= 7 dias, verde futuro.
+    private static string NextColor(DateTimeOffset nx)
+    {
+        var days = (nx - DateTimeOffset.UtcNow).TotalDays;
+        if (days < 0) { return "#ef4444"; }  // vencida
+        if (days <= 7) { return "#f59e0b"; } // proxima
+        return "#22c55e";                     // futuro
+    }
+
+    // Formatea ItemsJson a algo legible: si es JSON array con {name,qty}, muestra "OFF x1, PRUNEX1 x1".
+    // Si no parsea como JSON valido, muestra el texto crudo tal cual (max 80 chars).
+    private static string FormatItems(string? itemsJson)
+    {
+        if (string.IsNullOrWhiteSpace(itemsJson)) { return "—"; }
+        try
+        {
+            using var doc = JsonDocument.Parse(itemsJson);
+            if (doc.RootElement.ValueKind == JsonValueKind.Array)
+            {
+                var parts = new List<string>();
+                foreach (var it in doc.RootElement.EnumerateArray())
+                {
+                    if (it.ValueKind != JsonValueKind.Object) { continue; }
+                    var name = it.TryGetProperty("name", out var n) ? n.GetString() : null;
+                    var qty = it.TryGetProperty("qty", out var q) && q.ValueKind == JsonValueKind.Number ? q.GetInt32() : 1;
+                    if (!string.IsNullOrWhiteSpace(name)) { parts.Add(qty == 1 ? name! : $"{name} x{qty}"); }
+                }
+                return parts.Count > 0 ? string.Join(", ", parts) : itemsJson;
+            }
+        }
+        catch { /* fallthrough */ }
+        return itemsJson.Length <= 80 ? itemsJson : itemsJson[..80] + "...";
+    }
+
+    private sealed class ContactFormModel
+    {
+        public bool IsEdit;
+        public Guid? Id;
+        public string Name = string.Empty;
+        public string Phone = string.Empty;
+        public string? Email;
+        public string? Country;
+        public string? City;
+        public DateTime? BirthDate;
+        public string? Notes;
+        public string? Error;
+    }
+
+    private sealed class OrderFormModel
+    {
+        public DateTime OrderedAt = DateTime.UtcNow.Date;
+        public decimal? TotalAmount;
+        public string? Currency = "COP";
+        public string? ItemsJson;
+        public string Channel = "Manual";
+        public string? ExternalRef;
+        public string? Notes;
+        public string? Error;
+    }
+}
