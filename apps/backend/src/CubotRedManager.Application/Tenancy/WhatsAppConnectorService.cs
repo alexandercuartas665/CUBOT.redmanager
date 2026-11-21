@@ -350,6 +350,50 @@ public sealed class WhatsAppConnectorService : IWhatsAppConnectorService
         return new LineGroupsResult(res.Ok, mapped, res.Error);
     }
 
+    public async Task<LineContactsResult> FetchContactsAsync(Guid lineId, CancellationToken cancellationToken = default)
+    {
+        var line = await _db.WhatsAppLines.FirstOrDefaultAsync(l => l.Id == lineId, cancellationToken);
+        if (line is null) { return new LineContactsResult(false, Array.Empty<LineContactDto>(), "La linea no existe."); }
+        if (line.Provider != WhatsAppProvider.Evolution)
+        {
+            return new LineContactsResult(false, Array.Empty<LineContactDto>(), "Solo se importan contactos de lineas Evolution (telefono conectado por QR).");
+        }
+        if (line.Status != WhatsAppLineStatus.Connected)
+        {
+            return new LineContactsResult(false, Array.Empty<LineContactDto>(), "La linea no esta conectada. Conecta el telefono (QR) primero.");
+        }
+        var server = await ResolveServerAsync(cancellationToken);
+        if (server is null) { return new LineContactsResult(false, Array.Empty<LineContactDto>(), "No hay servidor Evolution configurado."); }
+        var (baseUrl, apiKey) = server.Value;
+        var res = await _client.FetchContactsAsync(baseUrl, apiKey, EvoInstance(line), cancellationToken);
+        if (!res.Ok) { return new LineContactsResult(false, Array.Empty<LineContactDto>(), res.Error); }
+
+        var ownDigits = new string((line.PhoneNumber ?? "").Where(char.IsDigit).ToArray());
+        var byPhone = new Dictionary<string, LineContactDto>();
+        foreach (var c in res.Contacts)
+        {
+            // Solo contactos individuales: se descartan grupos (@g.us), listas de difusion,
+            // estados y los identificadores anonimos @lid (no traen numero real).
+            if (!c.Jid.EndsWith("@s.whatsapp.net", StringComparison.OrdinalIgnoreCase)) { continue; }
+            var digits = new string(c.Jid.Split('@')[0].Split(':')[0].Where(char.IsDigit).ToArray());
+            if (digits.Length < 8 || digits.Length > 15) { continue; }
+            if (ownDigits.Length > 0 && digits == ownDigits) { continue; }
+            var name = string.IsNullOrWhiteSpace(c.PushName) ? null : c.PushName.Trim();
+            if (name is not null && new string(name.Where(char.IsDigit).ToArray()) == digits) { name = null; }
+            if (byPhone.TryGetValue(digits, out var existing))
+            {
+                if (existing.Name is null && name is not null) { byPhone[digits] = existing with { Name = name }; }
+                continue;
+            }
+            byPhone[digits] = new LineContactDto(digits, name, c.ProfilePicUrl);
+        }
+        var list = byPhone.Values
+            .OrderBy(x => x.Name is null)
+            .ThenBy(x => x.Name ?? x.Phone, StringComparer.CurrentCultureIgnoreCase)
+            .ToList();
+        return new LineContactsResult(true, list, null);
+    }
+
     public async Task<LineSendResult> SendReactionAsync(Guid lineId, string phone, string externalMessageId, string emoji, CancellationToken cancellationToken = default)
     {
         if (string.IsNullOrWhiteSpace(externalMessageId) || string.IsNullOrWhiteSpace(emoji))

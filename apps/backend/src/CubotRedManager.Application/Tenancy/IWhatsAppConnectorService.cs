@@ -40,6 +40,10 @@ public interface IWhatsAppConnectorService
     /// linea (para poblar dropdowns de destinatario). Devuelve lista vacia + error si aplica.</summary>
     Task<LineGroupsResult> FetchGroupsAsync(Guid lineId, CancellationToken cancellationToken = default);
 
+    /// <summary>Lista los contactos individuales del telefono conectado a una linea Evolution
+    /// (agenda sincronizada + chats), normalizados a digitos y sin duplicados.</summary>
+    Task<LineContactsResult> FetchContactsAsync(Guid lineId, CancellationToken cancellationToken = default);
+
     /// <summary>Envia una reaccion (emoji) al mensaje entrante identificado por externalId.</summary>
     Task<LineSendResult> SendReactionAsync(Guid lineId, string phone, string externalMessageId, string emoji, CancellationToken cancellationToken = default);
 
@@ -85,3 +89,7 @@ public sealed record InboundMediaResult(bool Ok, string? Base64, string? MimeTyp
 
 public sealed record LineGroupDto(string Jid, string Name, int? ParticipantCount);
 public sealed record LineGroupsResult(bool Ok, IReadOnlyList<LineGroupDto> Groups, string? Error);
+
+/// <summary>Contacto del telefono: Phone en digitos con indicativo (573001234567).</summary>
+public sealed record LineContactDto(string Phone, string? Name, string? ProfilePicUrl);
+public sealed record LineContactsResult(bool Ok, IReadOnlyList<LineContactDto> Contacts, string? Error);

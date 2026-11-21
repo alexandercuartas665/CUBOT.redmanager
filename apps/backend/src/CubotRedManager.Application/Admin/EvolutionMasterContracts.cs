@@ -25,6 +25,13 @@ public sealed record EvolutionGroupInfo(string Jid, string Name, int? Participan
 
 public sealed record EvolutionGroupsResult(bool Ok, IReadOnlyList<EvolutionGroupInfo> Groups, string? Error);
 
+/// <summary>Contacto conocido por la instancia (agenda sincronizada del telefono + chats).
+/// Jid suele ser "573001234567@s.whatsapp.net"; PushName puede ser el nombre de la agenda o el
+/// nombre de perfil de WhatsApp, segun lo que el telefono haya sincronizado.</summary>
+public sealed record EvolutionContactInfo(string Jid, string? PushName, string? ProfilePicUrl);
+
+public sealed record EvolutionContactsResult(bool Ok, IReadOnlyList<EvolutionContactInfo> Contacts, string? Error);
+
 /// <summary>Cliente HTTP del servidor Evolution API. Implementacion en Infrastructure.</summary>
 public interface IEvolutionApiClient
 {
@@ -42,6 +49,9 @@ public interface IEvolutionApiClient
 
     /// <summary>Lista los grupos de WhatsApp de la instancia (dropdown de destinatarios de resumen).</summary>
     Task<EvolutionGroupsResult> FetchGroupsAsync(string baseUrl, string apiKey, string instanceName, CancellationToken cancellationToken = default);
+
+    /// <summary>Lista los contactos de la instancia (POST /chat/findContacts/{instance}).</summary>
+    Task<EvolutionContactsResult> FetchContactsAsync(string baseUrl, string apiKey, string instanceName, CancellationToken cancellationToken = default);
 }
 
 public interface IEvolutionMasterConfigService

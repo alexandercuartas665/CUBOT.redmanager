@@ -9,6 +9,7 @@
 @inject IWhatsAppConnectorService Connector
 @inject IWebhookAdminService WebhookSvc
 @inject IYCloudApiClient YCloud
+@inject IContactService ContactsSvc
 @inject AuthenticationStateProvider AuthProvider
 
 <PageTitle>Lineas WhatsApp - CUBOT.redmanager</PageTitle>
@@ -240,6 +241,10 @@ else
                         <button class="btn btn-sm btn-primary" @onclick="() => OpenTest(l)" disabled="@_busy">Probar envio</button>
                         <button class="btn btn-sm btn-outline-secondary" @onclick="() => RefreshAsync(l.Id)" disabled="@_busy">Actualizar</button>
                         <button class="btn btn-sm btn-outline-secondary" @onclick="() => Disconnect(l)" disabled="@_busy">Desconectar</button>
+                        @if (l.Provider == WhatsAppProvider.Evolution)
+                        {
+                            <button class="btn btn-sm btn-outline-primary" @onclick="() => OpenImport(l)" disabled="@_busy" title="Trae los contactos del telefono conectado al directorio de Contactos.">Importar contactos</button>
+                        }
                     }
                     else if (l.Provider == WhatsAppProvider.Evolution)
                     {
@@ -330,6 +335,101 @@ else
             <div class="modal-foot">
                 <button class="btn btn-outline-secondary" @onclick="() => _testOpen = false">Cerrar</button>
                 <button class="btn btn-primary" @onclick="SendTestAsync" disabled="@(_busy || string.IsNullOrWhiteSpace(_testPhone))">Enviar</button>
+            </div>
+        </div>
+    </div>
+}
+
+@if (_impLine is not null)
+{
+    <div class="modal-overlay" @onclick="CloseImport">
+        <div class="modal-dialog wide" @onclick:stopPropagation="true">
+            <div class="modal-head">
+                <h3>Importar contactos &mdash; @_impLine.InstanceName</h3>
+                <button class="modal-close" @onclick="CloseImport">&times;</button>
+            </div>
+            <div class="modal-body">
+                @if (_impLoading)
+                {
+                    <div class="imp-empty">Leyendo los contactos del telefono... (una agenda grande puede tardar hasta un minuto)</div>
+                }
+                else if (_impError is not null)
+                {
+                    <div class="text-danger" style="font-size:0.88rem;">@_impError</div>
+                }
+                else if (_impResult is not null)
+                {
+                    <div class="imp-result">
+                        <div class="imp-result-title">Importacion lista</div>
+                        <div class="imp-stats">
+                            <div><strong>@_impResult.Created</strong><span>nuevos</span></div>
+                            <div><strong>@_impResult.Updated</strong><span>actualizados</span></div>
+                            <div><strong>@_impResult.Unchanged</strong><span>sin cambios</span></div>
+                            @if (_impResult.Invalid > 0)
+                            {
+                                <div><strong>@_impResult.Invalid</strong><span>invalidos</span></div>
+                            }
+                        </div>
+                        <p class="imp-note">Quedaron con la etiqueta <code>@ImpTagLabel</code>. En Contactos filtra por esa etiqueta para perfilarlos (genero, metas, lo que consumen...).</p>
+                        <a class="btn btn-primary btn-sm" href="contactos">Ir a Contactos</a>
+                    </div>
+                }
+                else
+                {
+                    <div class="imp-summary">
+                        <span><strong>@_impAll.Count</strong> contactos en el telefono</span>
+                        <span class="dot">&middot;</span>
+                        <span><strong>@ImpNewCount</strong> nuevos</span>
+                        <span class="dot">&middot;</span>
+                        <span><strong>@(_impAll.Count - ImpNewCount)</strong> ya en el directorio</span>
+                    </div>
+                    <div class="imp-toolbar">
+                        <input class="form-control form-control-sm" placeholder="Buscar por nombre o numero" @bind="_impQuery" @bind:event="oninput" />
+                        <label class="imp-check-inline"><input type="checkbox" @bind="_impOnlyNew" /> Solo nuevos</label>
+                        <label class="imp-check-inline"><input type="checkbox" @bind="_impOnlyNamed" /> Solo con nombre</label>
+                    </div>
+                    <div class="imp-toolbar">
+                        <button class="btn btn-sm btn-outline-secondary" @onclick="SelectVisible">Seleccionar filtrados (@ImpFiltered.Count)</button>
+                        <button class="btn btn-sm btn-outline-secondary" @onclick="() => _impSel.Clear()">Quitar seleccion</button>
+                        <span class="imp-selcount">@_impSel.Count seleccionados</span>
+                    </div>
+                    <div class="imp-list">
+                        @if (ImpFiltered.Count == 0)
+                        {
+                            <div class="imp-empty">No hay contactos con ese filtro.</div>
+                        }
+                        @foreach (var c in ImpFiltered.Take(ImpPageSize))
+                        {
+                            var phone = c.Phone;
+                            var exists = _impExisting.Contains(phone);
+                            <label class="imp-row">
+                                <input type="checkbox" checked="@_impSel.Contains(phone)" @onchange="e => ToggleImp(phone, e)" />
+                                <span class="imp-name">@(c.Name ?? "(sin nombre)")</span>
+                                <span class="imp-phone">@("+" + phone)</span>
+                                @if (exists)
+                                {
+                                    <span class="imp-badge">Ya en directorio</span>
+                                }
+                            </label>
+                        }
+                        @if (ImpFiltered.Count > ImpPageSize)
+                        {
+                            <div class="imp-empty">Mostrando @ImpPageSize de @ImpFiltered.Count. "Seleccionar filtrados" incluye todos los que cumplen el filtro, no solo los mostrados.</div>
+                        }
+                    </div>
+                    <div class="field" style="margin-top:12px;">
+                        <label class="form-label">Etiqueta para los importados</label>
+                        <input class="form-control form-control-sm" @bind="_impTag" placeholder="agenda-whatsapp" />
+                    </div>
+                    <p class="imp-note">Los nombres son los que WhatsApp sincroniza (agenda del telefono o nombre de perfil). A los que ya existen solo se les agrega la etiqueta y, si no tenian nombre, el nombre. Importar no equivale a autorizacion de marketing (Ley 1581): registra el consentimiento en el perfil antes de enviar campanas.</p>
+                }
+            </div>
+            <div class="modal-foot">
+                <button class="btn btn-outline-secondary" @onclick="CloseImport">Cerrar</button>
+                @if (!_impLoading && _impError is null && _impResult is null)
+                {
+                    <button class="btn btn-primary" @onclick="ImportSelectedAsync" disabled="@(_impSaving || _impSel.Count == 0)">@ImpButtonLabel</button>
+                }
             </div>
         </div>
     </div>
@@ -484,6 +584,25 @@ else
     .line-badge.s-failed, .line-badge.s-disconnected { background: oklch(0.6 0.22 22 / 0.12); color: var(--destructive); }
     .field { margin-bottom: 14px; }
     .modal-dialog.wide { max-width: 620px; }
+    .imp-summary { display:flex; flex-wrap:wrap; gap:6px; font-size:0.88rem; margin-bottom:10px; color: var(--text-secondary, #555); }
+    .imp-summary .dot { opacity:0.5; }
+    .imp-toolbar { display:flex; flex-wrap:wrap; align-items:center; gap:8px; margin-bottom:8px; }
+    .imp-toolbar .form-control { flex:1 1 220px; }
+    .imp-check-inline { display:inline-flex; align-items:center; gap:4px; font-size:0.82rem; white-space:nowrap; margin:0; }
+    .imp-selcount { font-size:0.82rem; margin-left:auto; color: var(--text-secondary, #555); }
+    .imp-list { max-height: 340px; overflow-y:auto; border:1px solid rgba(0,0,0,0.08); border-radius:10px; }
+    .imp-row { display:flex; align-items:center; gap:10px; padding:7px 12px; border-bottom:1px solid rgba(0,0,0,0.05); cursor:pointer; font-size:0.86rem; margin:0; }
+    .imp-row:hover { background: rgba(160,61,201,0.05); }
+    .imp-name { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+    .imp-phone { font-variant-numeric: tabular-nums; color: var(--text-secondary, #666); font-size:0.8rem; }
+    .imp-badge { font-size:0.7rem; padding:2px 8px; border-radius:999px; background: rgba(160,61,201,0.1); color:#A03DC9; white-space:nowrap; }
+    .imp-empty { padding:14px; font-size:0.84rem; color: var(--text-secondary, #666); text-align:center; }
+    .imp-note { font-size:0.78rem; color: var(--text-secondary, #666); margin:10px 0 0; }
+    .imp-result-title { font-weight:600; margin-bottom:10px; }
+    .imp-stats { display:flex; gap:12px; flex-wrap:wrap; margin-bottom:6px; }
+    .imp-stats > div { flex:1 1 90px; border:1px solid rgba(0,0,0,0.08); border-radius:10px; padding:10px; text-align:center; }
+    .imp-stats strong { display:block; font-size:1.3rem; color:#A03DC9; }
+    .imp-stats span { font-size:0.75rem; color: var(--text-secondary, #666); }
     .provider-choice { display: flex; flex-direction: column; gap: 8px; }
     .prov-opt { display: flex; align-items: flex-start; gap: 10px; padding: 10px 12px; border: 1.5px solid var(--border); border-radius: 10px; cursor: pointer; transition: all .15s; }
     .prov-opt.on { border-color: var(--primary); background: oklch(0.72 0.15 285 / 0.06); }
@@ -535,6 +654,125 @@ else
     private string? _err;
     private Guid _actor;
     private List<WhatsAppLineDto> _lines = new();
+
+    // Modal de importacion de contactos (Evolution)
+    private const int ImpPageSize = 300;
+    private WhatsAppLineDto? _impLine;
+    private bool _impLoading;
+    private bool _impSaving;
+    private string? _impError;
+    private List<LineContactDto> _impAll = new();
+    private IReadOnlySet<string> _impExisting = new HashSet<string>();
+    private readonly HashSet<string> _impSel = new();
+    private string _impQuery = "";
+    private bool _impOnlyNew;
+    private bool _impOnlyNamed;
+    private string _impTag = "agenda-whatsapp";
+    private ContactImportResult? _impResult;
+
+    private int ImpNewCount => _impAll.Count(c => !_impExisting.Contains(c.Phone));
+    private string ImpTagLabel => string.IsNullOrWhiteSpace(_impTag) ? "(sin etiqueta)" : _impTag.Trim().ToLowerInvariant();
+    private string ImpButtonLabel => _impSaving ? "Importando..." : $"Importar {_impSel.Count}";
+
+    private List<LineContactDto> ImpFiltered
+    {
+        get
+        {
+            IEnumerable<LineContactDto> q = _impAll;
+            if (_impOnlyNew) { q = q.Where(c => !_impExisting.Contains(c.Phone)); }
+            if (_impOnlyNamed) { q = q.Where(c => c.Name is not null); }
+            if (!string.IsNullOrWhiteSpace(_impQuery))
+            {
+                var n = _impQuery.Trim();
+                var digits = new string(n.Where(char.IsDigit).ToArray());
+                q = q.Where(c => (c.Name ?? "").Contains(n, StringComparison.CurrentCultureIgnoreCase)
+                              || (digits.Length > 0 && c.Phone.Contains(digits)));
+            }
+            return q.ToList();
+        }
+    }
+
+    private async Task OpenImport(WhatsAppLineDto line)
+    {
+        _impLine = line;
+        _impLoading = true;
+        _impSaving = false;
+        _impError = null;
+        _impResult = null;
+        _impAll = new();
+        _impSel.Clear();
+        _impQuery = "";
+        _impOnlyNew = false;
+        _impOnlyNamed = false;
+        StateHasChanged();
+        try
+        {
+            var res = await Connector.FetchContactsAsync(line.Id);
+            if (!res.Ok)
+            {
+                _impError = "No se pudieron leer los contactos: " + (res.Error ?? "error desconocido");
+                return;
+            }
+            _impAll = res.Contacts.ToList();
+            _impExisting = await ContactsSvc.ListPhonesAsync();
+            if (_impAll.Count == 0)
+            {
+                _impError = "El telefono no devolvio contactos. Si acabas de conectar la linea, espera unos minutos a que WhatsApp sincronice la agenda y vuelve a intentar.";
+                return;
+            }
+            // Por defecto: todos los que aun no estan en el directorio.
+            foreach (var c in _impAll.Where(c => !_impExisting.Contains(c.Phone))) { _impSel.Add(c.Phone); }
+        }
+        catch (Exception ex)
+        {
+            _impError = "Error leyendo contactos: " + ex.Message;
+        }
+        finally
+        {
+            _impLoading = false;
+        }
+    }
+
+    private void ToggleImp(string phone, ChangeEventArgs e)
+    {
+        if (e.Value is true) { _impSel.Add(phone); } else { _impSel.Remove(phone); }
+    }
+
+    private void SelectVisible()
+    {
+        foreach (var c in ImpFiltered) { _impSel.Add(c.Phone); }
+    }
+
+    private async Task ImportSelectedAsync()
+    {
+        if (_impSel.Count == 0) { return; }
+        _impSaving = true;
+        try
+        {
+            var items = _impAll.Where(c => _impSel.Contains(c.Phone))
+                .Select(c => new ContactImportItem(c.Phone, c.Name))
+                .ToList();
+            _impResult = await ContactsSvc.ImportAsync(items, _impTag, _actor);
+        }
+        catch (Exception ex)
+        {
+            _impError = "Error importando: " + ex.Message;
+        }
+        finally
+        {
+            _impSaving = false;
+        }
+    }
+
+    private void CloseImport()
+    {
+        if (_impSaving) { return; }
+        _impLine = null;
+        _impAll = new();
+        _impSel.Clear();
+        _impResult = null;
+        _impError = null;
+    }
 
     // Modal de QR (Evolution) + polling automatico
     private WhatsAppLineDto? _qrLine;

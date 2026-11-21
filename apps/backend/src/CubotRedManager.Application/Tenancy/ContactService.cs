@@ -576,6 +576,83 @@ public sealed class ContactService : IContactService
 
     // Solo digitos: mismo formato que Conversation.ContactPhone, para que el upsert por telefono
     // encuentre el contacto aunque el lead traiga "+57 300 ..." con espacios.
+    // ===================================================================================
+    // Importacion masiva
+    // ===================================================================================
+
+    public async Task<IReadOnlySet<string>> ListPhonesAsync(CancellationToken cancellationToken = default)
+    {
+        if (_tenantContext.TenantId is not Guid) { return new HashSet<string>(); }
+        var phones = await _db.Contacts.AsNoTracking().Select(c => c.Phone).ToListAsync(cancellationToken);
+        return phones.ToHashSet();
+    }
+
+    public async Task<ContactImportResult> ImportAsync(IReadOnlyList<ContactImportItem> items, string? tag, Guid actorUserId, CancellationToken cancellationToken = default)
+    {
+        if (_tenantContext.TenantId is not Guid tenantId || items.Count == 0)
+        {
+            return new ContactImportResult(items.Count, 0, 0, 0, items.Count);
+        }
+        var normTag = string.IsNullOrWhiteSpace(tag) ? null : NormalizeTag(tag);
+        if (normTag is { Length: 0 }) { normTag = null; }
+
+        // Dedupe de la entrada por telefono (se queda el primer nombre no vacio).
+        var incoming = new Dictionary<string, string?>();
+        int invalid = 0;
+        foreach (var it in items)
+        {
+            var phone = NormalizePhone(it.Phone ?? string.Empty);
+            if (phone.Length < 8 || phone.Length > 15) { invalid++; continue; }
+            var name = string.IsNullOrWhiteSpace(it.Name) ? null : it.Name.Trim();
+            if (name is { Length: > 200 }) { name = name[..200]; }
+            if (incoming.TryGetValue(phone, out var prev)) { if (prev is null && name is not null) { incoming[phone] = name; } continue; }
+            incoming[phone] = name;
+        }
+
+        var phones = incoming.Keys.ToList();
+        var existing = await _db.Contacts.Where(c => phones.Contains(c.Phone)).ToListAsync(cancellationToken);
+        var existingByPhone = existing.ToDictionary(c => c.Phone);
+
+        int created = 0, updated = 0, unchanged = 0;
+        foreach (var (phone, name) in incoming)
+        {
+            if (existingByPhone.TryGetValue(phone, out var c))
+            {
+                bool changed = false;
+                if (name is not null && (string.IsNullOrWhiteSpace(c.Name) || c.Name == phone || c.Name == "+" + phone))
+                {
+                    c.Name = name; changed = true;
+                }
+                if (normTag is not null)
+                {
+                    var tags = (c.Tags ?? string.Empty).Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).ToList();
+                    if (!tags.Contains(normTag))
+                    {
+                        tags.Add(normTag);
+                        var joined = string.Join(",", tags);
+                        if (joined.Length <= 1000) { c.Tags = joined; changed = true; }
+                    }
+                }
+                if (changed) { updated++; } else { unchanged++; }
+                continue;
+            }
+            _db.Contacts.Add(new Contact
+            {
+                TenantId = tenantId,
+                Name = name ?? "+" + phone,
+                Phone = phone,
+                Tags = normTag
+            });
+            created++;
+        }
+
+        _audit.Write(actorUserId, "contact.import", nameof(Contact), Guid.Empty,
+            previousValue: null, newValue: new { Received = items.Count, Created = created, Updated = updated, Unchanged = unchanged, Invalid = invalid, Tag = normTag },
+            tenantId: tenantId);
+        await _db.SaveChangesAsync(cancellationToken);
+        return new ContactImportResult(items.Count, created, updated, unchanged, invalid);
+    }
+
     private static string NormalizePhone(string phone) =>
         string.IsNullOrWhiteSpace(phone) ? string.Empty : new string(phone.Where(char.IsDigit).ToArray());
 

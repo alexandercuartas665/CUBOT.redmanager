@@ -217,6 +217,39 @@ public sealed class EvolutionApiClient : IEvolutionApiClient
         catch (Exception ex) { return new EvolutionGroupsResult(false, groups, ex.Message); }
     }
 
+    public async Task<EvolutionContactsResult> FetchContactsAsync(string baseUrl, string apiKey, string instanceName, CancellationToken cancellationToken = default)
+    {
+        var contacts = new List<EvolutionContactInfo>();
+        try
+        {
+            // Evolution API v2: POST /chat/findContacts/{instance} con filtro vacio = todos.
+            // Una agenda de miles de contactos puede tardar mas que el timeout normal de 20 s.
+            var body = new { where = new { } };
+            using var resp = await SendAsync(HttpMethod.Post, baseUrl, $"/chat/findContacts/{Uri.EscapeDataString(instanceName)}",
+                apiKey, JsonContent.Create(body), cancellationToken, TimeSpan.FromSeconds(90));
+            var json = await resp.Content.ReadAsStringAsync(cancellationToken);
+            if (!resp.IsSuccessStatusCode)
+            {
+                return new EvolutionContactsResult(false, contacts, $"HTTP {(int)resp.StatusCode}: {Trim(json)}");
+            }
+            using var doc = JsonDocument.Parse(json);
+            var root = doc.RootElement;
+            JsonElement arr;
+            if (root.ValueKind == JsonValueKind.Array) { arr = root; }
+            else if (root.ValueKind == JsonValueKind.Object && root.TryGetProperty("contacts", out var c) && c.ValueKind == JsonValueKind.Array) { arr = c; }
+            else { return new EvolutionContactsResult(true, contacts, null); }
+
+            foreach (var item in arr.EnumerateArray())
+            {
+                var jid = TryStr(item, "remoteJid") ?? TryStr(item, "id");
+                if (string.IsNullOrWhiteSpace(jid)) { continue; }
+                contacts.Add(new EvolutionContactInfo(jid, TryStr(item, "pushName") ?? TryStr(item, "name"), TryStr(item, "profilePicUrl")));
+            }
+            return new EvolutionContactsResult(true, contacts, null);
+        }
+        catch (Exception ex) { return new EvolutionContactsResult(false, contacts, ex.Message); }
+    }
+
     private static string? TryStr(JsonElement el, string prop)
         => el.ValueKind == JsonValueKind.Object && el.TryGetProperty(prop, out var v) && v.ValueKind == JsonValueKind.String
             ? v.GetString() : null;
@@ -236,13 +269,13 @@ public sealed class EvolutionApiClient : IEvolutionApiClient
         }
     }
 
-    private async Task<HttpResponseMessage> SendAsync(HttpMethod method, string baseUrl, string path, string apiKey, HttpContent? content, CancellationToken ct)
+    private async Task<HttpResponseMessage> SendAsync(HttpMethod method, string baseUrl, string path, string apiKey, HttpContent? content, CancellationToken ct, TimeSpan? timeout = null)
     {
         var url = $"{baseUrl.TrimEnd('/')}{path}";
         using var request = new HttpRequestMessage(method, url) { Content = content };
         request.Headers.TryAddWithoutValidation("apikey", apiKey);
         using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-        cts.CancelAfter(Timeout);
+        cts.CancelAfter(timeout ?? Timeout);
         return await _http.SendAsync(request, cts.Token);
     }
 

@@ -785,6 +785,54 @@ app.MapGet("/api/contacts/tags", async (
     finally { ambient.Set(null, null); }
 }).AllowAnonymous().DisableAntiforgery();
 
+// GET /api/whatsapp-lines/{id}/contacts - contactos del telefono conectado (solo Evolution).
+// Devuelve {ok, contacts:[{phone,name,profilePicUrl,inDirectory}], error}.
+app.MapGet("/api/whatsapp-lines/{id:guid}/contacts", async (
+    Guid id,
+    HttpContext http,
+    CubotRedManager.Application.Tenancy.IApiTokenService tokens,
+    CubotRedManager.Application.Abstractions.IAmbientTenantOverride ambient,
+    CubotRedManager.Application.Tenancy.IWhatsAppConnectorService connector,
+    CubotRedManager.Application.Tenancy.IContactService svc,
+    CancellationToken ct) =>
+{
+    var ident = await AuthenticateApiTokenAsync(http, tokens, ambient);
+    if (ident is null) { return Results.Unauthorized(); }
+    try
+    {
+        var res = await connector.FetchContactsAsync(id, ct);
+        var existing = res.Ok ? await svc.ListPhonesAsync(ct) : new HashSet<string>();
+        return Results.Ok(new
+        {
+            res.Ok,
+            Contacts = res.Contacts.Select(c => new { c.Phone, c.Name, c.ProfilePicUrl, InDirectory = existing.Contains(c.Phone) }),
+            res.Error
+        });
+    }
+    finally { ambient.Set(null, null); }
+}).AllowAnonymous().DisableAntiforgery();
+
+// POST /api/contacts/import - importacion masiva por telefono.
+// Body: {"tag":"agenda-whatsapp","items":[{"phone":"573001234567","name":"Ana"}]}
+app.MapPost("/api/contacts/import", async (
+    HttpContext http,
+    CubotRedManager.Application.Tenancy.IApiTokenService tokens,
+    CubotRedManager.Application.Abstractions.IAmbientTenantOverride ambient,
+    CubotRedManager.Application.Tenancy.IContactService svc,
+    ContactImportBody body,
+    CancellationToken ct) =>
+{
+    var ident = await AuthenticateApiTokenAsync(http, tokens, ambient);
+    if (ident is null) { return Results.Unauthorized(); }
+    try
+    {
+        if (body.Items is null || body.Items.Count == 0) { return Results.BadRequest(new { error = "items vacio" }); }
+        if (body.Items.Count > 20000) { return Results.BadRequest(new { error = "Maximo 20000 contactos por llamada" }); }
+        return Results.Ok(await svc.ImportAsync(body.Items, body.Tag, ident.UserId, ct));
+    }
+    finally { ambient.Set(null, null); }
+}).AllowAnonymous().DisableAntiforgery();
+
 // PUT /api/contacts/{id}/profile - perfil dinamico + etiquetas.
 // Body: {"fieldValues":{"meta_principal":"Estres y sueno","sabores":"[\"Citricos\"]"},"tags":["vip"]}
 // fieldValues se fusiona (valor null/"" borra la llave). tags null = no tocar; lista = reemplazar.
@@ -2679,3 +2727,6 @@ public sealed record TemplateSendRequest(Guid WhatsAppLineId, string? Phone, IRe
 
 /// <summary>Payload de POST /api/whatsapp-templates/{id}/active.</summary>
 public sealed record TemplateSetActiveRequest(bool Active);
+
+/// <summary>Body de POST /api/contacts/import.</summary>
+public sealed record ContactImportBody(string? Tag, IReadOnlyList<CubotRedManager.Application.Tenancy.ContactImportItem>? Items);

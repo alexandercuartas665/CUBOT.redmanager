@@ -79,6 +79,13 @@ public sealed record ContactSyncResult(Guid? ContactId, bool Created);
 
 public sealed record ContactBackfillResult(int LeadsReviewed, int Created, int Linked, int Skipped);
 
+/// <summary>Fila a importar (ej. agenda del telefono conectado por Evolution). Phone con indicativo.</summary>
+public sealed record ContactImportItem(string Phone, string? Name);
+
+/// <summary>Resultado de una importacion masiva. Updated = ya existia y se le agrego la etiqueta
+/// y/o el nombre (si solo tenia el numero). Invalid = numero no utilizable.</summary>
+public sealed record ContactImportResult(int Received, int Created, int Updated, int Unchanged, int Invalid);
+
 // === Mutaciones ======================================================================
 
 public sealed record CreateContactRequest(

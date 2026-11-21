@@ -54,4 +54,13 @@ public interface IContactService
     Task<bool> DeleteFieldAsync(Guid fieldId, Guid actorUserId, CancellationToken cancellationToken = default);
     /// <summary>Mueve el campo una posicion arriba (-1) o abajo (+1) dentro de su seccion.</summary>
     Task<bool> MoveFieldAsync(Guid fieldId, int direction, Guid actorUserId, CancellationToken cancellationToken = default);
+
+    /// <summary>Telefonos (digitos) que ya existen en el directorio del tenant actual, incluidos
+    /// archivados. Sirve para marcar "ya en el directorio" antes de importar.</summary>
+    Task<IReadOnlySet<string>> ListPhonesAsync(CancellationToken cancellationToken = default);
+
+    /// <summary>Importacion masiva por telefono (agenda del telefono, archivo, etc.). Crea los que no
+    /// existen con la etiqueta dada; a los existentes solo les agrega la etiqueta y completa el nombre
+    /// si estaba vacio o era el mismo numero. No marca consentimiento de marketing (Ley 1581).</summary>
+    Task<ContactImportResult> ImportAsync(IReadOnlyList<ContactImportItem> items, string? tag, Guid actorUserId, CancellationToken cancellationToken = default);
 }
